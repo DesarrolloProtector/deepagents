@@ -31,6 +31,9 @@ dependencies = [
 [project.optional-dependencies]
 quickjs = ["langchain-quickjs"]
 
+[project.scripts]
+ph = "deepagents.harnesses.protector.cli:main"
+
 [project.urls]
 Homepage = "https://docs.langchain.com/oss/python/deepagents/overview"
 Documentation = "https://reference.langchain.com/python/deepagents/"
