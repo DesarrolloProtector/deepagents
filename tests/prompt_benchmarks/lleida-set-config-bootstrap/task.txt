@@ -1,0 +1,1 @@
+Diagnostic bootstrap: verify Lleida SET_CONFIG/config before provider smoke. Do not change START_SIGNATURE payloads.

@@ -1,0 +1,1 @@
+Fix regression: missing resend signature action after ProviderStatus=Success and ProviderCorrelationId exists. Signature remains pending and Ver estado firma must still work.

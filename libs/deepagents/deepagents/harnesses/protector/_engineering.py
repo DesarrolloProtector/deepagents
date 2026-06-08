@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -17,7 +18,6 @@ from deepagents.harnesses.protector._prompt_skills import PromptSkill, select_pr
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
-    from pathlib import Path
 
     from langchain_core.callbacks import CallbackManagerForLLMRun
     from langchain_core.language_models import LanguageModelInput
@@ -140,6 +140,20 @@ DIAGNOSTIC_BOOTSTRAP_TERMS = frozenset(
         "diagnostic",
         "probe",
     }
+)
+NEGATIVE_PROVIDER_CONFIG_BOUNDARY_PHRASES = (
+    "do not modify config",
+    "do not modify configid",
+    "do not modify config_id",
+    "do not modify set_config",
+    "do not change config",
+    "do not change configid",
+    "do not change config_id",
+    "do not change set_config",
+    "without touching config",
+    "without touching configid",
+    "without touching config_id",
+    "without touching set_config",
 )
 CONTINUATION_FOLLOWUP_TERMS = frozenset(
     {
@@ -334,6 +348,27 @@ class RenderedReviewerPrompt:
 
 
 @dataclass(frozen=True)
+class PromptBenchmarkExpected:
+    """Expected prompt characteristics for one benchmark case."""
+
+    task_mode: TaskMode | None
+    required_skills: tuple[str, ...]
+    forbidden_skills: tuple[str, ...]
+    required_prompt_text: tuple[str, ...]
+    forbidden_prompt_text: tuple[str, ...]
+    english_labels: bool
+
+
+@dataclass(frozen=True)
+class PromptBenchmarkResult:
+    """Result of one prompt-quality benchmark case."""
+
+    name: str
+    passed: bool
+    failures: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _RepoContext:
     """Bounded read-only context routing result for a target repository."""
 
@@ -498,6 +533,208 @@ API note:
 - `create_deep_agent(model="{harness_profile}")` would try to initialize provider `protector`, so this smoke uses a prebuilt dry-run
   `BaseChatModel` whose provider/model metadata resolves the built-in harness profile without credentials."""
     return RenderedOutput(payload=payload, codex_prompt=codex_prompt, selected_context_count=selected_context_count)
+
+
+def run_prompt_benchmarks(*, benchmarks_dir: Path | None = None, repo: Path | None = None) -> tuple[PromptBenchmarkResult, ...]:
+    """Run prompt-quality benchmarks from fixture directories."""
+    root = benchmarks_dir or _default_prompt_benchmarks_dir()
+    if not root.is_dir():
+        msg = f"prompt benchmark directory does not exist: {root}"
+        raise HarnessUsageError(msg)
+
+    cases = tuple(path for path in sorted(root.iterdir(), key=lambda item: item.name.lower()) if path.is_dir())
+    if not cases:
+        msg = f"prompt benchmark directory contains no cases: {root}"
+        raise HarnessUsageError(msg)
+
+    context_repo = repo if repo is not None else _default_prompt_benchmark_repo()
+    return tuple(_run_prompt_benchmark_case(path, context_repo) for path in cases)
+
+
+def render_prompt_benchmark_report(results: tuple[PromptBenchmarkResult, ...]) -> str:
+    """Render prompt benchmark results for the CLI."""
+    rows = ["Prompt Benchmark Results"]
+    passed_count = 0
+    for result in results:
+        status = "PASS" if result.passed else "FAIL"
+        rows.append(f"{status} {result.name}")
+        if result.passed:
+            passed_count += 1
+            continue
+        rows.extend(f"  - {failure}" for failure in result.failures)
+    failed_count = len(results) - passed_count
+    rows.append(f"Summary: {passed_count} passed, {failed_count} failed")
+    return "\n".join(rows)
+
+
+def _run_prompt_benchmark_case(path: Path, repo: Path | None) -> PromptBenchmarkResult:
+    """Run one prompt benchmark fixture case."""
+    task_path = path / "task.txt"
+    expected_path = path / "expected_characteristics.md"
+    if not task_path.is_file():
+        return PromptBenchmarkResult(name=path.name, passed=False, failures=(f"missing fixture file: {task_path.name}",))
+    if not expected_path.is_file():
+        return PromptBenchmarkResult(name=path.name, passed=False, failures=(f"missing fixture file: {expected_path.name}",))
+
+    task = task_path.read_text(encoding="utf-8").strip()
+    expected = _parse_prompt_benchmark_expected(expected_path.read_text(encoding="utf-8"))
+    selection = _select_context(repo, task)
+    prompt = _render_codex_prompt(task, selection)
+    task_mode = _classify_task_mode(task)
+    selected_skills = tuple(skill.name for skill in _selected_prompt_skills(task, task_mode))
+
+    failures = _prompt_benchmark_failures(
+        prompt=prompt,
+        task_mode=task_mode,
+        selected_skills=selected_skills,
+        expected=expected,
+    )
+    return PromptBenchmarkResult(name=path.name, passed=not failures, failures=failures)
+
+
+def _parse_prompt_benchmark_expected(text: str) -> PromptBenchmarkExpected:
+    """Parse a Markdown expected-characteristics fixture."""
+    sections = _parse_markdown_characteristic_sections(text)
+    return PromptBenchmarkExpected(
+        task_mode=_parse_expected_task_mode(sections.get("task mode", ())),
+        required_skills=_section_items(sections.get("required skills", ())),
+        forbidden_skills=_section_items(sections.get("forbidden skills", ())),
+        required_prompt_text=_section_items(sections.get("required prompt text", ())),
+        forbidden_prompt_text=_section_items(sections.get("forbidden prompt text", ())),
+        english_labels=_section_enabled(sections.get("english labels", ())),
+    )
+
+
+def _parse_markdown_characteristic_sections(text: str) -> dict[str, tuple[str, ...]]:
+    """Return `##` sections from a Markdown characteristics file."""
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            current = line[3:].strip().lower()
+            sections.setdefault(current, [])
+            continue
+        if current is not None:
+            sections[current].append(raw.rstrip())
+    return {name: tuple(lines) for name, lines in sections.items()}
+
+
+def _parse_expected_task_mode(lines: tuple[str, ...]) -> TaskMode | None:
+    """Parse the expected task mode section."""
+    items = _section_items(lines)
+    if not items:
+        return None
+    mode = items[0]
+    if mode not in {
+        "implementation_fix",
+        "review_only",
+        "planning_only",
+        "diagnostic_bootstrap",
+        "continuation_followup",
+        "ui_runtime_bug",
+        "provider_api_bug",
+    }:
+        msg = f"unsupported prompt benchmark task mode: {mode}"
+        raise HarnessUsageError(msg)
+    return cast("TaskMode", mode)
+
+
+def _section_items(lines: tuple[str, ...]) -> tuple[str, ...]:
+    """Parse non-empty Markdown section lines as characteristic items."""
+    items: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("- "):
+            line = line[2:].strip()
+        items.append(line)
+    return tuple(items)
+
+
+def _section_enabled(lines: tuple[str, ...]) -> bool:
+    """Return whether a boolean-like section is enabled."""
+    items = _section_items(lines)
+    if not items:
+        return False
+    return items[0].lower() not in {"false", "no", "none", "off"}
+
+
+def _prompt_benchmark_failures(
+    *,
+    prompt: str,
+    task_mode: TaskMode,
+    selected_skills: tuple[str, ...],
+    expected: PromptBenchmarkExpected,
+) -> tuple[str, ...]:
+    """Return characteristic failures for a rendered prompt."""
+    failures: list[str] = []
+    if expected.task_mode is not None and task_mode != expected.task_mode:
+        failures.append(f"task mode: expected {expected.task_mode}, got {task_mode}")
+    failures.extend(_required_skill_failures(expected.required_skills, selected_skills))
+    failures.extend(_forbidden_skill_failures(expected.forbidden_skills, selected_skills))
+    if expected.english_labels:
+        failures.extend(_english_label_failures(prompt))
+    failures.extend(_required_text_failures(expected.required_prompt_text, prompt))
+    failures.extend(_forbidden_text_failures(expected.forbidden_prompt_text, prompt))
+    return tuple(failures)
+
+
+def _required_skill_failures(required_skills: tuple[str, ...], selected_skills: tuple[str, ...]) -> tuple[str, ...]:
+    """Return missing required skill failures."""
+    selected_text = ", ".join(selected_skills)
+    return tuple(f"required skill missing: {skill} (selected: {selected_text})" for skill in required_skills if skill not in selected_skills)
+
+
+def _forbidden_skill_failures(forbidden_skills: tuple[str, ...], selected_skills: tuple[str, ...]) -> tuple[str, ...]:
+    """Return selected forbidden skill failures."""
+    return tuple(f"forbidden skill selected: {skill}" for skill in forbidden_skills if skill in selected_skills)
+
+
+def _required_text_failures(required_text: tuple[str, ...], prompt: str) -> tuple[str, ...]:
+    """Return missing required prompt text failures."""
+    return tuple(f"required prompt text missing: {text}" for text in required_text if text not in prompt)
+
+
+def _forbidden_text_failures(forbidden_text: tuple[str, ...], prompt: str) -> tuple[str, ...]:
+    """Return present forbidden prompt text failures."""
+    return tuple(f"forbidden prompt text present: {text}" for text in forbidden_text if text in prompt)
+
+
+def _english_label_failures(prompt: str) -> tuple[str, ...]:
+    """Return failures for required English Codex prompt labels."""
+    required = (
+        "Title:",
+        "Task mode:",
+        "Objective:",
+        "Task details:",
+        "Selected context paths:",
+        "Scope boundaries:",
+        "No-drift rules:",
+        "Mode-specific requirements:",
+        "Validation expectations:",
+        "Mandatory output:",
+    )
+    missing = tuple(label for label in required if label not in prompt)
+    return tuple(f"English label missing: {label}" for label in missing)
+
+
+def _default_prompt_benchmarks_dir() -> Path:
+    """Find the repository prompt benchmark fixture directory."""
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "tests" / "prompt_benchmarks"
+        if candidate.is_dir():
+            return candidate
+    return Path.cwd() / "tests" / "prompt_benchmarks"
+
+
+def _default_prompt_benchmark_repo() -> Path | None:
+    """Return a stable repo root for benchmark context selection when available."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "AGENTS.md").is_file():
+            return parent
+    return None
 
 
 def write_prompt_output(path: Path, prompt: str, *, overwrite: bool) -> None:
@@ -842,7 +1079,7 @@ def _should_render_operational_brief(task: str, task_mode: TaskMode) -> bool:
     if _needs_english_summary(task) or _has_concrete_ui_or_identifier_details(task):
         return True
     tokens = _tokens(task)
-    return task_mode in {"implementation_fix", "continuation_followup", "ui_runtime_bug", "provider_api_bug"} or bool(
+    return task_mode in {"diagnostic_bootstrap", "implementation_fix", "continuation_followup", "ui_runtime_bug", "provider_api_bug"} or bool(
         tokens & {"bug", "regression", "error", "falla"}
     )
 
@@ -1044,7 +1281,7 @@ def _classify_task_mode(task: str) -> TaskMode:
     signals = {
         "review_only": bool(task_tokens & REVIEW_ONLY_TERMS) or "analizar sin implementar" in lowered,
         "planning_only": bool(task_tokens & PLANNING_ONLY_TERMS),
-        "diagnostic_bootstrap": bool(task_tokens & DIAGNOSTIC_BOOTSTRAP_TERMS) or "set_config" in lowered or "smoke real provider" in lowered,
+        "diagnostic_bootstrap": _has_diagnostic_bootstrap_intent(task, task_tokens),
         "continuation_followup": _has_continuation_followup_intent(task, task_tokens),
         "ui_runtime_bug": bool(task_tokens & UI_RUNTIME_BUG_TERMS),
         "provider_api_bug": bool(task_tokens & PROVIDER_API_BUG_TERMS) or "start_signature" in lowered or "set_config" in lowered,
@@ -1052,10 +1289,10 @@ def _classify_task_mode(task: str) -> TaskMode:
     ordered_rules: tuple[tuple[bool, TaskMode], ...] = (
         (signals["review_only"] and not implementation_intent, "review_only"),
         (signals["planning_only"] and not implementation_intent, "planning_only"),
+        (signals["diagnostic_bootstrap"], "diagnostic_bootstrap"),
         (signals["continuation_followup"], "continuation_followup"),
         (signals["provider_api_bug"] and implementation_intent, "provider_api_bug"),
         (signals["ui_runtime_bug"] and implementation_intent, "ui_runtime_bug"),
-        (signals["diagnostic_bootstrap"], "diagnostic_bootstrap"),
         (implementation_intent, "implementation_fix"),
         (signals["provider_api_bug"], "provider_api_bug"),
         (signals["ui_runtime_bug"], "ui_runtime_bug"),
@@ -1065,6 +1302,18 @@ def _classify_task_mode(task: str) -> TaskMode:
         if matches:
             return task_mode
     return "review_only"
+
+
+def _has_diagnostic_bootstrap_intent(task: str, task_tokens: frozenset[str]) -> bool:
+    """Return whether task text targets bounded diagnostic/bootstrap work."""
+    lowered = task.lower()
+    if task_tokens & DIAGNOSTIC_BOOTSTRAP_TERMS:
+        return True
+    if "smoke real provider" in lowered:
+        return True
+    if "set_config" not in lowered:
+        return False
+    return not any(phrase in lowered for phrase in NEGATIVE_PROVIDER_CONFIG_BOUNDARY_PHRASES)
 
 
 def _has_continuation_followup_intent(task: str, task_tokens: frozenset[str]) -> bool:

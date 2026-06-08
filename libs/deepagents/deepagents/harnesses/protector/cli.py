@@ -23,9 +23,11 @@ from deepagents.harnesses.protector._engineering import (
     build_read_only_agent,
     render_codex_reviewer_prompt,
     render_output,
+    render_prompt_benchmark_report,
     render_review_findings,
     resolve_harness_profile,
     review_codex_output,
+    run_prompt_benchmarks,
     write_prompt_output,
 )
 from deepagents.profiles.harness.harness_profiles import _get_harness_profile
@@ -182,6 +184,10 @@ def _build_parser() -> argparse.ArgumentParser:
     repos = subparsers.add_parser("repos", help="Show or initialize local repo aliases.")
     repos.add_argument("--init", action="store_true", help="Create the local repo alias config with built-in aliases.")
     repos.add_argument("--overwrite", action="store_true", help="Allow --init to replace an existing config file.")
+
+    benchmark = subparsers.add_parser("benchmark", help="Run prompt-quality benchmark fixtures.")
+    benchmark.add_argument("--benchmarks", type=Path, default=None, help="Optional prompt benchmark fixture directory.")
+    benchmark.add_argument("--repo", default=None, help="Optional repository path or alias used for context selection.")
 
     subparsers.add_parser("status", help="Show Protector harness CLI status.")
     return parser
@@ -554,6 +560,18 @@ Aliases:
     return 0
 
 
+def _run_benchmark(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph benchmark`."""
+    repo = _resolve_positional_repo(args.repo, parser) if args.repo is not None else None
+    try:
+        results = run_prompt_benchmarks(benchmarks_dir=args.benchmarks, repo=repo)
+    except HarnessUsageError as exc:
+        parser.error(str(exc))
+    sys.stdout.write(render_prompt_benchmark_report(results))
+    sys.stdout.write("\n")
+    return 0 if all(result.passed for result in results) else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the `ph` CLI."""
     _configure_utf8_stdio()
@@ -571,6 +589,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = _run_status()
     elif args.command == "repos":
         result = _run_repos(args, parser)
+    elif args.command == "benchmark":
+        result = _run_benchmark(args, parser)
     else:
         parser.error(f"unknown command: {args.command}")
     return result

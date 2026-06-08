@@ -1,0 +1,1 @@
+Fix bug: the login form autofills Email and contraseña unexpectedly. Keep the login behavior scoped to the existing UI.

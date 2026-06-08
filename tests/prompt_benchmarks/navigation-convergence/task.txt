@@ -1,0 +1,1 @@
+Fix accounting navigation/dashboard/views convergence so operator menu/index entries open the useful operational surface. Complete the MVP operator surface.

@@ -1,0 +1,1 @@
+Eliminemos la opción de añadir más de una cuenta en todos lados para cualquier entidad. Aplicar el patrón desde FormNewBankDataId y quitar el botón Añadir de la tabla de cuentas en las vistas de creación.

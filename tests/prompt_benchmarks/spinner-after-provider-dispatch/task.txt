@@ -1,0 +1,1 @@
+Fix regression: Lleida provider-hosted send leaves the spinner visible after ProviderStatus=Success. Do not modify ConfigId, SET_CONFIG, or START_SIGNATURE payloads.

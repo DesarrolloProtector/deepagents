@@ -47,6 +47,18 @@ def _render(repo: Path, task: str) -> engineering.RenderedOutput:
     )
 
 
+def _prompt_benchmarks_dir() -> Path:
+    return Path(__file__).resolve().parents[4] / "tests" / "prompt_benchmarks"
+
+
+def _write_prompt_benchmark(root: Path, name: str, task: str, expected: str) -> Path:
+    case = root / name
+    case.mkdir(parents=True, exist_ok=True)
+    (case / "task.txt").write_text(task, encoding="utf-8")
+    (case / "expected_characteristics.md").write_text(expected, encoding="utf-8")
+    return case
+
+
 STRUCTURED_SIGNATURE_REGRESSION_TASK = """Title: Restore missing platform-company signature action
 
 Current regression:
@@ -556,6 +568,53 @@ def test_golden_missing_resend_signature_action_prompt_quality(tmp_path: Path) -
     assert "- Files changed" not in rendered.codex_prompt
 
 
+def test_prompt_benchmark_fixtures_pass(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+
+    results = engineering.run_prompt_benchmarks(benchmarks_dir=_prompt_benchmarks_dir(), repo=repo)
+
+    assert {result.name for result in results} == {
+        "email-password-autofill",
+        "navigation-convergence",
+        "single-bank-account-everywhere",
+        "lleida-set-config-bootstrap",
+        "resend-signature-after-provider-success",
+        "spinner-after-provider-dispatch",
+    }
+    assert all(result.passed for result in results)
+
+
+def test_prompt_benchmark_reports_failed_characteristics(tmp_path: Path) -> None:
+    benchmarks = tmp_path / "prompt_benchmarks"
+    _write_prompt_benchmark(
+        benchmarks,
+        "bad-case",
+        "Fix bug: the login form autofills Email unexpectedly.",
+        """# Expected Characteristics
+
+## Task mode
+- planning_only
+
+## Required skills
+- missing_skill
+
+## Forbidden prompt text
+- Codex Prompt:
+""",
+    )
+
+    results = engineering.run_prompt_benchmarks(benchmarks_dir=benchmarks, repo=_build_repo(tmp_path / "repo"))
+    report = engineering.render_prompt_benchmark_report(results)
+
+    assert len(results) == 1
+    assert not results[0].passed
+    assert "task mode: expected planning_only, got ui_runtime_bug" in results[0].failures
+    assert "required skill missing: missing_skill" in results[0].failures[1]
+    assert "forbidden prompt text present: Codex Prompt:" in results[0].failures
+    assert "FAIL bad-case" in report
+    assert "Summary: 0 passed, 1 failed" in report
+
+
 def test_write_prompt_output_refuses_overwrite_unless_allowed(tmp_path: Path) -> None:
     output = tmp_path / "prompt.md"
 
@@ -802,6 +861,40 @@ def test_cli_task_uses_builtin_fallback_alias(capsys) -> None:
     stdout = capsys.readouterr().out
     assert "Repo: C:\\Users\\DesarrolladorProtect\\source\\repos\\deepagents" in stdout
     assert "Task: small test task" in stdout
+
+
+def test_cli_benchmark_runs_prompt_benchmarks(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+
+    assert cli.main(["benchmark", "--benchmarks", str(_prompt_benchmarks_dir()), "--repo", str(repo)]) == 0
+
+    stdout = capsys.readouterr().out
+    assert "Prompt Benchmark Results" in stdout
+    assert "PASS email-password-autofill" in stdout
+    assert "PASS spinner-after-provider-dispatch" in stdout
+    assert "Summary: 6 passed, 0 failed" in stdout
+
+
+def test_cli_benchmark_returns_nonzero_for_failed_characteristics(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    benchmarks = tmp_path / "prompt_benchmarks"
+    _write_prompt_benchmark(
+        benchmarks,
+        "bad-case",
+        "Fix bug: the login form autofills Email unexpectedly.",
+        """# Expected Characteristics
+
+## Task mode
+- planning_only
+""",
+    )
+
+    assert cli.main(["benchmark", "--benchmarks", str(benchmarks), "--repo", str(repo)]) == 1
+
+    stdout = capsys.readouterr().out
+    assert "FAIL bad-case" in stdout
+    assert "task mode: expected planning_only, got ui_runtime_bug" in stdout
+    assert "Summary: 0 passed, 1 failed" in stdout
 
 
 def test_cli_run_is_temporarily_disabled(monkeypatch, capsys) -> None:
