@@ -272,7 +272,8 @@ def test_spanish_ui_implementation_request_is_actionable_and_unicode_safe(tmp_pa
 
     assert "Title: Remove the option to add more than one" in rendered.codex_prompt
     assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
-    assert f"Original user task:\n{task}" in rendered.codex_prompt
+    assert "Original user task:" not in rendered.codex_prompt
+    assert task not in rendered.codex_prompt
     assert "Objective: Remove the option to add more than one account" in rendered.codex_prompt
     assert "Task details:\nObserved state:" in rendered.codex_prompt
     assert "Expected behavior:" in rendered.codex_prompt
@@ -288,7 +289,7 @@ def test_spanish_ui_implementation_request_is_actionable_and_unicode_safe(tmp_pa
     assert "botón Añadir" in rendered.codex_prompt
     assert "tabla de cuentas" in rendered.codex_prompt
     assert "vistas de creación" in rendered.codex_prompt
-    for text in ("opción", "añadir", "más", "creación", "botón"):
+    for text in ("botón Añadir", "tabla de cuentas", "vistas de creación"):
         assert text in rendered.codex_prompt
     for mojibake in ("opci¾n", "a±adir", "mßs"):
         assert mojibake not in rendered.codex_prompt
@@ -299,7 +300,8 @@ def test_spanish_review_only_request_remains_read_only(tmp_path: Path) -> None:
 
     rendered = _render(_build_repo(tmp_path), task)
 
-    assert "Original user task:\nRevisar sin implementar" in rendered.codex_prompt
+    assert "Original user task:" not in rendered.codex_prompt
+    assert "Revisar sin implementar" not in rendered.codex_prompt
     assert "Title: Review the option to add more than one" in rendered.codex_prompt
     assert "Task mode: review_only" in rendered.codex_prompt
     assert "Objective: Review the option to add more than one account without implementing changes" in rendered.codex_prompt
@@ -310,12 +312,12 @@ def test_spanish_review_only_request_remains_read_only(tmp_path: Path) -> None:
     assert "Scoped edits are allowed" not in rendered.codex_prompt
 
 
-def test_english_task_preserves_existing_objective_with_original_task_section(tmp_path: Path) -> None:
+def test_english_task_uses_structured_prompt_without_original_task_section(tmp_path: Path) -> None:
     task = "Fix regression: missing signature button"
 
     rendered = _render(_build_repo(tmp_path), task)
 
-    assert f"Original user task:\n{task}" in rendered.codex_prompt
+    assert "Original user task:" not in rendered.codex_prompt
     assert "Title: Fix regression missing signature button" in rendered.codex_prompt
     assert "Objective: Fix regression: missing signature button" in rendered.codex_prompt
 
@@ -347,7 +349,8 @@ def test_golden_email_password_autofill_prompt_quality(tmp_path: Path) -> None:
     rendered = _render(_build_repo(tmp_path), task)
 
     assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
-    assert f"Original user task:\n{task}" in rendered.codex_prompt
+    assert "Original user task:" not in rendered.codex_prompt
+    assert task not in rendered.codex_prompt
     assert "Observed state:" in rendered.codex_prompt
     assert "Email/password fields are being autofilled" in rendered.codex_prompt
     assert "Expected behavior:" in rendered.codex_prompt
@@ -357,9 +360,63 @@ def test_golden_email_password_autofill_prompt_quality(tmp_path: Path) -> None:
     assert "Validation:" in rendered.codex_prompt
     assert "Email" in rendered.codex_prompt
     assert "contraseña" in rendered.codex_prompt
-    assert "Prove the exact render/hide/loading condition" in rendered.codex_prompt
+    assert "authentication/form field behavior" in rendered.codex_prompt
+    assert "Verify the `Email` and `contraseña` fields render with the expected autofill behavior." in rendered.codex_prompt
+    assert "Prove the exact render/hide/loading condition" not in rendered.codex_prompt
+    assert "spinner/loading state" not in rendered.codex_prompt
     assert "- Files read" not in rendered.codex_prompt
     assert "- Files changed" not in rendered.codex_prompt
+
+
+def test_prompt_skill_selection_prefers_form_security_over_generic_ui(tmp_path: Path) -> None:
+    task = "Fix bug: the login form autofills Email and contraseña unexpectedly."
+
+    task_mode = engineering._classify_task_mode(task)
+    skills = engineering._selected_prompt_skills(task, task_mode)
+
+    names = tuple(skill.name for skill in skills)
+    assert names == (
+        "base_prompt_quality",
+        "form_security_autofill_bug",
+        "spanish_implementation_task_preservation",
+    )
+    assert "ui_runtime_bug" not in names
+    rendered = _render(_build_repo(tmp_path), task)
+    assert "Prove the exact render/hide/loading condition" not in rendered.codex_prompt
+
+
+def test_prompt_skill_selection_includes_ui_runtime_skill_for_non_form_ui_bug() -> None:
+    task = "Fix UI regression: modal button stays hidden after the view loads."
+
+    task_mode = engineering._classify_task_mode(task)
+    skills = engineering._selected_prompt_skills(task, task_mode)
+
+    names = tuple(skill.name for skill in skills)
+    assert "base_prompt_quality" in names
+    assert "ui_runtime_bug" in names
+    assert "form_security_autofill_bug" not in names
+
+
+def test_prompt_skill_selection_includes_provider_api_skill() -> None:
+    task = "Fix provider API dispatch regression without touching config_id or START_SIGNATURE payload."
+
+    task_mode = engineering._classify_task_mode(task)
+    skills = engineering._selected_prompt_skills(task, task_mode)
+
+    names = tuple(skill.name for skill in skills)
+    assert "base_prompt_quality" in names
+    assert "provider_api_bug" in names
+
+
+def test_prompt_skill_selection_includes_spanish_preservation_skill() -> None:
+    task = "Eliminemos la opción de añadir más de una cuenta desde FormNewBankDataId."
+
+    task_mode = engineering._classify_task_mode(task)
+    skills = engineering._selected_prompt_skills(task, task_mode)
+
+    names = tuple(skill.name for skill in skills)
+    assert "base_prompt_quality" in names
+    assert "spanish_implementation_task_preservation" in names
 
 
 def test_golden_single_bank_account_ui_prompt_quality(tmp_path: Path) -> None:
@@ -372,7 +429,8 @@ def test_golden_single_bank_account_ui_prompt_quality(tmp_path: Path) -> None:
 
     assert "Title: Remove the option to add more than one" in rendered.codex_prompt
     assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
-    assert f"Original user task:\n{task}" in rendered.codex_prompt
+    assert "Original user task:" not in rendered.codex_prompt
+    assert task not in rendered.codex_prompt
     assert "Observed state:" in rendered.codex_prompt
     assert "Expected behavior:" in rendered.codex_prompt
     assert "Scope:" in rendered.codex_prompt
@@ -599,7 +657,8 @@ def test_cli_task_output_preserves_spanish_unicode(tmp_path: Path, monkeypatch, 
     prompt = output.read_text(encoding="utf-8")
     assert "Title: Remove the option to add more than one" in prompt
     assert "Task mode: ui_runtime_bug" in prompt
-    assert f"Original user task:\n{task}" in prompt
+    assert "Original user task:" not in prompt
+    assert task not in prompt
     assert "Objective: Remove the option to add more than one account" in prompt
     assert "Task details:\nObserved state:" in prompt
     assert "Expected behavior:" in prompt
@@ -612,7 +671,7 @@ def test_cli_task_output_preserves_spanish_unicode(tmp_path: Path, monkeypatch, 
     assert "vistas de creación" in prompt
     assert "Task details:\n(none)" not in prompt
     assert "Do not edit files unless explicitly requested by this task." not in prompt
-    for text in ("opción", "añadir", "más", "creación", "botón"):
+    for text in ("botón Añadir", "tabla de cuentas", "vistas de creación"):
         assert text in prompt
         assert text in stdout
     for mojibake in ("opci¾n", "a±adir", "mßs"):
@@ -711,14 +770,17 @@ PASS
     assert "Codex reviewer prompt copied to clipboard" in stdout
     assert len(copied) == 1
     assert copied[0].startswith("Codex Reviewer Prompt\n")
-    assert "Original task:\nsmall task" in copied[0]
+    assert "Original task:" not in copied[0]
+    assert "Original user task:" not in copied[0]
     assert "Task mode: review_only" in copied[0]
     assert "Selected context paths:\n- AGENTS.md\n- MEMORY.md" in copied[0]
     assert "Generated implementation prompt:\nCodex Prompt:" in copied[0]
     assert "Implementation Codex output:" in copied[0]
     assert "Deterministic reviewer findings:" in copied[0]
     assert "Review verdict: PASS / FAIL / NEEDS_FOLLOW_UP" in copied[0]
-    assert "Do not require `Files read` or `Files changed` unless the original task explicitly asked for those sections." in copied[0]
+    assert (
+        "Do not require `Files read` or `Files changed` unless the generated implementation prompt explicitly asks for those sections." in copied[0]
+    )
 
 
 def test_cli_review_codex_bad_output_includes_deterministic_findings(tmp_path: Path, monkeypatch, capsys) -> None:

@@ -13,6 +13,7 @@ from pydantic import Field
 
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
+from deepagents.harnesses.protector._prompt_skills import PromptSkill, select_prompt_skills
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -547,9 +548,6 @@ def render_codex_reviewer_prompt(
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
     reviewer_prompt = f"""Codex Reviewer Prompt
 
-Original task:
-{task}
-
 Task mode: {task_mode}
 
 Selected context paths:
@@ -565,13 +563,13 @@ Deterministic reviewer findings:
 {findings.text}
 
 Reviewer rubric:
-- Verify whether the implementation actually satisfies the original task.
+- Verify whether the implementation actually satisfies the generated implementation prompt.
 - Check scope drift.
 - Check whether protected behavior was touched.
 - Check whether validation is proportional and credible.
 - Check whether PASS is justified.
 - Identify concrete missing evidence or follow-up.
-- Do not require `Files read` or `Files changed` unless the original task explicitly asked for those sections.
+- Do not require `Files read` or `Files changed` unless the generated implementation prompt explicitly asks for those sections.
 - Do not request broad rewrites.
 - Do not introduce new architecture, governance, or documentation.
 
@@ -829,7 +827,7 @@ def _section_heading(line: str, headings: dict[str, str]) -> tuple[str | None, s
 def _task_details(task: str, task_mode: TaskMode) -> str:
     """Render an operational task brief for Codex."""
     if _should_render_operational_brief(task, task_mode):
-        return _operational_task_brief(task, task_mode)
+        return _operational_task_brief(task, task_mode, _selected_prompt_skills(task, task_mode))
     if task_mode == "review_only":
         return f"Review focus: {_task_objective(task)}"
     if task_mode == "planning_only":
@@ -849,16 +847,25 @@ def _should_render_operational_brief(task: str, task_mode: TaskMode) -> bool:
     )
 
 
-def _operational_task_brief(task: str, task_mode: TaskMode) -> str:
+def _selected_prompt_skills(task: str, task_mode: TaskMode) -> tuple[PromptSkill, ...]:
+    """Return prompt skills that shape Codex prompt rendering."""
+    return select_prompt_skills(
+        task_mode=task_mode,
+        task_tokens=_tokens(task),
+        has_spanish_text=_needs_english_summary(task),
+    )
+
+
+def _operational_task_brief(task: str, task_mode: TaskMode, skills: tuple[PromptSkill, ...]) -> str:
     """Render bug/fix task details in a handoff-style operational brief."""
     sections = _parse_task_sections(task)
     rows = [
-        ("Observed state", _brief_observed_state(task, task_mode, sections)),
-        ("Expected behavior", _brief_expected_behavior(task, task_mode, sections)),
+        ("Observed state", _brief_observed_state(task, sections, skills)),
+        ("Expected behavior", _brief_expected_behavior(task, sections, skills)),
         ("Objective", _task_objective(task)),
-        ("Scope", _brief_scope(task, task_mode, sections)),
-        ("Restrictions", _brief_restrictions(task, task_mode, sections)),
-        ("Validation", _brief_validation(task, task_mode, sections)),
+        ("Scope", _brief_scope(task, sections, skills)),
+        ("Restrictions", _brief_restrictions(task, task_mode, sections, skills)),
+        ("Validation", _brief_validation(task, sections, skills)),
     ]
     pass_criteria = sections.get("PASS")
     if pass_criteria:
@@ -866,7 +873,7 @@ def _operational_task_brief(task: str, task_mode: TaskMode) -> str:
     return "\n\n".join(f"{heading}:\n{body}" for heading, body in rows if body)
 
 
-def _brief_observed_state(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+def _brief_observed_state(task: str, sections: dict[str, str], skills: tuple[PromptSkill, ...]) -> str:
     """Return observed state text for the operational brief."""
     if sections.get("Current regression"):
         return sections["Current regression"]
@@ -875,37 +882,32 @@ def _brief_observed_state(task: str, task_mode: TaskMode, sections: dict[str, st
 
     tokens = _tokens(task)
     observed = "The requested behavior is currently wrong or regressed."
-    if tokens & {"autofill", "autofilled", "autofills", "autocompleta", "autocompletan"}:
-        observed = "Email/password fields are being autofilled or prepopulated when the requested login flow should not do that."
+    skill_observed = _first_skill_text(skills, "observed_state")
+    if _skill_selected(skills, "form_security_autofill_bug") and skill_observed is not None:
+        observed = skill_observed
     elif "spinner" in tokens:
         observed = "The visible UI remains in a spinner/loading state around the provider-hosted send flow."
     elif tokens & {"signature", "firma"} and tokens & {"action", "button", "botón", "resend", "send"}:
         observed = "A signature send/resend action is missing even though the workflow still needs operator action."
-    elif task_mode == "provider_api_bug":
-        observed = "Provider/API state is not being translated correctly into the surrounding workflow state."
-    elif task_mode == "ui_runtime_bug":
-        observed = "The visible UI state does not match the operator action requested by the task."
+    elif skill_observed is not None:
+        observed = skill_observed
     return observed
 
 
-def _brief_expected_behavior(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+def _brief_expected_behavior(task: str, sections: dict[str, str], skills: tuple[PromptSkill, ...]) -> str:
     """Return expected behavior text for the operational brief."""
     if sections.get("Expected behavior"):
         return sections["Expected behavior"]
 
-    tokens = _tokens(task)
-    if tokens & {"autofill", "autofilled", "autofills", "autocompleta", "autocompletan"}:
-        return "The login UI should preserve the requested `Email` and `contraseña` behavior without unwanted autofill side effects."
-    if "spinner" in tokens:
+    skill_expected = _first_skill_text(skills, "expected_behavior")
+    if skill_expected is not None:
+        return skill_expected
+    if "spinner" in _tokens(task):
         return "The spinner/loading state should clear when the provider-hosted send step reaches its expected terminal UI state."
-    if task_mode == "provider_api_bug":
-        return "Provider dispatch success means the provider accepted the request; it must not be treated as workflow completion."
-    if task_mode == "ui_runtime_bug":
-        return "The expected UI state should render the requested controls and stop hiding/loading them incorrectly."
     return "The scoped workflow behavior should match the requested task without changing unrelated behavior."
 
 
-def _brief_scope(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+def _brief_scope(task: str, sections: dict[str, str], skills: tuple[PromptSkill, ...]) -> str:
     """Return scoped implementation text for the operational brief."""
     if sections.get("Scope"):
         return sections["Scope"]
@@ -913,10 +915,9 @@ def _brief_scope(task: str, task_mode: TaskMode, sections: dict[str, str]) -> st
     tokens = _tokens(task)
     references = _literal_references(task)
     scope = "Inspect only enough code to locate the faulty condition, then fix surgically."
-    if task_mode == "ui_runtime_bug":
-        scope += " Stay on the real rendered UI path and its handler/render condition."
-    elif task_mode == "provider_api_bug":
-        scope += " Stay on the provider/API-to-workflow boundary."
+    skill_scope = tuple(rule for skill in skills for rule in skill.scope_rules)
+    if skill_scope:
+        scope += f" {' '.join(skill_scope)}"
     if references:
         scope += f" Preserve exact references: {', '.join(references)}."
     if tokens & {"workflow", "firma", "signature"}:
@@ -924,20 +925,17 @@ def _brief_scope(task: str, task_mode: TaskMode, sections: dict[str, str]) -> st
     return scope
 
 
-def _brief_restrictions(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+def _brief_restrictions(task: str, task_mode: TaskMode, sections: dict[str, str], skills: tuple[PromptSkill, ...]) -> str:
     """Return restrictions and validated-behavior guardrails for the operational brief."""
     restrictions: list[str] = []
     if sections.get("Restrictions"):
         restrictions.append(sections["Restrictions"])
 
+    restrictions.extend(rule for skill in skills for rule in skill.restriction_rules)
     restrictions.extend(_validated_behavior_guardrails(task, task_mode))
-    if task_mode == "ui_runtime_bug":
-        restrictions.append("Do not redesign the UI or navigation; change only the condition that causes the wrong render/hide/loading state.")
-    if task_mode == "provider_api_bug":
-        restrictions.append("Protect config, payload, and dispatch behavior unless the task explicitly targets them.")
     if not restrictions:
         restrictions.append("Preserve unrelated behavior and public contracts.")
-    return "\n".join(f"- {item}" if not item.lstrip().startswith(("-", "*")) else item for item in restrictions)
+    return _render_rule_lines(tuple(_unique_preserve_order(restrictions)))
 
 
 def _validated_behavior_guardrails(task: str, task_mode: TaskMode) -> tuple[str, ...]:
@@ -959,24 +957,51 @@ def _validated_behavior_guardrails(task: str, task_mode: TaskMode) -> tuple[str,
     return tuple(guardrails)
 
 
-def _brief_validation(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+def _brief_validation(task: str, sections: dict[str, str], skills: tuple[PromptSkill, ...]) -> str:
     """Return proportional validation text for the operational brief."""
     validation: list[str] = []
     if sections.get("Validation"):
         validation.append(sections["Validation"])
 
     tokens = _tokens(task)
-    if task_mode == "ui_runtime_bug":
-        validation.append("Prove the exact render/hide/loading condition before and after the fix.")
-    if task_mode == "provider_api_bug":
-        validation.append("Verify provider dispatch success remains intact and the workflow state is not incorrectly marked complete.")
-    if tokens & {"autofill", "autofilled", "autofills", "autocompleta", "autocompletan"}:
-        validation.append("Verify the `Email` and `contraseña` fields render with the expected autofill behavior.")
+    validation.extend(rule for skill in skills for rule in skill.validation_expectations)
     if tokens & {"signature", "firma"} and tokens & {"action", "button", "botón", "resend", "send"}:
         validation.append("Verify the signature send/resend action renders when the signature remains pending.")
     if not validation:
         validation.append("Run the smallest focused build/test/smoke that proves the requested behavior.")
-    return "\n".join(f"- {item}" if not item.lstrip().startswith(("-", "*")) else item for item in validation)
+    return _render_rule_lines(tuple(_unique_preserve_order(validation)))
+
+
+def _first_skill_text(skills: tuple[PromptSkill, ...], field: str) -> str | None:
+    """Return first non-empty text field from selected non-base skills."""
+    for skill in skills:
+        if skill.name == "base_prompt_quality":
+            continue
+        value = getattr(skill, field)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _skill_selected(skills: tuple[PromptSkill, ...], name: str) -> bool:
+    """Return whether a prompt skill was selected by name."""
+    return any(skill.name == name for skill in skills)
+
+
+def _render_rule_lines(items: tuple[str, ...]) -> str:
+    """Render rules as bullets unless caller supplied bullet formatting."""
+    return "\n".join(f"- {item}" if not item.lstrip().startswith(("-", "*")) else item for item in items)
+
+
+def _unique_preserve_order(items: list[str]) -> tuple[str, ...]:
+    """Return unique non-empty items while preserving order."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return tuple(result)
 
 
 def _validation_expectations(task: str, task_mode: TaskMode) -> tuple[str, ...]:
@@ -1059,8 +1084,12 @@ def _scope_boundaries(task_mode: TaskMode) -> tuple[str, ...]:
     return SCOPE_BOUNDARY_BY_MODE[task_mode]
 
 
-def _mode_requirements(task_mode: TaskMode) -> tuple[str, ...]:
+def _mode_requirements(task: str, task_mode: TaskMode) -> tuple[str, ...]:
     """Return extra task-mode-specific requirements."""
+    skills = tuple(skill for skill in _selected_prompt_skills(task, task_mode) if skill.name != "base_prompt_quality")
+    if skills:
+        requirements = tuple(rule for skill in skills for rule in (*skill.scope_rules, *skill.restriction_rules, *skill.validation_expectations))
+        return tuple(_unique_preserve_order(list(requirements)))
     return MODE_REQUIREMENTS_BY_MODE.get(task_mode, ())
 
 
@@ -1184,13 +1213,11 @@ def _render_codex_prompt(task: str, selection: _ContextSelection) -> str:
     objective = _task_objective(task)
     task_mode = _classify_task_mode(task)
     task_details_text = _task_details(task, task_mode)
-    mode_requirements = _mode_requirements(task_mode)
+    mode_requirements = _mode_requirements(task, task_mode)
     mode_requirements_text = _render_bullets(mode_requirements) if mode_requirements else "- (none)"
     return f"""Codex Prompt:
 Title: {_title_from_task(task)}
 Task mode: {task_mode}
-Original user task:
-{task.strip()}
 Objective: {objective}
 Task details:
 {task_details_text}
