@@ -347,8 +347,14 @@ def test_golden_email_password_autofill_prompt_quality(tmp_path: Path) -> None:
     task = "Fix bug: the login form autofills Email and contraseña unexpectedly. Keep the login behavior scoped to the existing UI."
 
     rendered = _render(_build_repo(tmp_path), task)
+    task_mode = engineering._classify_task_mode(task)
+    names = tuple(skill.name for skill in engineering._selected_prompt_skills(task, task_mode))
 
     assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
+    assert "form_security_autofill_bug" in names
+    assert "ui_runtime_bug" not in names
+    assert "navigation_surface_convergence" not in names
+    assert "mvp_surface_completion" not in names
     assert "Original user task:" not in rendered.codex_prompt
     assert task not in rendered.codex_prompt
     assert "Observed state:" in rendered.codex_prompt
@@ -363,6 +369,8 @@ def test_golden_email_password_autofill_prompt_quality(tmp_path: Path) -> None:
     assert "authentication/form field behavior" in rendered.codex_prompt
     assert "Verify the `Email` and `contraseña` fields render with the expected autofill behavior." in rendered.codex_prompt
     assert "Prove the exact render/hide/loading condition" not in rendered.codex_prompt
+    assert "prove the exact hide/render condition" not in rendered.codex_prompt
+    assert "loading state" not in rendered.codex_prompt
     assert "spinner/loading state" not in rendered.codex_prompt
     assert "- Files read" not in rendered.codex_prompt
     assert "- Files changed" not in rendered.codex_prompt
@@ -378,6 +386,7 @@ def test_prompt_skill_selection_prefers_form_security_over_generic_ui(tmp_path: 
     assert names == (
         "base_prompt_quality",
         "form_security_autofill_bug",
+        "implementation_fix",
         "spanish_implementation_task_preservation",
     )
     assert "ui_runtime_bug" not in names
@@ -398,7 +407,7 @@ def test_prompt_skill_selection_includes_ui_runtime_skill_for_non_form_ui_bug() 
 
 
 def test_prompt_skill_selection_includes_provider_api_skill() -> None:
-    task = "Fix provider API dispatch regression without touching config_id or START_SIGNATURE payload."
+    task = "Fix provider API dispatch regression after Lleida signature send."
 
     task_mode = engineering._classify_task_mode(task)
     skills = engineering._selected_prompt_skills(task, task_mode)
@@ -406,6 +415,17 @@ def test_prompt_skill_selection_includes_provider_api_skill() -> None:
     names = tuple(skill.name for skill in skills)
     assert "base_prompt_quality" in names
     assert "provider_api_bug" in names
+
+
+def test_prompt_skill_selection_prefers_provider_bootstrap_over_provider_api() -> None:
+    task = "Diagnostic bootstrap: verify Lleida SET_CONFIG/config before provider smoke."
+
+    task_mode = engineering._classify_task_mode(task)
+    skills = engineering._selected_prompt_skills(task, task_mode)
+
+    names = tuple(skill.name for skill in skills)
+    assert "provider_bootstrap_diagnostic" in names
+    assert "provider_api_bug" not in names
 
 
 def test_prompt_skill_selection_includes_spanish_preservation_skill() -> None:
@@ -421,22 +441,75 @@ def test_prompt_skill_selection_includes_spanish_preservation_skill() -> None:
 
 def test_golden_single_bank_account_ui_prompt_quality(tmp_path: Path) -> None:
     task = (
-        "Eliminemos la opción de añadir más de una cuenta desde FormNewBankDataId. "
-        "Quitar el botón Añadir de la tabla de cuentas en las vistas de creación."
+        "Eliminemos la opción de añadir más de una cuenta en todos lados para cualquier entidad. "
+        "Aplicar el patrón desde FormNewBankDataId y quitar el botón Añadir de la tabla de cuentas en las vistas de creación."
     )
 
     rendered = _render(_build_repo(tmp_path), task)
+    task_mode = engineering._classify_task_mode(task)
+    names = tuple(skill.name for skill in engineering._selected_prompt_skills(task, task_mode))
 
     assert "Title: Remove the option to add more than one" in rendered.codex_prompt
     assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
+    assert "global_pattern_change" in names
+    assert "operational_workflow_convergence" in names
+    assert "ui_runtime_bug" not in names
+    assert "navigation_surface_convergence" not in names
     assert "Original user task:" not in rendered.codex_prompt
     assert task not in rendered.codex_prompt
     assert "Observed state:" in rendered.codex_prompt
+    assert "repeated pattern and inconsistent implementations can drift across usages" in rendered.codex_prompt
     assert "Expected behavior:" in rendered.codex_prompt
     assert "Scope:" in rendered.codex_prompt
+    assert "Find the shared pattern or all targeted usages; change them consistently without broad redesign." in rendered.codex_prompt
+    assert "Trace the real workflow state, action eligibility, and rendered operator surface before editing." in rendered.codex_prompt
     assert "Preserve exact references: FormNewBankDataId, botón Añadir, tabla de cuentas, vistas de creación." in rendered.codex_prompt
-    assert "Do not redesign the UI or navigation" in rendered.codex_prompt
+    assert "Do not expand scope beyond the named global pattern or entity set." in rendered.codex_prompt
     assert "Task details:\n(none)" not in rendered.codex_prompt
+    assert "Original user task:" not in rendered.codex_prompt
+    assert "- Files read" not in rendered.codex_prompt
+    assert "- Files changed" not in rendered.codex_prompt
+
+
+def test_golden_accounting_navigation_prompt_quality(tmp_path: Path) -> None:
+    task = (
+        "Fix accounting navigation/dashboard/views convergence so operator menu/index entries open the useful operational surface. "
+        "Complete the MVP operator surface."
+    )
+
+    rendered = _render(_build_repo(tmp_path), task)
+    task_mode = engineering._classify_task_mode(task)
+    names = tuple(skill.name for skill in engineering._selected_prompt_skills(task, task_mode))
+
+    assert "navigation_surface_convergence" in names
+    assert "mvp_surface_completion" in names
+    assert "ui_runtime_bug" not in names
+    assert "Navigation, menu, dashboard, or view surfaces are not converging" in rendered.codex_prompt
+    assert "Operators should reach the same useful workflow surface consistently" in rendered.codex_prompt
+    assert "Trace route/menu/view entry points and converge only the requested navigation surface." in rendered.codex_prompt
+    assert "Complete only the requested operator-facing surface needed for the daily workflow." in rendered.codex_prompt
+    assert "Do not redesign dashboards or unrelated navigation" in rendered.codex_prompt
+    assert "spinner" not in rendered.codex_prompt.lower()
+    assert "button render" not in rendered.codex_prompt.lower()
+    assert "Original user task:" not in rendered.codex_prompt
+    assert "- Files read" not in rendered.codex_prompt
+    assert "- Files changed" not in rendered.codex_prompt
+
+
+def test_golden_lleida_set_config_prompt_quality(tmp_path: Path) -> None:
+    task = "Diagnostic bootstrap: verify Lleida SET_CONFIG/config before provider smoke. Do not change START_SIGNATURE payloads."
+
+    rendered = _render(_build_repo(tmp_path), task)
+    task_mode = engineering._classify_task_mode(task)
+    names = tuple(skill.name for skill in engineering._selected_prompt_skills(task, task_mode))
+
+    assert "provider_bootstrap_diagnostic" in names
+    assert "provider_api_bug" not in names
+    assert "Provider bootstrap/configuration needs bounded verification" in rendered.codex_prompt
+    assert "Limit work to explicit provider bootstrap, config, SET_CONFIG, or smoke-diagnostic checks." in rendered.codex_prompt
+    assert "Report exact bounded diagnostic/config evidence and whether provider calls were made." in rendered.codex_prompt
+    assert "Do not modify START_SIGNATURE payloads unless explicitly targeted." in rendered.codex_prompt
+    assert "Original user task:" not in rendered.codex_prompt
     assert "- Files read" not in rendered.codex_prompt
     assert "- Files changed" not in rendered.codex_prompt
 
@@ -463,8 +536,13 @@ def test_golden_lleida_spinner_provider_hosted_send_prompt_quality(tmp_path: Pat
 
 def test_golden_missing_resend_signature_action_prompt_quality(tmp_path: Path) -> None:
     rendered = _render(_build_repo(tmp_path), STRUCTURED_SIGNATURE_REGRESSION_TASK)
+    task_mode = engineering._classify_task_mode(STRUCTURED_SIGNATURE_REGRESSION_TASK)
+    names = tuple(skill.name for skill in engineering._selected_prompt_skills(STRUCTURED_SIGNATURE_REGRESSION_TASK, task_mode))
 
     assert "Task mode: continuation_followup" in rendered.codex_prompt
+    assert "provider_api_bug" in names
+    assert "provider_bootstrap_diagnostic" not in names
+    assert "operational_workflow_convergence" in names
     assert "Observed state:" in rendered.codex_prompt
     assert "ProviderStatus = Success" in rendered.codex_prompt
     assert "ProviderCorrelationId exists" in rendered.codex_prompt

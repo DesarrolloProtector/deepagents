@@ -853,6 +853,7 @@ def _selected_prompt_skills(task: str, task_mode: TaskMode) -> tuple[PromptSkill
         task_mode=task_mode,
         task_tokens=_tokens(task),
         has_spanish_text=_needs_english_summary(task),
+        task_text=task,
     )
 
 
@@ -1079,8 +1080,16 @@ def _has_continuation_followup_intent(task: str, task_tokens: frozenset[str]) ->
     )
 
 
-def _scope_boundaries(task_mode: TaskMode) -> tuple[str, ...]:
+def _scope_boundaries(task: str, task_mode: TaskMode) -> tuple[str, ...]:
     """Return scope boundaries for the selected task mode."""
+    skills = _selected_prompt_skills(task, task_mode)
+    if task_mode == "ui_runtime_bug" and not _skill_selected(skills, "ui_runtime_bug"):
+        boundaries = [
+            "Inspect only enough code to locate the faulty condition, then fix surgically.",
+            "Scoped edits are allowed when needed to fix the requested UI/runtime issue.",
+        ]
+        boundaries.extend(rule for skill in skills if skill.name != "base_prompt_quality" for rule in skill.scope_rules[:1])
+        return tuple(_unique_preserve_order(boundaries))
     return SCOPE_BOUNDARY_BY_MODE[task_mode]
 
 
@@ -1224,7 +1233,7 @@ Task details:
 Selected context paths:
 {_one_line_list(selected_paths)}
 Scope boundaries:
-{_render_bullets(_scope_boundaries(task_mode))}
+{_render_bullets(_scope_boundaries(task, task_mode))}
 No-drift rules:
 - Stay on the requested repo/workflow surface.
 - Do not broaden repo exploration beyond selected context unless directly needed.
