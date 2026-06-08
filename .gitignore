@@ -27,11 +27,16 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Protector Operator .NET build output
+apps/protector-operator/bin/
+apps/protector-operator/obj/
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!apps/protector-operator/app.manifest
 
 # Installer logs
 pip-log.txt

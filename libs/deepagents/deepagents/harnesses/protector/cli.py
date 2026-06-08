@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,6 +21,7 @@ from deepagents.harnesses.protector._engineering import (
     HarnessUsageError,
     RenderedOutput,
     build_read_only_agent,
+    render_codex_reviewer_prompt,
     render_output,
     render_review_findings,
     resolve_harness_profile,
@@ -38,6 +42,8 @@ _BUILT_IN_REPO_ALIASES = {
 }
 _MIN_POSITIONAL_REPO_TASK_ARGS = 2
 _INTERACTIVE_SENTINEL = "END"
+_GMEM_MOVEABLE = 0x0002
+_CF_UNICODETEXT = 13
 
 
 @dataclass(frozen=True)
@@ -161,6 +167,15 @@ def _build_parser() -> argparse.ArgumentParser:
     review.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     review.add_argument("task", nargs="*", help="Task text used to detect scope drift.")
 
+    review_codex = subparsers.add_parser("review-codex", help="Generate a Codex reviewer prompt for a Codex output.")
+    review_codex.add_argument("--repo", default=None, help="Explicit target repository path.")
+    review_codex.add_argument("--codex-output", type=Path, required=True, help="Text file containing Codex implementation output to review.")
+    review_codex.add_argument("--output", type=Path, default=None, help="Optional file path for writing only the generated Codex reviewer prompt.")
+    review_codex.add_argument("--overwrite", action="store_true", help="Allow --output to replace an existing file.")
+    review_codex.add_argument("--no-copy", action="store_true", help="Print the generated reviewer prompt instead of copying it to the clipboard.")
+    review_codex.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
+    review_codex.add_argument("task", nargs="*", help="Original task text used to build the reviewer prompt.")
+
     run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
     run.add_argument("repo", help="Repo alias/path to target.")
 
@@ -201,12 +216,21 @@ def _run_task(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
 
 def _run_interactive(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run `ph run`."""
-    repo = _resolve_positional_repo(args.repo, parser)
-    task = _read_until_sentinel(
-        f"Paste or type the task. End input with a line containing only {_INTERACTIVE_SENTINEL}.\n",
+    _ = args, parser
+    sys.stdout.write(
+        "ph run is temporarily disabled. Use ph task to generate/copy prompts and ph review/ph review-codex for review.\n",
     )
-    if not task:
-        parser.error("task text is required")
+    return 1
+
+
+def _run_interactive_enabled(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run the disabled interactive workflow implementation."""
+    repo = _resolve_positional_repo(args.repo, parser)
+    task = _read_interactive_task(parser)
+    task = _confirm_interactive_task(task, parser)
+    if task is None:
+        sys.stdout.write("Cancelled.\n")
+        return 0
 
     rendered = _render_task_prompt(repo=repo, task=task, output=None, parser=parser)
     copy_result = _copy_to_clipboard(rendered.codex_prompt)
@@ -236,6 +260,75 @@ def _run_interactive(args: argparse.Namespace, parser: argparse.ArgumentParser) 
     elif findings.status == "PASS":
         sys.stdout.write("PASS\n")
     return 0
+
+
+def _read_interactive_task(parser: argparse.ArgumentParser) -> str:
+    """Read a non-empty interactive task from stdin."""
+    task = _read_until_sentinel(
+        f"Paste or type the task. End input with a line containing only {_INTERACTIVE_SENTINEL}.\n",
+    )
+    if not task:
+        parser.error("task text is required")
+    return task
+
+
+def _confirm_interactive_task(task: str, parser: argparse.ArgumentParser) -> str | None:
+    """Let the operator generate, edit, re-enter, or cancel the task."""
+    current = task
+    while True:
+        sys.stdout.write("Task to generate:\n")
+        sys.stdout.write(f"{current}\n")
+        sys.stdout.write("Choose: G generate, E edit, R re-enter, C cancel: ")
+        choice = sys.stdin.readline().strip().upper()
+        if choice == "G":
+            return current
+        if choice == "E":
+            current = _edit_interactive_task(current, parser)
+            continue
+        if choice == "R":
+            current = _read_interactive_task(parser)
+            continue
+        if choice == "C":
+            return None
+        if choice == "":
+            parser.error("task confirmation choice is required")
+        sys.stdout.write("Choose G, E, R, or C.\n")
+
+
+def _edit_interactive_task(task: str, parser: argparse.ArgumentParser) -> str:
+    """Edit task text in the configured editor and return the UTF-8 result."""
+    with tempfile.TemporaryDirectory(prefix="protector-harness-task-") as tmp:
+        path = Path(tmp) / "task.md"
+        path.write_text(f"{task.rstrip()}\n", encoding="utf-8")
+        command = _editor_command()
+        try:
+            _run_editor(command, path)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            parser.error(f"editor failed: {exc}")
+        edited = path.read_text(encoding="utf-8").strip()
+    if not edited:
+        parser.error("edited task text is empty")
+    return edited
+
+
+def _editor_command() -> tuple[str, ...]:
+    """Return the configured editor command for interactive task edits."""
+    for env_var in ("PROTECTOR_HARNESS_EDITOR", "VISUAL", "EDITOR"):
+        value = os.environ.get(env_var)
+        if value:
+            return tuple(shlex.split(value, posix=sys.platform != "win32"))
+    code = shutil.which("code")
+    if code is not None:
+        return (code, "--wait")
+    return ("notepad",)
+
+
+def _run_editor(command: tuple[str, ...], path: Path) -> None:
+    """Run an editor command against the temp task file."""
+    subprocess.run(  # noqa: S603  # Editor command is explicit operator configuration or fixed fallback.
+        [*command, str(path)],
+        check=True,
+    )
 
 
 def _render_task_prompt(
@@ -283,6 +376,9 @@ def _read_until_sentinel(prompt: str) -> str:
 
 def _copy_to_clipboard(text: str) -> _ClipboardCopyResult:
     """Copy `text` to the system clipboard using a fixed local command."""
+    if sys.platform == "win32":
+        return _copy_to_windows_clipboard(text)
+
     command = _clipboard_command()
     if command is None:
         return _ClipboardCopyResult(copied=False, error="no clipboard command found")
@@ -302,6 +398,51 @@ def _copy_to_clipboard(text: str) -> _ClipboardCopyResult:
     except OSError as exc:
         return _ClipboardCopyResult(copied=False, error=str(exc) or type(exc).__name__)
 
+    return _ClipboardCopyResult(copied=True)
+
+
+def _copy_to_windows_clipboard(text: str) -> _ClipboardCopyResult:
+    """Copy text to the Windows Unicode clipboard."""
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.restype = ctypes.c_int
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.restype = ctypes.c_void_p
+    user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+    user32.OpenClipboard.restype = ctypes.c_int
+    user32.EmptyClipboard.restype = ctypes.c_int
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.CloseClipboard.restype = ctypes.c_int
+    data = f"{text}\0".encode("utf-16-le")
+    handle = kernel32.GlobalAlloc(_GMEM_MOVEABLE, len(data))
+    if not handle:
+        return _ClipboardCopyResult(copied=False, error="GlobalAlloc failed")
+
+    locked = kernel32.GlobalLock(handle)
+    if not locked:
+        kernel32.GlobalFree(handle)
+        return _ClipboardCopyResult(copied=False, error="GlobalLock failed")
+
+    ctypes.memmove(locked, data, len(data))
+    kernel32.GlobalUnlock(handle)
+
+    if not user32.OpenClipboard(None):
+        kernel32.GlobalFree(handle)
+        return _ClipboardCopyResult(copied=False, error="OpenClipboard failed")
+
+    try:
+        user32.EmptyClipboard()
+        if not user32.SetClipboardData(_CF_UNICODETEXT, handle):
+            kernel32.GlobalFree(handle)
+            return _ClipboardCopyResult(copied=False, error="SetClipboardData failed")
+    finally:
+        user32.CloseClipboard()
     return _ClipboardCopyResult(copied=True)
 
 
@@ -339,6 +480,39 @@ def _run_review(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
 
     text = args.codex_output.read_text(encoding="utf-8")
     sys.stdout.write(render_review_findings(args.codex_output, task, text))
+    sys.stdout.write("\n")
+    return 0
+
+
+def _run_review_codex(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph review-codex`."""
+    repo, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
+    text = args.codex_output.read_text(encoding="utf-8")
+    rendered = render_codex_reviewer_prompt(
+        task=task,
+        repo=repo,
+        codex_output=text,
+        source=str(args.codex_output.resolve()),
+    )
+    if args.output is not None:
+        try:
+            write_prompt_output(args.output, rendered.prompt, overwrite=args.overwrite)
+        except HarnessUsageError as exc:
+            parser.error(str(exc))
+    if args.no_copy:
+        sys.stdout.write(rendered.prompt)
+        sys.stdout.write("\n")
+        return 0
+
+    copy_result = _copy_to_clipboard(rendered.prompt)
+    if copy_result.copied:
+        sys.stdout.write(_render_task_confirmation(repo, rendered.selected_context_count, "Codex reviewer prompt copied to clipboard"))
+        sys.stdout.write("\n")
+        return 0
+
+    sys.stdout.write(_render_task_confirmation(repo, rendered.selected_context_count, "Codex reviewer prompt was not copied"))
+    sys.stdout.write(f"\nClipboard unavailable: {copy_result.error or 'no clipboard backend available'}\n\n")
+    sys.stdout.write(rendered.prompt)
     sys.stdout.write("\n")
     return 0
 
@@ -382,20 +556,32 @@ Aliases:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the `ph` CLI."""
+    _configure_utf8_stdio()
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "task":
-        return _run_task(args, parser)
-    if args.command == "review":
-        return _run_review(args, parser)
-    if args.command == "run":
-        return _run_interactive(args, parser)
-    if args.command == "status":
-        return _run_status()
-    if args.command == "repos":
-        return _run_repos(args, parser)
-    parser.error(f"unknown command: {args.command}")
-    return 2
+        result = _run_task(args, parser)
+    elif args.command == "review":
+        result = _run_review(args, parser)
+    elif args.command == "review-codex":
+        result = _run_review_codex(args, parser)
+    elif args.command == "run":
+        result = _run_interactive(args, parser)
+    elif args.command == "status":
+        result = _run_status()
+    elif args.command == "repos":
+        result = _run_repos(args, parser)
+    else:
+        parser.error(f"unknown command: {args.command}")
+    return result
+
+
+def _configure_utf8_stdio() -> None:
+    """Prefer UTF-8 for interactive text streams when Python supports it."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,4 @@
 import json
-import sys
-from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -175,6 +173,32 @@ def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> No
     assert "Do not redesign unrelated workflows." in rendered.codex_prompt
 
 
+def test_default_prompt_omits_legacy_files_output_sections(tmp_path: Path) -> None:
+    rendered = _render(_build_repo(tmp_path), "Fix regression: missing signature button")
+
+    assert "- Files read" not in rendered.codex_prompt
+    assert "- Files changed" not in rendered.codex_prompt
+    assert "Mandatory output:\n- Summary\n- Validation\n- PASS/FAIL" in rendered.codex_prompt
+
+
+def test_prompt_includes_legacy_files_output_sections_when_requested(tmp_path: Path) -> None:
+    rendered = _render(_build_repo(tmp_path), "Fix regression and include Files read and Files changed in the output")
+
+    assert "Mandatory output:\n- Files read\n- Files changed\n- Summary\n- Validation\n- PASS/FAIL" in rendered.codex_prompt
+
+
+def test_task_mode_output_requirements_are_minimal(tmp_path: Path) -> None:
+    planning = _render(_build_repo(tmp_path / "planning"), "Plan roadmap for payment workflow")
+    diagnostic = _render(_build_repo(tmp_path / "diagnostic"), "Diagnostic bootstrap: smoke real provider")
+
+    assert "Mandatory output:\n- Plan\n- Risks\n- Validation\n- PASS/FAIL" in planning.codex_prompt
+    assert "- Files read" not in planning.codex_prompt
+    assert "- Files changed" not in planning.codex_prompt
+    assert "Mandatory output:\n- Diagnostics run\n- Evidence\n- Validation\n- PASS/FAIL" in diagnostic.codex_prompt
+    assert "- Files read" not in diagnostic.codex_prompt
+    assert "- Files changed" not in diagnostic.codex_prompt
+
+
 def test_review_task_remains_read_only(tmp_path: Path) -> None:
     rendered = _render(_build_repo(tmp_path), "Review payment workflow behavior")
 
@@ -236,6 +260,41 @@ def test_provider_api_regression_protects_unrelated_working_provider_pieces(tmp_
     assert "Preserve working provider, config, payload, and dispatch behavior unless the task specifically targets it." in rendered.codex_prompt
     provider_guardrail = "Do not modify ConfigId, SET_CONFIG, START_SIGNATURE, payload, or dispatch behavior unless the task specifically targets it."
     assert provider_guardrail in rendered.codex_prompt
+
+
+def test_spanish_ui_implementation_request_is_actionable_and_unicode_safe(tmp_path: Path) -> None:
+    task = (
+        "Eliminemos la opción de añadir más de una cuenta desde FormNewBankDataId. "
+        "Quitar el botón Añadir de la tabla de cuentas en las vistas de creación."
+    )
+
+    rendered = _render(_build_repo(tmp_path), task)
+
+    assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
+    assert "Do not edit files unless explicitly requested by this task." not in rendered.codex_prompt
+    assert "Do not edit files unless the caller explicitly grants editing" not in rendered.codex_prompt
+    assert "Inspect only enough code to locate the faulty condition, then fix surgically." in rendered.codex_prompt
+    assert "Scoped edits are allowed when needed to fix the requested UI/runtime issue." in rendered.codex_prompt
+    assert "Task details:\n(none)" not in rendered.codex_prompt
+    assert "FormNewBankDataId" in rendered.codex_prompt
+    assert "botón Añadir" in rendered.codex_prompt
+    assert "tabla de cuentas" in rendered.codex_prompt
+    assert "vistas de creación" in rendered.codex_prompt
+    for text in ("opción", "añadir", "más", "creación", "botón"):
+        assert text in rendered.codex_prompt
+    for mojibake in ("opci¾n", "a±adir", "mßs"):
+        assert mojibake not in rendered.codex_prompt
+
+
+def test_spanish_review_only_request_remains_read_only(tmp_path: Path) -> None:
+    task = "Revisar sin implementar la opción de añadir más de una cuenta en las vistas de creación."
+
+    rendered = _render(_build_repo(tmp_path), task)
+
+    assert "Task mode: review_only" in rendered.codex_prompt
+    assert "Do not edit files unless explicitly requested by this task." in rendered.codex_prompt
+    assert "start with read-only inspection of the selected context" in rendered.codex_prompt
+    assert "Scoped edits are allowed" not in rendered.codex_prompt
 
 
 def test_structured_regression_task_preserves_details(tmp_path: Path) -> None:
@@ -416,6 +475,40 @@ def test_cli_task_writes_output_and_copies_prompt(tmp_path: Path, monkeypatch, c
     assert output.read_text(encoding="utf-8") == f"{copied[0]}\n"
 
 
+def test_cli_task_output_preserves_spanish_unicode(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    output = tmp_path / "prompt.md"
+    task = (
+        "Eliminemos la opción de añadir más de una cuenta desde FormNewBankDataId. "
+        "Quitar el botón Añadir de la tabla de cuentas en las vistas de creación."
+    )
+
+    def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
+        _ = text
+        msg = "clipboard should not be used with --no-copy"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
+
+    assert cli.main(["task", "--repo", str(repo), "--output", str(output), "--no-copy", task]) == 0
+
+    stdout = capsys.readouterr().out
+    prompt = output.read_text(encoding="utf-8")
+    assert "Task mode: ui_runtime_bug" in prompt
+    assert "FormNewBankDataId" in prompt
+    assert "botón Añadir" in prompt
+    assert "tabla de cuentas" in prompt
+    assert "vistas de creación" in prompt
+    assert "Task details:\n(none)" not in prompt
+    assert "Do not edit files unless explicitly requested by this task." not in prompt
+    for text in ("opción", "añadir", "más", "creación", "botón"):
+        assert text in prompt
+        assert text in stdout
+    for mojibake in ("opci¾n", "a±adir", "mßs"):
+        assert mojibake not in prompt
+        assert mojibake not in stdout
+
+
 def test_cli_task_prints_prompt_when_clipboard_unavailable(tmp_path: Path, monkeypatch, capsys) -> None:
     repo = _build_repo(tmp_path / "repo")
 
@@ -463,81 +556,150 @@ def test_cli_task_uses_builtin_fallback_alias(capsys) -> None:
     assert "Task: small test task" in stdout
 
 
-def test_cli_run_passes_with_synthetic_good_output(monkeypatch, capsys) -> None:
-    copied: list[str] = []
-    stdin = StringIO(
-        """small test task
-END
-Files read
-- AGENTS.md
+def test_cli_run_is_temporarily_disabled(monkeypatch, capsys) -> None:
+    def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
+        _ = text
+        msg = "clipboard should not be used while ph run is disabled"
+        raise AssertionError(msg)
 
-Files changed
-- (none)
+    monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
 
-Summary
-- Reviewed bounded context.
+    assert cli.main(["run", "FinanciacionCore"]) == 1
+
+    stdout = capsys.readouterr().out
+    assert "ph run is temporarily disabled. Use ph task to generate/copy prompts and ph review/ph review-codex for review." in stdout
+    assert "Paste or type the task" not in stdout
+    assert "Codex prompt copied to clipboard" not in stdout
+
+
+def test_cli_review_codex_copies_reviewer_prompt_by_default(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_output = tmp_path / "codex-good.txt"
+    codex_output.write_text(
+        """Summary
+- Implemented the small task.
 
 Validation
-- ruff check passed.
+- smoke check passed.
 
 PASS
-END
 """,
+        encoding="utf-8",
     )
+    copied: list[str] = []
 
     def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
         copied.append(text)
         return cli._ClipboardCopyResult(copied=True)
 
-    monkeypatch.setattr(sys, "stdin", stdin)
     monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
 
-    assert cli.main(["run", "deepagents"]) == 0
+    assert cli.main(["review-codex", str(repo), "--codex-output", str(codex_output), "small", "task"]) == 0
 
     stdout = capsys.readouterr().out
-    assert "Paste or type the task. End input with a line containing only END." in stdout
-    assert "Codex prompt copied to clipboard" in stdout
-    assert "Paste this into your already-open Codex session." in stdout
-    assert "Paste Codex output. End input with a line containing only END." in stdout
-    assert "Status: PASS" in stdout
-    assert stdout.rstrip().endswith("PASS")
+    assert "Codex reviewer prompt copied to clipboard" in stdout
     assert len(copied) == 1
-    assert copied[0].startswith("Codex Prompt:\n")
+    assert copied[0].startswith("Codex Reviewer Prompt\n")
+    assert "Original task:\nsmall task" in copied[0]
+    assert "Task mode: review_only" in copied[0]
+    assert "Selected context paths:\n- AGENTS.md\n- MEMORY.md" in copied[0]
+    assert "Generated implementation prompt:\nCodex Prompt:" in copied[0]
+    assert "Implementation Codex output:" in copied[0]
+    assert "Deterministic reviewer findings:" in copied[0]
+    assert "Review verdict: PASS / FAIL / NEEDS_FOLLOW_UP" in copied[0]
+    assert "Do not require `Files read` or `Files changed` unless the original task explicitly asked for those sections." in copied[0]
 
 
-def test_cli_run_review_needed_copies_and_prints_follow_up(monkeypatch, capsys) -> None:
-    copied: list[str] = []
-    stdin = StringIO(
-        """small payment workflow task
-END
-Summary
+def test_cli_review_codex_bad_output_includes_deterministic_findings(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_output = tmp_path / "codex-bad.txt"
+    codex_output.write_text(
+        """Summary
 - Added dashboard memory graph MCP governance documentation changes.
 
 Validation
 - not run
 
 PASS
-END
 """,
+        encoding="utf-8",
     )
+    copied: list[str] = []
 
     def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
         copied.append(text)
         return cli._ClipboardCopyResult(copied=True)
 
-    monkeypatch.setattr(sys, "stdin", stdin)
     monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
 
-    assert cli.main(["run", "deepagents"]) == 0
+    assert cli.main(["review-codex", str(repo), "--codex-output", str(codex_output), "small", "payment", "workflow", "task"]) == 0
+
+    capsys.readouterr()
+    assert "Status: REVIEW_NEEDED" in copied[0]
+    assert "- dashboard mentioned without task scope" in copied[0]
+    assert "- PASS claimed without validation evidence" in copied[0]
+    assert "Follow-up prompt if needed" in copied[0]
+
+
+def test_cli_review_codex_output_writes_only_reviewer_prompt(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_output = tmp_path / "codex-good.txt"
+    output = tmp_path / "reviewer-prompt.md"
+    codex_output.write_text(
+        """Summary
+- Implemented the small task.
+
+Validation
+- smoke check passed.
+
+PASS
+""",
+        encoding="utf-8",
+    )
+    copied: list[str] = []
+
+    def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
+        copied.append(text)
+        return cli._ClipboardCopyResult(copied=True)
+
+    monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
+
+    assert cli.main(["review-codex", str(repo), "--codex-output", str(codex_output), "--output", str(output), "small", "task"]) == 0
 
     stdout = capsys.readouterr().out
-    assert "Status: REVIEW_NEEDED" in stdout
-    assert "Suggested follow-up prompt:" in stdout
-    assert "Follow-up prompt copied to clipboard." in stdout
-    assert "Follow-up prompt:\nRevise the Codex output" in stdout
-    assert len(copied) == 2
-    assert copied[0].startswith("Codex Prompt:\n")
-    assert copied[1].startswith("Revise the Codex output")
+    assert "Codex reviewer prompt copied to clipboard" in stdout
+    assert output.read_text(encoding="utf-8") == f"{copied[0]}\n"
+    assert output.read_text(encoding="utf-8").startswith("Codex Reviewer Prompt\n")
+
+
+def test_cli_review_codex_no_copy_prints_prompt_without_clipboard(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_output = tmp_path / "codex-good.txt"
+    codex_output.write_text(
+        """Summary
+- Implemented the small task.
+
+Validation
+- smoke check passed.
+
+PASS
+""",
+        encoding="utf-8",
+    )
+
+    def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
+        _ = text
+        msg = "clipboard should not be used with --no-copy"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
+
+    assert cli.main(["review-codex", str(repo), "--codex-output", str(codex_output), "--no-copy", "small", "task"]) == 0
+
+    stdout = capsys.readouterr().out
+    assert stdout.startswith("Codex Reviewer Prompt\n")
+    assert "Implementation Codex output:" in stdout
+    assert "Deterministic reviewer findings:" in stdout
 
 
 def test_cli_task_unknown_alias_fails(capsys) -> None:

@@ -84,22 +84,43 @@ IMPLEMENTATION_INTENT_TERMS = frozenset(
     {
         "arreglar",
         "bug",
+        "cambiar",
         "corregir",
+        "change",
+        "desaparece",
+        "desaparecer",
+        "eliminar",
+        "eliminemos",
         "error",
         "falla",
         "fix",
+        "hide",
+        "modify",
+        "modificar",
+        "ocultar",
+        "quitar",
+        "quitemos",
+        "remove",
+        "replace",
+        "reemplazar",
         "regression",
         "reparar",
         "restore",
+        "ajustar",
     }
 )
 REVIEW_ONLY_TERMS = frozenset(
     {
+        "analizar",
         "assess",
         "audit",
+        "auditar",
         "classify",
+        "evaluar",
         "inspect",
+        "inspeccionar",
         "review",
+        "revisar",
     }
 )
 PLANNING_ONLY_TERMS = frozenset(
@@ -129,13 +150,25 @@ CONTINUATION_FOLLOWUP_TERMS = frozenset(
 UI_RUNTIME_BUG_TERMS = frozenset(
     {
         "button",
+        "boton",
+        "botón",
         "dom",
+        "form",
+        "añadir",
+        "inputs",
         "js",
         "modal",
+        "opcion",
+        "opción",
         "razor",
         "spinner",
+        "tabla",
+        "table",
         "ui",
         "view",
+        "views",
+        "vista",
+        "vistas",
     }
 )
 PROVIDER_API_BUG_TERMS = frozenset(
@@ -247,6 +280,15 @@ class ReviewFindings:
     text: str
     status: str
     follow_up: str | None
+
+
+@dataclass(frozen=True)
+class RenderedReviewerPrompt:
+    """Codex reviewer prompt plus deterministic findings metadata."""
+
+    prompt: str
+    findings: ReviewFindings
+    selected_context_count: int
 
 
 @dataclass(frozen=True)
@@ -449,6 +491,61 @@ Suggested follow-up prompt:
     return ReviewFindings(text=rendered, status=result.status, follow_up=result.follow_up)
 
 
+def render_codex_reviewer_prompt(
+    *,
+    task: str,
+    repo: Path | None,
+    codex_output: str,
+    source: str,
+) -> RenderedReviewerPrompt:
+    """Render a prompt for a separate Codex reviewer without invoking a model."""
+    selection = _select_context(repo, task)
+    task_mode = _classify_task_mode(task)
+    implementation_prompt = _render_codex_prompt(task, selection)
+    findings = review_codex_output(task=task, output=codex_output, source=source)
+    selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
+    reviewer_prompt = f"""Codex Reviewer Prompt
+
+Original task:
+{task}
+
+Task mode: {task_mode}
+
+Selected context paths:
+{_one_line_list(selected_paths)}
+
+Generated implementation prompt:
+{implementation_prompt}
+
+Implementation Codex output:
+{codex_output}
+
+Deterministic reviewer findings:
+{findings.text}
+
+Reviewer rubric:
+- Verify whether the implementation actually satisfies the original task.
+- Check scope drift.
+- Check whether protected behavior was touched.
+- Check whether validation is proportional and credible.
+- Check whether PASS is justified.
+- Identify concrete missing evidence or follow-up.
+- Do not require `Files read` or `Files changed` unless the original task explicitly asked for those sections.
+- Do not request broad rewrites.
+- Do not introduce new architecture, governance, or documentation.
+
+Produce only:
+- Review verdict: PASS / FAIL / NEEDS_FOLLOW_UP
+- Findings
+- Missing evidence
+- Follow-up prompt if needed"""
+    return RenderedReviewerPrompt(
+        prompt=reviewer_prompt,
+        findings=findings,
+        selected_context_count=_selected_context_count(selection),
+    )
+
+
 def _mode_label(mode: Literal["auto", "planner", "reviewer"]) -> str:
     """Return a compact mode label for the Codex handoff."""
     if mode == "auto":
@@ -478,7 +575,7 @@ def _selected_context_count(selection: _ContextSelection) -> int:
 
 def _tokens(text: str) -> frozenset[str]:
     """Return deterministic lowercase task/path tokens."""
-    base = {token for token in re.findall(r"[a-z0-9]+", text.lower()) if len(token) > 1}
+    base = {token for token in re.findall(r"\w+", text.lower(), flags=re.UNICODE) if len(token) > 1}
     expanded = set(base)
     for token in base:
         expanded.update(TOKEN_ALIASES.get(token, ()))
@@ -606,7 +703,7 @@ def _title_from_task(task: str) -> str:
 
 def _compact_title(text: str) -> str:
     """Return a compact title from text."""
-    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*", text)
+    words = re.findall(r"[\w-]+", text, flags=re.UNICODE)
     title = " ".join(words[:8]).strip()
     return title or "Engineering Harness Task"
 
@@ -781,6 +878,32 @@ def _mode_requirements(task_mode: TaskMode) -> tuple[str, ...]:
     return MODE_REQUIREMENTS_BY_MODE.get(task_mode, ())
 
 
+def _output_requirements(task: str, task_mode: TaskMode) -> tuple[str, ...]:
+    """Return minimal output requirements for generated Codex prompts."""
+    requirements = ["Summary", "Validation", "PASS/FAIL"]
+    if _explicitly_requests_legacy_output_sections(task):
+        requirements = ["Files read", "Files changed", *requirements]
+    if task_mode == "planning_only":
+        return ("Plan", "Risks", "Validation", "PASS/FAIL")
+    if task_mode == "review_only":
+        return ("Findings", "Risks", "Validation", "PASS/FAIL")
+    if task_mode == "diagnostic_bootstrap":
+        return ("Diagnostics run", "Evidence", "Validation", "PASS/FAIL")
+    return tuple(requirements)
+
+
+def _explicitly_requests_legacy_output_sections(task: str) -> bool:
+    """Return whether task text explicitly asks for legacy output sections."""
+    lowered = task.lower()
+    return "files read" in lowered or "files changed" in lowered
+
+
+def _has_concrete_ui_or_identifier_details(task: str) -> bool:
+    """Return whether unstructured task text has UI details worth preserving."""
+    tokens = _tokens(task)
+    return bool(tokens & UI_RUNTIME_BUG_TERMS) or re.search(r"\b[A-Za-z]+[A-Z][A-Za-z0-9]*\b", task) is not None
+
+
 def _render_bullets(items: tuple[str, ...]) -> str:
     """Render a bullet list from plain text items."""
     return "\n".join(f"- {item}" for item in items)
@@ -791,8 +914,13 @@ def _render_codex_prompt(task: str, selection: _ContextSelection) -> str:
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
     objective = _task_objective(task)
     task_details = _structured_task_details(task)
-    task_details_text = "(none)" if task_details is None else task_details
     task_mode = _classify_task_mode(task)
+    if task_details is not None:
+        task_details_text = task_details
+    elif _has_concrete_ui_or_identifier_details(task):
+        task_details_text = task
+    else:
+        task_details_text = "(none)"
     mode_requirements = _mode_requirements(task_mode)
     mode_requirements_text = _render_bullets(mode_requirements) if mode_requirements else "- (none)"
     return f"""Codex Prompt:
@@ -817,11 +945,7 @@ Mode-specific requirements:
 Validation expectations:
 {_one_line_list(_validation_expectations(task, task_mode))}
 Mandatory output:
-- Files read
-- Files changed
-- Summary
-- Validation
-- PASS/FAIL"""
+{_render_bullets(_output_requirements(task, task_mode))}"""
 
 
 def _contains_section(text: str, section: str) -> bool:
