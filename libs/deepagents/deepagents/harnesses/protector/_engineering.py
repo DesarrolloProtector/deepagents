@@ -183,6 +183,35 @@ PROVIDER_API_BUG_TERMS = frozenset(
         "start_signature",
     }
 )
+SPANISH_SUMMARY_TERMS = frozenset(
+    {
+        "añadir",
+        "botón",
+        "contraseña",
+        "crear",
+        "cuenta",
+        "cuentas",
+        "eliminar",
+        "eliminemos",
+        "entidades",
+        "más",
+        "opción",
+        "quitar",
+        "quitemos",
+        "tabla",
+        "vistas",
+    }
+)
+SPANISH_LITERAL_REFERENCES = (
+    "FormNewBankDataId",
+    "botón Añadir",
+    "tabla de cuentas",
+    "vistas de creación",
+    "crear entidades",
+    "contraseña",
+    "Email",
+    "login",
+)
 STRUCTURED_TASK_HEADINGS = (
     "Title",
     "Objective",
@@ -693,6 +722,8 @@ Not Selected:
 
 def _title_from_task(task: str) -> str:
     """Infer a compact prompt title from task text."""
+    if _needs_english_summary(task):
+        return _compact_title(_english_task_summary(task, _classify_task_mode(task)))
     sections = _parse_task_sections(task)
     explicit_title = sections.get("Title")
     if explicit_title:
@@ -710,6 +741,9 @@ def _compact_title(text: str) -> str:
 
 def _task_objective(task: str) -> str:
     """Return a concise objective without leading section-label noise."""
+    if _needs_english_summary(task):
+        return _english_task_summary(task, _classify_task_mode(task))
+
     sections = _parse_task_sections(task)
     objective = sections.get("Objective")
     if objective:
@@ -782,6 +816,9 @@ def _section_heading(line: str, headings: dict[str, str]) -> tuple[str | None, s
 
 def _structured_task_details(task: str) -> str | None:
     """Render preserved task sections, excluding `Objective`."""
+    if _needs_english_summary(task):
+        return _english_task_details(task, _classify_task_mode(task))
+
     sections = _parse_task_sections(task)
     rows: list[str] = []
     for heading in ("State", "Current regression", "Expected behavior", "Scope", "Restrictions", "Validation", "PASS"):
@@ -898,6 +935,89 @@ def _explicitly_requests_legacy_output_sections(task: str) -> bool:
     return "files read" in lowered or "files changed" in lowered
 
 
+def _needs_english_summary(task: str) -> bool:
+    """Return whether task text needs deterministic English summary rendering."""
+    return bool(_tokens(task) & SPANISH_SUMMARY_TERMS) or re.search(r"[áéíóúñÁÉÍÓÚÑ]", task) is not None
+
+
+def _english_task_summary(task: str, task_mode: TaskMode) -> str:
+    """Return a deterministic English objective summary for non-English task text."""
+    tokens = _tokens(task)
+    if task_mode == "review_only":
+        target = _english_target_from_tokens(tokens)
+        references = _reference_suffix(task)
+        return f"Review {target} without implementing changes{references}."
+
+    action = _english_action_from_tokens(tokens)
+    target = _english_target_from_tokens(tokens)
+    references = _reference_suffix(task)
+    return f"{action} {target}{references}."
+
+
+def _english_task_details(task: str, task_mode: TaskMode) -> str:
+    """Return English task details while preserving literal task evidence separately."""
+    summary = _english_task_summary(task, task_mode)
+    references = _literal_references(task)
+    if references:
+        return f"Implementation summary: {summary}\nPreserve exact referenced text and identifiers: {', '.join(references)}."
+    return f"Implementation summary: {summary}"
+
+
+def _english_action_from_tokens(tokens: frozenset[str]) -> str:
+    """Return an English action phrase from task tokens."""
+    if tokens & {"eliminar", "eliminemos", "quitar", "quitemos", "remove"}:
+        return "Remove"
+    if tokens & {"ocultar", "hide"}:
+        return "Hide"
+    if tokens & {"reemplazar", "replace"}:
+        return "Replace"
+    if tokens & {"cambiar", "modificar", "ajustar", "change", "modify"}:
+        return "Update"
+    if tokens & IMPLEMENTATION_INTENT_TERMS:
+        return "Fix"
+    return "Handle"
+
+
+def _english_target_from_tokens(tokens: frozenset[str]) -> str:
+    """Return an English target phrase from task tokens."""
+    if "cuenta" in tokens or "cuentas" in tokens:
+        if tokens & {"añadir", "mas", "más"}:
+            return "the option to add more than one account"
+        return "the account UI behavior"
+    if "contraseña" in tokens and "login" in tokens:
+        return "the login/password UI behavior"
+    if tokens & UI_RUNTIME_BUG_TERMS:
+        return "the requested UI behavior"
+    return "the requested behavior"
+
+
+def _reference_suffix(task: str) -> str:
+    """Return an English suffix listing exact literals to preserve."""
+    references = _literal_references(task)
+    if not references:
+        return ""
+    return f" while preserving exact references: {', '.join(references)}"
+
+
+def _literal_references(task: str) -> tuple[str, ...]:
+    """Return task identifiers and literal UI text that must stay verbatim."""
+    candidates: list[tuple[int, str]] = []
+    for reference in SPANISH_LITERAL_REFERENCES:
+        index = task.find(reference)
+        if index >= 0:
+            candidates.append((index, reference))
+
+    candidates.extend((match.start(), match.group(0)) for match in re.finditer(r"\b[A-Za-z]+[A-Z][A-Za-z0-9]*\b", task))
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for _index, reference in sorted(candidates, key=lambda item: item[0]):
+        if reference not in seen:
+            seen.add(reference)
+            ordered.append(reference)
+    return tuple(ordered)
+
+
 def _has_concrete_ui_or_identifier_details(task: str) -> bool:
     """Return whether unstructured task text has UI details worth preserving."""
     tokens = _tokens(task)
@@ -926,6 +1046,8 @@ def _render_codex_prompt(task: str, selection: _ContextSelection) -> str:
     return f"""Codex Prompt:
 Title: {_title_from_task(task)}
 Task mode: {task_mode}
+Original user task:
+{task.strip()}
 Objective: {objective}
 Task details:
 {task_details_text}

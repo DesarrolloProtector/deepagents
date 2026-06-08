@@ -270,7 +270,13 @@ def test_spanish_ui_implementation_request_is_actionable_and_unicode_safe(tmp_pa
 
     rendered = _render(_build_repo(tmp_path), task)
 
+    assert "Title: Remove the option to add more than one" in rendered.codex_prompt
     assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
+    assert f"Original user task:\n{task}" in rendered.codex_prompt
+    assert "Objective: Remove the option to add more than one account" in rendered.codex_prompt
+    assert "Task details:\nImplementation summary: Remove the option to add more than one account" in rendered.codex_prompt
+    assert "Objective: Eliminemos" not in rendered.codex_prompt
+    assert "Task details:\nEliminemos" not in rendered.codex_prompt
     assert "Do not edit files unless explicitly requested by this task." not in rendered.codex_prompt
     assert "Do not edit files unless the caller explicitly grants editing" not in rendered.codex_prompt
     assert "Inspect only enough code to locate the faulty condition, then fix surgically." in rendered.codex_prompt
@@ -291,10 +297,24 @@ def test_spanish_review_only_request_remains_read_only(tmp_path: Path) -> None:
 
     rendered = _render(_build_repo(tmp_path), task)
 
+    assert "Original user task:\nRevisar sin implementar" in rendered.codex_prompt
+    assert "Title: Review the option to add more than one" in rendered.codex_prompt
     assert "Task mode: review_only" in rendered.codex_prompt
+    assert "Objective: Review the option to add more than one account without implementing changes" in rendered.codex_prompt
+    assert "Objective: Revisar" not in rendered.codex_prompt
     assert "Do not edit files unless explicitly requested by this task." in rendered.codex_prompt
     assert "start with read-only inspection of the selected context" in rendered.codex_prompt
     assert "Scoped edits are allowed" not in rendered.codex_prompt
+
+
+def test_english_task_preserves_existing_objective_with_original_task_section(tmp_path: Path) -> None:
+    task = "Fix regression: missing signature button"
+
+    rendered = _render(_build_repo(tmp_path), task)
+
+    assert f"Original user task:\n{task}" in rendered.codex_prompt
+    assert "Title: Fix regression missing signature button" in rendered.codex_prompt
+    assert "Objective: Fix regression: missing signature button" in rendered.codex_prompt
 
 
 def test_structured_regression_task_preserves_details(tmp_path: Path) -> None:
@@ -494,7 +514,13 @@ def test_cli_task_output_preserves_spanish_unicode(tmp_path: Path, monkeypatch, 
 
     stdout = capsys.readouterr().out
     prompt = output.read_text(encoding="utf-8")
+    assert "Title: Remove the option to add more than one" in prompt
     assert "Task mode: ui_runtime_bug" in prompt
+    assert f"Original user task:\n{task}" in prompt
+    assert "Objective: Remove the option to add more than one account" in prompt
+    assert "Task details:\nImplementation summary: Remove the option to add more than one account" in prompt
+    assert "Objective: Eliminemos" not in prompt
+    assert "Task details:\nEliminemos" not in prompt
     assert "FormNewBankDataId" in prompt
     assert "botón Añadir" in prompt
     assert "tabla de cuentas" in prompt
