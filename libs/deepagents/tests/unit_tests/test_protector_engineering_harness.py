@@ -49,6 +49,62 @@ def _render(repo: Path, task: str) -> engineering.RenderedOutput:
     )
 
 
+STRUCTURED_SIGNATURE_REGRESSION_TASK = """Title: Restore missing platform-company signature action
+
+Current regression:
+
+After the successful Lleida.net integration fix:
+
+* ProviderStatus = Success
+* ProviderCorrelationId exists
+* Signature status remains pending
+* Company activation remains pending
+* "Ver estado firma" is visible
+* "Enviar a firmar" disappeared
+
+This is a workflow dead-end.
+
+Expected behavior:
+
+Provider dispatch success means only that Lleida.net accepted the request.
+
+It does NOT mean:
+
+* signature completed;
+* contract activated;
+* operator actions finished.
+
+The operator must still have the appropriate send/retry signature action while the contract remains pending.
+
+Objective:
+
+Find the exact action-eligibility condition that hides the signature action after ProviderStatus=Success and restore the correct behavior.
+
+Restrictions:
+
+* Do not modify ConfigId handling.
+* Do not modify SET_CONFIG logic.
+* Do not modify PDF generation.
+* Do not modify START_SIGNATURE payloads.
+* Do not modify onboarding, preview, approval semantics or signature lifecycle.
+* Do not redesign the workflow.
+* Fix only the regression.
+
+Validation:
+
+* Build.
+* Prove which condition currently hides the action.
+* Verify a contract with:
+
+  * ProviderStatus=Success
+  * CorrelationId present
+  * Signature still pending
+    renders the signature action again.
+* Verify "Ver estado firma" still works.
+
+PASS only if the action is restored and the successful Lleida dispatch flow remains intact."""
+
+
 def test_inspects_only_bounded_repo_artifacts(tmp_path: Path) -> None:
     repo = _build_repo(tmp_path)
 
@@ -103,6 +159,103 @@ def test_codex_prompt_uses_selected_context_only(tmp_path: Path) -> None:
     assert "Docs/flows/payment-c.md" not in rendered.codex_prompt
     assert "(no task keyword match)" not in rendered.codex_prompt
     assert "Not Selected:" not in rendered.codex_prompt
+
+
+def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:
+    rendered = _render(
+        _build_repo(tmp_path),
+        "Fix regression: missing resend signature action after successful workflow state",
+    )
+
+    assert "Task mode: implementation_fix" in rendered.codex_prompt
+    assert "Do not edit files unless the caller explicitly grants editing" not in rendered.codex_prompt
+    assert "start with read-only inspection" not in rendered.codex_prompt
+    assert "Inspect only enough code to locate the faulty condition, then fix surgically." in rendered.codex_prompt
+    assert "Scoped edits are allowed when needed to fix the requested issue." in rendered.codex_prompt
+    assert "Do not redesign unrelated workflows." in rendered.codex_prompt
+
+
+def test_review_task_remains_read_only(tmp_path: Path) -> None:
+    rendered = _render(_build_repo(tmp_path), "Review payment workflow behavior")
+
+    assert "Task mode: review_only" in rendered.codex_prompt
+    assert "Do not edit files unless explicitly requested by this task." in rendered.codex_prompt
+    assert "start with read-only inspection of the selected context" in rendered.codex_prompt
+    assert "Scoped edits are allowed when needed to fix the requested issue." not in rendered.codex_prompt
+
+
+def test_planning_task_forbids_implementation(tmp_path: Path) -> None:
+    rendered = _render(_build_repo(tmp_path), "Plan arquitectura roadmap for payment workflow")
+
+    assert "Task mode: planning_only" in rendered.codex_prompt
+    assert "Do not implement changes; produce planning/design output only." in rendered.codex_prompt
+    assert "Do not turn the plan into code changes." in rendered.codex_prompt
+    assert "Scoped edits are allowed" not in rendered.codex_prompt
+
+
+def test_diagnostic_bootstrap_allows_bounded_execution_only(tmp_path: Path) -> None:
+    rendered = _render(_build_repo(tmp_path), "Diagnostic bootstrap: smoke real provider and configure SET_CONFIG")
+
+    assert "Task mode: diagnostic_bootstrap" in rendered.codex_prompt
+    assert "Bounded diagnostic execution or configuration changes are allowed only when the task explicitly asks for them." in rendered.codex_prompt
+    assert "Do not modify provider/runtime state beyond the requested diagnostic or bootstrap scope." in rendered.codex_prompt
+
+
+def test_continuation_followup_preserves_previous_fixes(tmp_path: Path) -> None:
+    rendered = _render(_build_repo(tmp_path), "Continuation follow-up: preserve previous fix and repair regression after fix")
+
+    assert "Task mode: continuation_followup" in rendered.codex_prompt
+    assert "Preserve validated previous fixes" in rendered.codex_prompt
+    assert "Restrictions/PASS boundaries as must-not-touch items" in rendered.codex_prompt
+
+
+def test_ui_regression_preserves_state_and_requires_condition_proof(tmp_path: Path) -> None:
+    task = """Title: Restore hidden modal button
+
+Current regression:
+Observed UI state: spinner remains visible and resend button is hidden.
+
+Expected behavior:
+Expected UI state: resend button renders after the modal closes.
+
+Objective:
+Fix the UI regression in the Razor/JS DOM condition."""
+    rendered = _render(_build_repo(tmp_path), task)
+
+    assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
+    assert "Observed UI state: spinner remains visible and resend button is hidden." in rendered.codex_prompt
+    assert "Expected UI state: resend button renders after the modal closes." in rendered.codex_prompt
+    assert "Preserve observed UI state and expected UI state" in rendered.codex_prompt
+    assert "Prove the exact condition that hides or renders" in rendered.codex_prompt
+
+
+def test_provider_api_regression_protects_unrelated_working_provider_pieces(tmp_path: Path) -> None:
+    rendered = _render(_build_repo(tmp_path), "Fix provider API dispatch regression without touching config_id or START_SIGNATURE payload")
+
+    assert "Task mode: provider_api_bug" in rendered.codex_prompt
+    assert "Preserve working provider, config, payload, and dispatch behavior unless the task specifically targets it." in rendered.codex_prompt
+    provider_guardrail = "Do not modify ConfigId, SET_CONFIG, START_SIGNATURE, payload, or dispatch behavior unless the task specifically targets it."
+    assert provider_guardrail in rendered.codex_prompt
+
+
+def test_structured_regression_task_preserves_details(tmp_path: Path) -> None:
+    rendered = _render(_build_repo(tmp_path), STRUCTURED_SIGNATURE_REGRESSION_TASK)
+
+    assert "Title: Restore missing platform-company signature action" in rendered.codex_prompt
+    assert "Task mode: continuation_followup" in rendered.codex_prompt
+    expected_objective = (
+        "Objective: Find the exact action-eligibility condition that hides the signature action after ProviderStatus=Success "
+        "and restore the correct behavior."
+    )
+    assert expected_objective in rendered.codex_prompt
+    assert "Current regression:\nAfter the successful Lleida.net integration fix:" in rendered.codex_prompt
+    assert '* "Enviar a firmar" disappeared' in rendered.codex_prompt
+    assert "Expected behavior:\nProvider dispatch success means only that Lleida.net accepted the request." in rendered.codex_prompt
+    assert "Restrictions:\n* Do not modify ConfigId handling." in rendered.codex_prompt
+    assert "* Fix only the regression." in rendered.codex_prompt
+    assert "Validation:\n* Build." in rendered.codex_prompt
+    assert "renders the signature action again." in rendered.codex_prompt
+    assert "Objective: Objective:" not in rendered.codex_prompt
 
 
 def test_write_prompt_output_refuses_overwrite_unless_allowed(tmp_path: Path) -> None:

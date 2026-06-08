@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -17,7 +17,6 @@ from deepagents.backends import StateBackend
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
-    from typing import Literal
 
     from langchain_core.callbacks import CallbackManagerForLLMRun
     from langchain_core.language_models import LanguageModelInput
@@ -81,6 +80,151 @@ VALIDATION_NEGATION_TERMS = (
     "wasn't run",
     "were not run",
 )
+IMPLEMENTATION_INTENT_TERMS = frozenset(
+    {
+        "arreglar",
+        "bug",
+        "corregir",
+        "error",
+        "falla",
+        "fix",
+        "regression",
+        "reparar",
+        "restore",
+    }
+)
+REVIEW_ONLY_TERMS = frozenset(
+    {
+        "assess",
+        "audit",
+        "classify",
+        "inspect",
+        "review",
+    }
+)
+PLANNING_ONLY_TERMS = frozenset(
+    {
+        "arquitectura",
+        "design",
+        "plan",
+        "propuesta",
+        "roadmap",
+    }
+)
+DIAGNOSTIC_BOOTSTRAP_TERMS = frozenset(
+    {
+        "bootstrap",
+        "configure",
+        "diagnostic",
+        "probe",
+    }
+)
+CONTINUATION_FOLLOWUP_TERMS = frozenset(
+    {
+        "continuation",
+        "follow",
+        "follow-up",
+    }
+)
+UI_RUNTIME_BUG_TERMS = frozenset(
+    {
+        "button",
+        "dom",
+        "js",
+        "modal",
+        "razor",
+        "spinner",
+        "ui",
+        "view",
+    }
+)
+PROVIDER_API_BUG_TERMS = frozenset(
+    {
+        "api",
+        "config",
+        "config_id",
+        "dispatch",
+        "payload",
+        "provider",
+        "set_config",
+        "start_signature",
+    }
+)
+STRUCTURED_TASK_HEADINGS = (
+    "Title",
+    "Objective",
+    "State",
+    "Current regression",
+    "Expected behavior",
+    "Scope",
+    "Restrictions",
+    "Validation",
+    "PASS",
+)
+TaskMode = Literal[
+    "implementation_fix",
+    "review_only",
+    "planning_only",
+    "diagnostic_bootstrap",
+    "continuation_followup",
+    "ui_runtime_bug",
+    "provider_api_bug",
+]
+SCOPE_BOUNDARY_BY_MODE: dict[TaskMode, tuple[str, ...]] = {
+    "implementation_fix": (
+        "Inspect only enough code to locate the faulty condition, then fix surgically.",
+        "Scoped edits are allowed when needed to fix the requested issue.",
+        "Preserve unrelated behavior.",
+    ),
+    "planning_only": (
+        "Read selected context first; inspect additional files only when directly required by the task.",
+        "Do not implement changes; produce planning/design output only.",
+        "Do not turn the plan into code changes.",
+    ),
+    "diagnostic_bootstrap": (
+        "Read selected context first; inspect additional files only when directly required by the task.",
+        "Bounded diagnostic execution or configuration changes are allowed only when the task explicitly asks for them.",
+        "Do not modify provider/runtime state beyond the requested diagnostic or bootstrap scope.",
+    ),
+    "continuation_followup": (
+        "Inspect only enough code to locate the faulty condition, then fix surgically.",
+        "Scoped edits are allowed when needed to fix the requested continuation issue.",
+        "Preserve validated previous fixes and honor any Restrictions/PASS boundaries as must-not-touch items.",
+    ),
+    "ui_runtime_bug": (
+        "Inspect only enough code to locate the faulty condition, then fix surgically.",
+        "Scoped edits are allowed when needed to fix the requested UI/runtime issue.",
+        "Preserve observed UI state and expected UI state; prove the exact hide/render condition.",
+    ),
+    "provider_api_bug": (
+        "Inspect only enough code to locate the faulty condition, then fix surgically.",
+        "Scoped edits are allowed only for the targeted provider/API issue.",
+        "Preserve working provider, config, payload, and dispatch behavior unless the task specifically targets it.",
+    ),
+    "review_only": (
+        "Read selected context first; inspect additional files only when directly required by the task.",
+        "Do not edit files unless explicitly requested by this task.",
+        "Return findings and risks without implementing changes.",
+    ),
+}
+MODE_REQUIREMENTS_BY_MODE: dict[TaskMode, tuple[str, ...]] = {
+    "ui_runtime_bug": (
+        "Preserve observed UI state and expected UI state from the task details.",
+        "Prove the exact condition that hides or renders the button/modal/spinner/view before changing it.",
+    ),
+    "provider_api_bug": (
+        "Preserve unrelated working provider/config/payload/dispatch behavior.",
+        "Do not modify ConfigId, SET_CONFIG, START_SIGNATURE, payload, or dispatch behavior unless the task specifically targets it.",
+    ),
+    "continuation_followup": (
+        "Preserve validated previous fixes.",
+        "When task text names restrictions or must-not-touch items, treat them as hard boundaries.",
+    ),
+    "diagnostic_bootstrap": (
+        "Keep probes/configuration work bounded to the explicit diagnostic/bootstrap request.",
+        "Report exact evidence from diagnostics instead of broad source-only guesses.",
+    ),
+}
 
 
 class HarnessUsageError(ValueError):
@@ -259,6 +403,7 @@ Output file: {output_text}
 Instructions:
 - Work read-only unless the caller explicitly grants execution or editing.
 - Use minimal relevant context: AGENTS, MEMORY, skills, flow maps, and feature contracts when present.
+- Follow the Codex Prompt scope boundaries for read-only versus scoped implementation work.
 - Do not ask the user to choose prompt types; infer planner/context-router/reviewer needs from the task.
 - Avoid governance or documentation expansion and stop exploration once the handoff is specific enough.
 - Produce a compact implementation or review prompt for Codex; do not run Codex here.
@@ -451,15 +596,110 @@ Not Selected:
 
 def _title_from_task(task: str) -> str:
     """Infer a compact prompt title from task text."""
-    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*", task)
+    sections = _parse_task_sections(task)
+    explicit_title = sections.get("Title")
+    if explicit_title:
+        return _compact_title(explicit_title)
+    objective = _task_objective(task)
+    return _compact_title(objective)
+
+
+def _compact_title(text: str) -> str:
+    """Return a compact title from text."""
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*", text)
     title = " ".join(words[:8]).strip()
     return title or "Engineering Harness Task"
 
 
-def _validation_expectations(task: str) -> tuple[str, ...]:
+def _task_objective(task: str) -> str:
+    """Return a concise objective without leading section-label noise."""
+    sections = _parse_task_sections(task)
+    objective = sections.get("Objective")
+    if objective:
+        return _compact_multiline(objective)
+
+    stripped = _strip_heading_prefix(task.strip(), "Objective")
+    if stripped != task.strip():
+        return _compact_multiline(stripped)
+
+    if sections:
+        preamble = _task_preamble(task)
+        if preamble:
+            return _compact_multiline(preamble)
+        for heading in ("Current regression", "Expected behavior"):
+            section = sections.get(heading)
+            if section:
+                return _compact_multiline(section)
+    return _compact_multiline(task)
+
+
+def _compact_multiline(text: str) -> str:
+    """Collapse task text to one readable line for title/objective fields."""
+    return " ".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def _strip_heading_prefix(text: str, heading: str) -> str:
+    """Strip a leading `<heading>:` prefix from one text block."""
+    pattern = rf"^\s*{re.escape(heading)}\s*:?\s*"
+    return re.sub(pattern, "", text, count=1, flags=re.IGNORECASE)
+
+
+def _task_preamble(task: str) -> str:
+    """Return text before the first structured heading."""
+    heading_pattern = "|".join(re.escape(heading) for heading in STRUCTURED_TASK_HEADINGS)
+    match = re.search(rf"(?im)^\s*(?:{heading_pattern})\s*:?", task)
+    if match is None:
+        return ""
+    return task[: match.start()].strip()
+
+
+def _parse_task_sections(task: str) -> dict[str, str]:
+    """Parse explicit task sections that should survive prompt rendering."""
+    headings = {heading.lower(): heading for heading in STRUCTURED_TASK_HEADINGS}
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in task.splitlines():
+        heading, inline_body = _section_heading(line, headings)
+        if heading is not None:
+            current = heading
+            sections.setdefault(current, [])
+            if inline_body:
+                sections[current].append(inline_body)
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return {heading: "\n".join(lines).strip() for heading, lines in sections.items() if "\n".join(lines).strip()}
+
+
+def _section_heading(line: str, headings: dict[str, str]) -> tuple[str | None, str]:
+    """Return the canonical structured heading for a line."""
+    heading_pattern = "|".join(re.escape(heading) for heading in STRUCTURED_TASK_HEADINGS)
+    match = re.match(rf"^\s*({heading_pattern})\s*:?\s*(.*)$", line, flags=re.IGNORECASE)
+    if match is None:
+        return None, ""
+    heading = headings.get(match.group(1).strip().lower())
+    if heading is None:
+        return None, ""
+    return heading, match.group(2).strip()
+
+
+def _structured_task_details(task: str) -> str | None:
+    """Render preserved task sections, excluding `Objective`."""
+    sections = _parse_task_sections(task)
+    rows: list[str] = []
+    for heading in ("State", "Current regression", "Expected behavior", "Scope", "Restrictions", "Validation", "PASS"):
+        body = sections.get(heading)
+        if body:
+            rows.append(f"{heading}:\n{body}")
+    if not rows:
+        return None
+    return "\n\n".join(rows)
+
+
+def _validation_expectations(task: str, task_mode: TaskMode) -> tuple[str, ...]:
     """Return deterministic validation expectations scaled to task wording."""
     task_tokens = _tokens(task)
-    expectations = ["start with read-only inspection of the selected context"]
+    expectations = [_mode_validation_expectation(task_mode)]
     if task_tokens & {"review", "drift", "scope"}:
         expectations.append("verify scope drift and missing-file risks before recommending changes")
     if task_tokens & {"ui", "workflow", "flow", "payment", "firma", "contract", "api"}:
@@ -471,24 +711,111 @@ def _validation_expectations(task: str) -> tuple[str, ...]:
     return tuple(expectations)
 
 
+def _mode_validation_expectation(task_mode: TaskMode) -> str:
+    """Return the first validation expectation for a task mode."""
+    if task_mode in {"implementation_fix", "continuation_followup", "ui_runtime_bug", "provider_api_bug"}:
+        return "inspect only enough code to locate the faulty condition, then fix surgically"
+    if task_mode == "planning_only":
+        return "produce a bounded plan only; do not implement changes"
+    if task_mode == "diagnostic_bootstrap":
+        return "run only bounded diagnostics or configuration checks explicitly requested by the task"
+    return "start with read-only inspection of the selected context"
+
+
+def _has_implementation_intent(task: str) -> bool:
+    """Return whether task wording asks Codex to implement a scoped fix."""
+    return bool(_tokens(task) & IMPLEMENTATION_INTENT_TERMS)
+
+
+def _classify_task_mode(task: str) -> TaskMode:
+    """Classify task text into a deterministic prompt mode."""
+    task_tokens = _tokens(task)
+    lowered = task.lower()
+    implementation_intent = _has_implementation_intent(task)
+    signals = {
+        "review_only": bool(task_tokens & REVIEW_ONLY_TERMS) or "analizar sin implementar" in lowered,
+        "planning_only": bool(task_tokens & PLANNING_ONLY_TERMS),
+        "diagnostic_bootstrap": bool(task_tokens & DIAGNOSTIC_BOOTSTRAP_TERMS) or "set_config" in lowered or "smoke real provider" in lowered,
+        "continuation_followup": _has_continuation_followup_intent(task, task_tokens),
+        "ui_runtime_bug": bool(task_tokens & UI_RUNTIME_BUG_TERMS),
+        "provider_api_bug": bool(task_tokens & PROVIDER_API_BUG_TERMS) or "start_signature" in lowered or "set_config" in lowered,
+    }
+    ordered_rules: tuple[tuple[bool, TaskMode], ...] = (
+        (signals["review_only"] and not implementation_intent, "review_only"),
+        (signals["planning_only"] and not implementation_intent, "planning_only"),
+        (signals["continuation_followup"], "continuation_followup"),
+        (signals["diagnostic_bootstrap"], "diagnostic_bootstrap"),
+        (signals["provider_api_bug"] and implementation_intent, "provider_api_bug"),
+        (signals["ui_runtime_bug"] and implementation_intent, "ui_runtime_bug"),
+        (implementation_intent, "implementation_fix"),
+        (signals["provider_api_bug"], "provider_api_bug"),
+        (signals["ui_runtime_bug"], "ui_runtime_bug"),
+        (signals["planning_only"], "planning_only"),
+    )
+    for matches, task_mode in ordered_rules:
+        if matches:
+            return task_mode
+    return "review_only"
+
+
+def _has_continuation_followup_intent(task: str, task_tokens: frozenset[str]) -> bool:
+    """Return whether task text asks to continue from previous work."""
+    lowered = task.lower()
+    sections = _parse_task_sections(task)
+    current_regression = sections.get("Current regression", "").lower()
+    return (
+        bool(task_tokens & CONTINUATION_FOLLOWUP_TERMS)
+        or "preserve previous fix" in lowered
+        or "regression after fix" in lowered
+        or ("after" in _tokens(current_regression) and "fix" in _tokens(current_regression))
+    )
+
+
+def _scope_boundaries(task_mode: TaskMode) -> tuple[str, ...]:
+    """Return scope boundaries for the selected task mode."""
+    return SCOPE_BOUNDARY_BY_MODE[task_mode]
+
+
+def _mode_requirements(task_mode: TaskMode) -> tuple[str, ...]:
+    """Return extra task-mode-specific requirements."""
+    return MODE_REQUIREMENTS_BY_MODE.get(task_mode, ())
+
+
+def _render_bullets(items: tuple[str, ...]) -> str:
+    """Render a bullet list from plain text items."""
+    return "\n".join(f"- {item}" for item in items)
+
+
 def _render_codex_prompt(task: str, selection: _ContextSelection) -> str:
     """Render the compact prompt intended for Codex."""
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
+    objective = _task_objective(task)
+    task_details = _structured_task_details(task)
+    task_details_text = "(none)" if task_details is None else task_details
+    task_mode = _classify_task_mode(task)
+    mode_requirements = _mode_requirements(task_mode)
+    mode_requirements_text = _render_bullets(mode_requirements) if mode_requirements else "- (none)"
     return f"""Codex Prompt:
 Title: {_title_from_task(task)}
-Objective: {task}
+Task mode: {task_mode}
+Objective: {objective}
+Task details:
+{task_details_text}
 Selected context paths:
 {_one_line_list(selected_paths)}
 Scope boundaries:
-- Read selected context first; inspect additional files only when directly required by the task.
-- Do not edit files unless the caller explicitly grants editing.
-- Do not expand governance, documentation, memory, dashboards, MCP, or autonomous execution.
+{_render_bullets(_scope_boundaries(task_mode))}
 No-drift rules:
 - Stay on the requested repo/workflow surface.
+- Do not broaden repo exploration beyond selected context unless directly needed.
 - Preserve existing public APIs and behavior unless the task explicitly asks to change them.
 - Do not import assumptions from unrelated repos or broader architecture.
+- Do not expand governance, documentation, memory, dashboards, MCP, or autonomous execution.
+- Do not redesign unrelated workflows.
+Mode-specific requirements:
+{mode_requirements_text}
 Validation expectations:
-{_one_line_list(_validation_expectations(task))}
+{_one_line_list(_validation_expectations(task, task_mode))}
 Mandatory output:
 - Files read
 - Files changed
