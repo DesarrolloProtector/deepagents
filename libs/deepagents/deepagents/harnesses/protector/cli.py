@@ -16,10 +16,12 @@ from deepagents._version import __version__
 from deepagents.harnesses.protector._engineering import (
     HARNESS_PROFILE,
     HarnessUsageError,
+    RenderedOutput,
     build_read_only_agent,
     render_output,
     render_review_findings,
     resolve_harness_profile,
+    review_codex_output,
     write_prompt_output,
 )
 from deepagents.profiles.harness.harness_profiles import _get_harness_profile
@@ -35,6 +37,7 @@ _BUILT_IN_REPO_ALIASES = {
     "deepagents": Path(r"C:\Users\DesarrolladorProtect\source\repos\deepagents"),
 }
 _MIN_POSITIONAL_REPO_TASK_ARGS = 2
+_INTERACTIVE_SENTINEL = "END"
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,9 @@ def _build_parser() -> argparse.ArgumentParser:
     review.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     review.add_argument("task", nargs="*", help="Task text used to detect scope drift.")
 
+    run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
+    run.add_argument("repo", help="Repo alias/path to target.")
+
     repos = subparsers.add_parser("repos", help="Show or initialize local repo aliases.")
     repos.add_argument("--init", action="store_true", help="Create the local repo alias config with built-in aliases.")
     repos.add_argument("--overwrite", action="store_true", help="Allow --init to replace an existing config file.")
@@ -169,26 +175,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run_task(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run `ph task`."""
     repo, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
-
-    try:
-        harness_profile = resolve_harness_profile(HARNESS_PROFILE)
-    except HarnessUsageError as exc:
-        parser.error(str(exc))
-
-    profile = _get_harness_profile(harness_profile)
-    if profile is None:
-        parser.error(f"built-in harness profile {harness_profile!r} is not registered")
-
-    agent = build_read_only_agent(harness_profile)
-    rendered = render_output(
-        task=task,
-        repo=repo,
-        mode="auto",
-        harness_profile=harness_profile,
-        real_model=None,
-        agent_type=type(agent).__name__,
-        output=args.output,
-    )
+    rendered = _render_task_prompt(repo=repo, task=task, output=args.output, parser=parser)
     if args.output is not None:
         try:
             write_prompt_output(args.output, rendered.codex_prompt, overwrite=args.overwrite)
@@ -210,6 +197,88 @@ def _run_task(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     sys.stdout.write(rendered.payload)
     sys.stdout.write("\n")
     return 0
+
+
+def _run_interactive(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph run`."""
+    repo = _resolve_positional_repo(args.repo, parser)
+    task = _read_until_sentinel(
+        f"Paste or type the task. End input with a line containing only {_INTERACTIVE_SENTINEL}.\n",
+    )
+    if not task:
+        parser.error("task text is required")
+
+    rendered = _render_task_prompt(repo=repo, task=task, output=None, parser=parser)
+    copy_result = _copy_to_clipboard(rendered.codex_prompt)
+    if copy_result.copied:
+        sys.stdout.write(_render_task_confirmation(repo, rendered.selected_context_count, "Codex prompt copied to clipboard"))
+    else:
+        sys.stdout.write(_render_task_confirmation(repo, rendered.selected_context_count, "Codex prompt was not copied"))
+        sys.stdout.write(f"\nClipboard unavailable: {copy_result.error or 'no clipboard backend available'}\n\n")
+        sys.stdout.write(rendered.payload)
+    sys.stdout.write("\nPaste this into your already-open Codex session.\n")
+
+    codex_output = _read_until_sentinel(
+        f"Paste Codex output. End input with a line containing only {_INTERACTIVE_SENTINEL}.\n",
+    )
+    findings = review_codex_output(task=task, output=codex_output, source="interactive paste")
+    sys.stdout.write(findings.text)
+    sys.stdout.write("\n")
+
+    if findings.status == "REVIEW_NEEDED" and findings.follow_up is not None:
+        follow_up_copy = _copy_to_clipboard(findings.follow_up)
+        if follow_up_copy.copied:
+            sys.stdout.write("Follow-up prompt copied to clipboard.\n")
+        else:
+            sys.stdout.write(f"Follow-up prompt was not copied: {follow_up_copy.error or 'no clipboard backend available'}\n")
+        sys.stdout.write("Follow-up prompt:\n")
+        sys.stdout.write(f"{findings.follow_up}\n")
+    elif findings.status == "PASS":
+        sys.stdout.write("PASS\n")
+    return 0
+
+
+def _render_task_prompt(
+    *,
+    repo: Path | None,
+    task: str,
+    output: Path | None,
+    parser: argparse.ArgumentParser,
+) -> RenderedOutput:
+    """Build the Codex prompt using the harness profile dry-run path."""
+    try:
+        harness_profile = resolve_harness_profile(HARNESS_PROFILE)
+    except HarnessUsageError as exc:
+        parser.error(str(exc))
+
+    profile = _get_harness_profile(harness_profile)
+    if profile is None:
+        parser.error(f"built-in harness profile {harness_profile!r} is not registered")
+
+    agent = build_read_only_agent(harness_profile)
+    return render_output(
+        task=task,
+        repo=repo,
+        mode="auto",
+        harness_profile=harness_profile,
+        real_model=None,
+        agent_type=type(agent).__name__,
+        output=output,
+    )
+
+
+def _read_until_sentinel(prompt: str) -> str:
+    """Read stdin until the interactive sentinel line."""
+    sys.stdout.write(prompt)
+    lines: list[str] = []
+    while True:
+        line = sys.stdin.readline()
+        if line == "":
+            break
+        if line.rstrip("\r\n") == _INTERACTIVE_SENTINEL:
+            break
+        lines.append(line)
+    return "".join(lines).strip()
 
 
 def _copy_to_clipboard(text: str) -> _ClipboardCopyResult:
@@ -319,6 +388,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_task(args, parser)
     if args.command == "review":
         return _run_review(args, parser)
+    if args.command == "run":
+        return _run_interactive(args, parser)
     if args.command == "status":
         return _run_status()
     if args.command == "repos":

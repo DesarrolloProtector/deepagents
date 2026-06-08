@@ -1,4 +1,6 @@
 import json
+import sys
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -306,6 +308,83 @@ def test_cli_task_uses_builtin_fallback_alias(capsys) -> None:
     stdout = capsys.readouterr().out
     assert "Repo: C:\\Users\\DesarrolladorProtect\\source\\repos\\deepagents" in stdout
     assert "Task: small test task" in stdout
+
+
+def test_cli_run_passes_with_synthetic_good_output(monkeypatch, capsys) -> None:
+    copied: list[str] = []
+    stdin = StringIO(
+        """small test task
+END
+Files read
+- AGENTS.md
+
+Files changed
+- (none)
+
+Summary
+- Reviewed bounded context.
+
+Validation
+- ruff check passed.
+
+PASS
+END
+""",
+    )
+
+    def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
+        copied.append(text)
+        return cli._ClipboardCopyResult(copied=True)
+
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
+
+    assert cli.main(["run", "deepagents"]) == 0
+
+    stdout = capsys.readouterr().out
+    assert "Paste or type the task. End input with a line containing only END." in stdout
+    assert "Codex prompt copied to clipboard" in stdout
+    assert "Paste this into your already-open Codex session." in stdout
+    assert "Paste Codex output. End input with a line containing only END." in stdout
+    assert "Status: PASS" in stdout
+    assert stdout.rstrip().endswith("PASS")
+    assert len(copied) == 1
+    assert copied[0].startswith("Codex Prompt:\n")
+
+
+def test_cli_run_review_needed_copies_and_prints_follow_up(monkeypatch, capsys) -> None:
+    copied: list[str] = []
+    stdin = StringIO(
+        """small payment workflow task
+END
+Summary
+- Added dashboard memory graph MCP governance documentation changes.
+
+Validation
+- not run
+
+PASS
+END
+""",
+    )
+
+    def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
+        copied.append(text)
+        return cli._ClipboardCopyResult(copied=True)
+
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
+
+    assert cli.main(["run", "deepagents"]) == 0
+
+    stdout = capsys.readouterr().out
+    assert "Status: REVIEW_NEEDED" in stdout
+    assert "Suggested follow-up prompt:" in stdout
+    assert "Follow-up prompt copied to clipboard." in stdout
+    assert "Follow-up prompt:\nRevise the Codex output" in stdout
+    assert len(copied) == 2
+    assert copied[0].startswith("Codex Prompt:\n")
+    assert copied[1].startswith("Revise the Codex output")
 
 
 def test_cli_task_unknown_alias_fails(capsys) -> None:

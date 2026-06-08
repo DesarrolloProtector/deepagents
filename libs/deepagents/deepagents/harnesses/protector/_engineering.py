@@ -97,6 +97,15 @@ class RenderedOutput:
 
 
 @dataclass(frozen=True)
+class ReviewFindings:
+    """Rendered reviewer findings plus machine-readable status metadata."""
+
+    text: str
+    status: str
+    follow_up: str | None
+
+
+@dataclass(frozen=True)
 class _RepoContext:
     """Bounded read-only context routing result for a target repository."""
 
@@ -274,11 +283,16 @@ def write_prompt_output(path: Path, prompt: str, *, overwrite: bool) -> None:
 
 def render_review_findings(path: Path, task: str, text: str) -> str:
     """Render compact reviewer findings for a Codex output file."""
-    result = _review_codex_output(task, text)
+    return review_codex_output(task=task, output=text, source=str(path.resolve())).text
+
+
+def review_codex_output(*, task: str, output: str, source: str) -> ReviewFindings:
+    """Review Codex output from a file or in-memory paste using the same checks."""
+    result = _review_codex_output(task, output)
     follow_up = result.follow_up or "(none)"
-    return f"""Reviewer Findings:
+    rendered = f"""Reviewer Findings:
 Status: {result.status}
-Codex output: {path.resolve()}
+Codex output: {source}
 Missing sections:
 {_one_line_list(result.missing_sections)}
 Drift warnings:
@@ -287,6 +301,7 @@ Validation warnings:
 {_one_line_list(result.validation_warnings)}
 Suggested follow-up prompt:
 - {follow_up}"""
+    return ReviewFindings(text=rendered, status=result.status, follow_up=result.follow_up)
 
 
 def _mode_label(mode: Literal["auto", "planner", "reviewer"]) -> str:
