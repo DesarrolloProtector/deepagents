@@ -1125,6 +1125,41 @@ class TestBuiltInProfiles:
         }
         assert len(suffixes) == 1
 
+    def test_protector_engineering_harness_profile_is_registered(self) -> None:
+        """The Protector engineering harness is exact-key and prompt-only."""
+        profile = _get_harness_profile("protector:engineering-harness")
+        assert profile is not None
+        assert profile.base_system_prompt is None
+        assert profile.excluded_middleware == frozenset()
+        assert profile.excluded_tools == frozenset()
+        assert profile.extra_middleware == ()
+        assert profile.general_purpose_subagent is None
+        assert dict(profile.tool_description_overrides) == {}
+        assert profile.system_prompt_suffix
+        assert "## Protector Engineering Harness" in profile.system_prompt_suffix
+        assert "read-only unless the caller explicitly grants execution or editing" in profile.system_prompt_suffix
+        assert "minimal relevant context" in profile.system_prompt_suffix
+        assert "repo-specific AGENTS instructions, MEMORY notes, skills, flow maps, and feature contracts" in profile.system_prompt_suffix
+        assert "Do not ask the user to choose prompt types" in profile.system_prompt_suffix
+        assert "governance or documentation expansion" in profile.system_prompt_suffix
+        assert "Avoid runaway exploration" in profile.system_prompt_suffix
+        assert "compact, Codex-ready prompts" in profile.system_prompt_suffix
+        assert "scope drift, missing file context, proportional validation, and unsupported architectural expansion" in profile.system_prompt_suffix
+
+    def test_protector_engineering_harness_does_not_register_provider_default(self) -> None:
+        """Other `protector:*` specs must not inherit the engineering harness."""
+        assert _get_harness_profile("protector:anything-else") is None
+
+    def test_protector_engineering_harness_does_not_change_codex_profile(self) -> None:
+        """Codex model specs keep the autonomous Codex suffix, not the Protector harness."""
+        codex = _get_harness_profile("openai:gpt-5.3-codex")
+        protector = _get_harness_profile("protector:engineering-harness")
+        assert codex is not None
+        assert protector is not None
+        assert codex.system_prompt_suffix != protector.system_prompt_suffix
+        assert "## Codex-Specific Behavior" in codex.system_prompt_suffix
+        assert "## Protector Engineering Harness" not in codex.system_prompt_suffix
+
 
 class TestProfilePluginLoader:
     """Tests for the `importlib.metadata` entry-point loader."""
