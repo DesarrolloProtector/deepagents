@@ -149,6 +149,9 @@ CONTINUATION_FOLLOWUP_TERMS = frozenset(
 )
 UI_RUNTIME_BUG_TERMS = frozenset(
     {
+        "autofill",
+        "autofilled",
+        "autofills",
         "button",
         "boton",
         "botón",
@@ -164,6 +167,7 @@ UI_RUNTIME_BUG_TERMS = frozenset(
         "spinner",
         "tabla",
         "table",
+        "textbox",
         "ui",
         "view",
         "views",
@@ -186,6 +190,8 @@ PROVIDER_API_BUG_TERMS = frozenset(
 SPANISH_SUMMARY_TERMS = frozenset(
     {
         "añadir",
+        "autocompleta",
+        "autocompletan",
         "botón",
         "contraseña",
         "crear",
@@ -211,6 +217,12 @@ SPANISH_LITERAL_REFERENCES = (
     "contraseña",
     "Email",
     "login",
+    "Lleida",
+    "Lleida.net",
+    "ProviderStatus=Success",
+    "ProviderCorrelationId",
+    "Ver estado firma",
+    "Enviar a firmar",
 )
 STRUCTURED_TASK_HEADINGS = (
     "Title",
@@ -814,20 +826,157 @@ def _section_heading(line: str, headings: dict[str, str]) -> tuple[str | None, s
     return heading, match.group(2).strip()
 
 
-def _structured_task_details(task: str) -> str | None:
-    """Render preserved task sections, excluding `Objective`."""
-    if _needs_english_summary(task):
-        return _english_task_details(task, _classify_task_mode(task))
+def _task_details(task: str, task_mode: TaskMode) -> str:
+    """Render an operational task brief for Codex."""
+    if _should_render_operational_brief(task, task_mode):
+        return _operational_task_brief(task, task_mode)
+    if task_mode == "review_only":
+        return f"Review focus: {_task_objective(task)}"
+    if task_mode == "planning_only":
+        return f"Planning focus: {_task_objective(task)}"
+    return f"Task summary: {_task_objective(task)}"
 
+
+def _should_render_operational_brief(task: str, task_mode: TaskMode) -> bool:
+    """Return whether task details should be expanded into operational sections."""
+    if _parse_task_sections(task):
+        return True
+    if _needs_english_summary(task) or _has_concrete_ui_or_identifier_details(task):
+        return True
+    tokens = _tokens(task)
+    return task_mode in {"implementation_fix", "continuation_followup", "ui_runtime_bug", "provider_api_bug"} or bool(
+        tokens & {"bug", "regression", "error", "falla"}
+    )
+
+
+def _operational_task_brief(task: str, task_mode: TaskMode) -> str:
+    """Render bug/fix task details in a handoff-style operational brief."""
     sections = _parse_task_sections(task)
-    rows: list[str] = []
-    for heading in ("State", "Current regression", "Expected behavior", "Scope", "Restrictions", "Validation", "PASS"):
-        body = sections.get(heading)
-        if body:
-            rows.append(f"{heading}:\n{body}")
-    if not rows:
-        return None
-    return "\n\n".join(rows)
+    rows = [
+        ("Observed state", _brief_observed_state(task, task_mode, sections)),
+        ("Expected behavior", _brief_expected_behavior(task, task_mode, sections)),
+        ("Objective", _task_objective(task)),
+        ("Scope", _brief_scope(task, task_mode, sections)),
+        ("Restrictions", _brief_restrictions(task, task_mode, sections)),
+        ("Validation", _brief_validation(task, task_mode, sections)),
+    ]
+    pass_criteria = sections.get("PASS")
+    if pass_criteria:
+        rows.append(("PASS criteria", pass_criteria))
+    return "\n\n".join(f"{heading}:\n{body}" for heading, body in rows if body)
+
+
+def _brief_observed_state(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+    """Return observed state text for the operational brief."""
+    if sections.get("Current regression"):
+        return sections["Current regression"]
+    if sections.get("State"):
+        return sections["State"]
+
+    tokens = _tokens(task)
+    observed = "The requested behavior is currently wrong or regressed."
+    if tokens & {"autofill", "autofilled", "autofills", "autocompleta", "autocompletan"}:
+        observed = "Email/password fields are being autofilled or prepopulated when the requested login flow should not do that."
+    elif "spinner" in tokens:
+        observed = "The visible UI remains in a spinner/loading state around the provider-hosted send flow."
+    elif tokens & {"signature", "firma"} and tokens & {"action", "button", "botón", "resend", "send"}:
+        observed = "A signature send/resend action is missing even though the workflow still needs operator action."
+    elif task_mode == "provider_api_bug":
+        observed = "Provider/API state is not being translated correctly into the surrounding workflow state."
+    elif task_mode == "ui_runtime_bug":
+        observed = "The visible UI state does not match the operator action requested by the task."
+    return observed
+
+
+def _brief_expected_behavior(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+    """Return expected behavior text for the operational brief."""
+    if sections.get("Expected behavior"):
+        return sections["Expected behavior"]
+
+    tokens = _tokens(task)
+    if tokens & {"autofill", "autofilled", "autofills", "autocompleta", "autocompletan"}:
+        return "The login UI should preserve the requested `Email` and `contraseña` behavior without unwanted autofill side effects."
+    if "spinner" in tokens:
+        return "The spinner/loading state should clear when the provider-hosted send step reaches its expected terminal UI state."
+    if task_mode == "provider_api_bug":
+        return "Provider dispatch success means the provider accepted the request; it must not be treated as workflow completion."
+    if task_mode == "ui_runtime_bug":
+        return "The expected UI state should render the requested controls and stop hiding/loading them incorrectly."
+    return "The scoped workflow behavior should match the requested task without changing unrelated behavior."
+
+
+def _brief_scope(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+    """Return scoped implementation text for the operational brief."""
+    if sections.get("Scope"):
+        return sections["Scope"]
+
+    tokens = _tokens(task)
+    references = _literal_references(task)
+    scope = "Inspect only enough code to locate the faulty condition, then fix surgically."
+    if task_mode == "ui_runtime_bug":
+        scope += " Stay on the real rendered UI path and its handler/render condition."
+    elif task_mode == "provider_api_bug":
+        scope += " Stay on the provider/API-to-workflow boundary."
+    if references:
+        scope += f" Preserve exact references: {', '.join(references)}."
+    if tokens & {"workflow", "firma", "signature"}:
+        scope += " Do not redesign the workflow."
+    return scope
+
+
+def _brief_restrictions(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+    """Return restrictions and validated-behavior guardrails for the operational brief."""
+    restrictions: list[str] = []
+    if sections.get("Restrictions"):
+        restrictions.append(sections["Restrictions"])
+
+    restrictions.extend(_validated_behavior_guardrails(task, task_mode))
+    if task_mode == "ui_runtime_bug":
+        restrictions.append("Do not redesign the UI or navigation; change only the condition that causes the wrong render/hide/loading state.")
+    if task_mode == "provider_api_bug":
+        restrictions.append("Protect config, payload, and dispatch behavior unless the task explicitly targets them.")
+    if not restrictions:
+        restrictions.append("Preserve unrelated behavior and public contracts.")
+    return "\n".join(f"- {item}" if not item.lstrip().startswith(("-", "*")) else item for item in restrictions)
+
+
+def _validated_behavior_guardrails(task: str, task_mode: TaskMode) -> tuple[str, ...]:
+    """Return guardrails for behavior that already works and must stay intact."""
+    lowered = task.lower()
+    guardrails: list[str] = []
+    if "regression" in _tokens(task) or task_mode in {"continuation_followup", "provider_api_bug"}:
+        guardrails.append("Protect any behavior already validated as working; do not trade one fixed path for another regression.")
+    if task_mode == "provider_api_bug" or any(term in lowered for term in ("lleida", "providerstatus", "providercorrelationid")):
+        guardrails.append("Provider dispatch success only proves provider acceptance; it does not prove signature completion or workflow completion.")
+    if "providerstatus" in lowered or "providercorrelationid" in lowered:
+        guardrails.append("Preserve ProviderStatus/ProviderCorrelationId handling that already records successful dispatch.")
+    if "ver estado firma" in lowered:
+        guardrails.append('Keep "Ver estado firma" working.')
+    if "set_config" in lowered or "configid" in lowered or "config_id" in lowered:
+        guardrails.append("Do not modify ConfigId or SET_CONFIG handling unless explicitly targeted.")
+    if "start_signature" in lowered or "payload" in lowered:
+        guardrails.append("Do not modify START_SIGNATURE payloads unless explicitly targeted.")
+    return tuple(guardrails)
+
+
+def _brief_validation(task: str, task_mode: TaskMode, sections: dict[str, str]) -> str:
+    """Return proportional validation text for the operational brief."""
+    validation: list[str] = []
+    if sections.get("Validation"):
+        validation.append(sections["Validation"])
+
+    tokens = _tokens(task)
+    if task_mode == "ui_runtime_bug":
+        validation.append("Prove the exact render/hide/loading condition before and after the fix.")
+    if task_mode == "provider_api_bug":
+        validation.append("Verify provider dispatch success remains intact and the workflow state is not incorrectly marked complete.")
+    if tokens & {"autofill", "autofilled", "autofills", "autocompleta", "autocompletan"}:
+        validation.append("Verify the `Email` and `contraseña` fields render with the expected autofill behavior.")
+    if tokens & {"signature", "firma"} and tokens & {"action", "button", "botón", "resend", "send"}:
+        validation.append("Verify the signature send/resend action renders when the signature remains pending.")
+    if not validation:
+        validation.append("Run the smallest focused build/test/smoke that proves the requested behavior.")
+    return "\n".join(f"- {item}" if not item.lstrip().startswith(("-", "*")) else item for item in validation)
 
 
 def _validation_expectations(task: str, task_mode: TaskMode) -> tuple[str, ...]:
@@ -878,9 +1027,9 @@ def _classify_task_mode(task: str) -> TaskMode:
         (signals["review_only"] and not implementation_intent, "review_only"),
         (signals["planning_only"] and not implementation_intent, "planning_only"),
         (signals["continuation_followup"], "continuation_followup"),
-        (signals["diagnostic_bootstrap"], "diagnostic_bootstrap"),
         (signals["provider_api_bug"] and implementation_intent, "provider_api_bug"),
         (signals["ui_runtime_bug"] and implementation_intent, "ui_runtime_bug"),
+        (signals["diagnostic_bootstrap"], "diagnostic_bootstrap"),
         (implementation_intent, "implementation_fix"),
         (signals["provider_api_bug"], "provider_api_bug"),
         (signals["ui_runtime_bug"], "ui_runtime_bug"),
@@ -1033,14 +1182,8 @@ def _render_codex_prompt(task: str, selection: _ContextSelection) -> str:
     """Render the compact prompt intended for Codex."""
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
     objective = _task_objective(task)
-    task_details = _structured_task_details(task)
     task_mode = _classify_task_mode(task)
-    if task_details is not None:
-        task_details_text = task_details
-    elif _has_concrete_ui_or_identifier_details(task):
-        task_details_text = task
-    else:
-        task_details_text = "(none)"
+    task_details_text = _task_details(task, task_mode)
     mode_requirements = _mode_requirements(task_mode)
     mode_requirements_text = _render_bullets(mode_requirements) if mode_requirements else "- (none)"
     return f"""Codex Prompt:

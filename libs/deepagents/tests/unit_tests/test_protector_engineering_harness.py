@@ -274,7 +274,9 @@ def test_spanish_ui_implementation_request_is_actionable_and_unicode_safe(tmp_pa
     assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
     assert f"Original user task:\n{task}" in rendered.codex_prompt
     assert "Objective: Remove the option to add more than one account" in rendered.codex_prompt
-    assert "Task details:\nImplementation summary: Remove the option to add more than one account" in rendered.codex_prompt
+    assert "Task details:\nObserved state:" in rendered.codex_prompt
+    assert "Expected behavior:" in rendered.codex_prompt
+    assert "Remove the option to add more than one account" in rendered.codex_prompt
     assert "Objective: Eliminemos" not in rendered.codex_prompt
     assert "Task details:\nEliminemos" not in rendered.codex_prompt
     assert "Do not edit files unless explicitly requested by this task." not in rendered.codex_prompt
@@ -302,6 +304,7 @@ def test_spanish_review_only_request_remains_read_only(tmp_path: Path) -> None:
     assert "Task mode: review_only" in rendered.codex_prompt
     assert "Objective: Review the option to add more than one account without implementing changes" in rendered.codex_prompt
     assert "Objective: Revisar" not in rendered.codex_prompt
+    assert "Observed state:" in rendered.codex_prompt
     assert "Do not edit files unless explicitly requested by this task." in rendered.codex_prompt
     assert "start with read-only inspection of the selected context" in rendered.codex_prompt
     assert "Scoped edits are allowed" not in rendered.codex_prompt
@@ -327,14 +330,94 @@ def test_structured_regression_task_preserves_details(tmp_path: Path) -> None:
         "and restore the correct behavior."
     )
     assert expected_objective in rendered.codex_prompt
-    assert "Current regression:\nAfter the successful Lleida.net integration fix:" in rendered.codex_prompt
+    assert "Observed state:\nAfter the successful Lleida.net integration fix:" in rendered.codex_prompt
     assert '* "Enviar a firmar" disappeared' in rendered.codex_prompt
     assert "Expected behavior:\nProvider dispatch success means only that Lleida.net accepted the request." in rendered.codex_prompt
     assert "Restrictions:\n* Do not modify ConfigId handling." in rendered.codex_prompt
+    assert "Provider dispatch success only proves provider acceptance" in rendered.codex_prompt
     assert "* Fix only the regression." in rendered.codex_prompt
     assert "Validation:\n* Build." in rendered.codex_prompt
     assert "renders the signature action again." in rendered.codex_prompt
     assert "Objective: Objective:" not in rendered.codex_prompt
+
+
+def test_golden_email_password_autofill_prompt_quality(tmp_path: Path) -> None:
+    task = "Fix bug: the login form autofills Email and contraseña unexpectedly. Keep the login behavior scoped to the existing UI."
+
+    rendered = _render(_build_repo(tmp_path), task)
+
+    assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
+    assert f"Original user task:\n{task}" in rendered.codex_prompt
+    assert "Observed state:" in rendered.codex_prompt
+    assert "Email/password fields are being autofilled" in rendered.codex_prompt
+    assert "Expected behavior:" in rendered.codex_prompt
+    assert "Objective:" in rendered.codex_prompt
+    assert "Scope:" in rendered.codex_prompt
+    assert "Restrictions:" in rendered.codex_prompt
+    assert "Validation:" in rendered.codex_prompt
+    assert "Email" in rendered.codex_prompt
+    assert "contraseña" in rendered.codex_prompt
+    assert "Prove the exact render/hide/loading condition" in rendered.codex_prompt
+    assert "- Files read" not in rendered.codex_prompt
+    assert "- Files changed" not in rendered.codex_prompt
+
+
+def test_golden_single_bank_account_ui_prompt_quality(tmp_path: Path) -> None:
+    task = (
+        "Eliminemos la opción de añadir más de una cuenta desde FormNewBankDataId. "
+        "Quitar el botón Añadir de la tabla de cuentas en las vistas de creación."
+    )
+
+    rendered = _render(_build_repo(tmp_path), task)
+
+    assert "Title: Remove the option to add more than one" in rendered.codex_prompt
+    assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
+    assert f"Original user task:\n{task}" in rendered.codex_prompt
+    assert "Observed state:" in rendered.codex_prompt
+    assert "Expected behavior:" in rendered.codex_prompt
+    assert "Scope:" in rendered.codex_prompt
+    assert "Preserve exact references: FormNewBankDataId, botón Añadir, tabla de cuentas, vistas de creación." in rendered.codex_prompt
+    assert "Do not redesign the UI or navigation" in rendered.codex_prompt
+    assert "Task details:\n(none)" not in rendered.codex_prompt
+    assert "- Files read" not in rendered.codex_prompt
+    assert "- Files changed" not in rendered.codex_prompt
+
+
+def test_golden_lleida_spinner_provider_hosted_send_prompt_quality(tmp_path: Path) -> None:
+    task = (
+        "Fix regression: Lleida provider-hosted send leaves the spinner visible after ProviderStatus=Success. "
+        "Do not modify ConfigId, SET_CONFIG, or START_SIGNATURE payloads."
+    )
+
+    rendered = _render(_build_repo(tmp_path), task)
+
+    assert "Task mode: provider_api_bug" in rendered.codex_prompt
+    assert "Observed state:" in rendered.codex_prompt
+    assert "spinner/loading state" in rendered.codex_prompt
+    assert "Provider dispatch success only proves provider acceptance" in rendered.codex_prompt
+    assert "it does not prove signature completion or workflow completion" in rendered.codex_prompt
+    assert "Do not modify ConfigId or SET_CONFIG handling unless explicitly targeted." in rendered.codex_prompt
+    assert "Do not modify START_SIGNATURE payloads unless explicitly targeted." in rendered.codex_prompt
+    assert "Verify provider dispatch success remains intact" in rendered.codex_prompt
+    assert "- Files read" not in rendered.codex_prompt
+    assert "- Files changed" not in rendered.codex_prompt
+
+
+def test_golden_missing_resend_signature_action_prompt_quality(tmp_path: Path) -> None:
+    rendered = _render(_build_repo(tmp_path), STRUCTURED_SIGNATURE_REGRESSION_TASK)
+
+    assert "Task mode: continuation_followup" in rendered.codex_prompt
+    assert "Observed state:" in rendered.codex_prompt
+    assert "ProviderStatus = Success" in rendered.codex_prompt
+    assert "ProviderCorrelationId exists" in rendered.codex_prompt
+    assert '"Enviar a firmar" disappeared' in rendered.codex_prompt
+    assert "Expected behavior:" in rendered.codex_prompt
+    assert "Provider dispatch success means only that Lleida.net accepted the request." in rendered.codex_prompt
+    assert "Provider dispatch success only proves provider acceptance" in rendered.codex_prompt
+    assert 'Keep "Ver estado firma" working.' in rendered.codex_prompt
+    assert "Verify the signature send/resend action renders when the signature remains pending." in rendered.codex_prompt
+    assert "- Files read" not in rendered.codex_prompt
+    assert "- Files changed" not in rendered.codex_prompt
 
 
 def test_write_prompt_output_refuses_overwrite_unless_allowed(tmp_path: Path) -> None:
@@ -518,7 +601,9 @@ def test_cli_task_output_preserves_spanish_unicode(tmp_path: Path, monkeypatch, 
     assert "Task mode: ui_runtime_bug" in prompt
     assert f"Original user task:\n{task}" in prompt
     assert "Objective: Remove the option to add more than one account" in prompt
-    assert "Task details:\nImplementation summary: Remove the option to add more than one account" in prompt
+    assert "Task details:\nObserved state:" in prompt
+    assert "Expected behavior:" in prompt
+    assert "Remove the option to add more than one account" in prompt
     assert "Objective: Eliminemos" not in prompt
     assert "Task details:\nEliminemos" not in prompt
     assert "FormNewBankDataId" in prompt
