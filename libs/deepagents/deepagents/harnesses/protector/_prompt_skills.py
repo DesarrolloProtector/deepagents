@@ -3,34 +3,11 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 _NAVIGATION_STRONG_TERMS = frozenset({"accounting", "dashboard", "index", "legacy", "menu", "menus", "nav", "navigation"})
 _MVP_SURFACE_STRONG_TERMS = frozenset({"complete", "mvp", "useful"})
-_LOCALIZATION_TERMS = frozenset(
-    {
-        "english",
-        "en",
-        "es",
-        "i18n",
-        "idiomas",
-        "language",
-        "languages",
-        "localizacion",
-        "localización",
-        "localization",
-        "multilingual",
-        "multidioma",
-        "spanish",
-        "traducir",
-    }
-)
-_LOCALIZATION_RAW_INTENT_PATTERN = re.compile(
-    r"\b(?:english|i18n|idiomas|language|languages|localizacion|localización|localization|multidioma|multilingual|spanish|traducir|translate)\b",
-    flags=re.IGNORECASE,
-)
 _PROVIDER_BOOTSTRAP_TARGET_TERMS = frozenset({"bootstrap", "configure", "diagnostic", "probe", "smoke", "verify"})
 _PROVIDER_CONFIG_TERMS = frozenset({"config", "config_id", "configid", "set_config"})
 _NEGATIVE_PROVIDER_CONFIG_PHRASES = (
@@ -76,6 +53,7 @@ class PromptSkill:
     restriction_rules: tuple[str, ...] = ()
     validation_expectations: tuple[str, ...] = ()
     forbidden_generic_wording: tuple[str, ...] = ()
+    source: str = "runtime_generic"
 
     def applies_to(self, task_mode: str, task_tokens: frozenset[str]) -> bool:
         """Return whether this skill applies to a classified task."""
@@ -151,6 +129,7 @@ def _prompt_skill_from_metadata(item: dict[str, object]) -> PromptSkill:
         restriction_rules=_metadata_string_items(item, "restriction_rules"),
         validation_expectations=_metadata_string_items(item, "validation_expectations"),
         forbidden_generic_wording=_metadata_string_items(item, "forbidden_generic_wording"),
+        source="pack",
     )
 
 
@@ -266,38 +245,20 @@ OPERATIONAL_WORKFLOW_CONVERGENCE_SKILL = _load_pack_prompt_skill("operational_wo
 
 MVP_SURFACE_COMPLETION_SKILL = _load_pack_prompt_skill("mvp_surface_completion")
 
-LOCALIZATION_COMPLETION_SKILL = PromptSkill(
-    name="localization_completion",
-    trigger_keywords=_LOCALIZATION_TERMS,
-    task_modes=frozenset({"implementation_fix", "ui_runtime_bug"}),
-    observed_state="The selected UI area is not fully localized across the supported Spanish/English experience.",
-    expected_behavior="The selected area should use the existing localization infrastructure for visible user-facing text.",
-    scope_rules=(
-        "Complete localization only for the selected normal UI reachable area.",
-        "Localize visible user-facing text: titles, buttons, labels, headers, empty states, validation/errors, confirmations, and navigation.",
-        "Reuse the existing resource/localizer pattern and add ES/EN resources only where needed.",
-    ),
-    restriction_rules=(
-        "Preserve existing routes, permissions, workflows, JS handlers, and behavior.",
-        "Do not redesign the UI or change business logic, persistence, workflows, telemetry/resilience, or unrelated areas.",
-    ),
-    validation_expectations=("Verify the selected area renders the localized Spanish and English text through the existing UI path.",),
-    forbidden_generic_wording=("generic UI", "button render condition", "spinner/loading state"),
-)
-
 GLOBAL_PATTERN_CHANGE_SKILL = _load_pack_prompt_skill("global_pattern_change")
 
 SPANISH_TASK_PRESERVATION_SKILL = _load_pack_prompt_skill("spanish_implementation_task_preservation")
 
-_SPECIFIC_SKILLS = (
+_PACK_SPECIALIZATION_SKILLS = (
     FORM_SECURITY_AUTOFILL_SKILL,
-    LOCALIZATION_COMPLETION_SKILL,
     NAVIGATION_SURFACE_CONVERGENCE_SKILL,
     PROVIDER_BOOTSTRAP_DIAGNOSTIC_SKILL,
     GLOBAL_PATTERN_CHANGE_SKILL,
     MVP_SURFACE_COMPLETION_SKILL,
     OPERATIONAL_WORKFLOW_CONVERGENCE_SKILL,
     PROVIDER_API_BUG_SKILL,
+)
+_RUNTIME_GENERIC_FALLBACK_SKILLS = (
     UI_RUNTIME_BUG_SKILL,
     CONTINUATION_FOLLOWUP_SKILL,
     REGRESSION_FIX_SKILL,
@@ -306,17 +267,17 @@ _SPECIFIC_SKILLS = (
 
 
 def select_prompt_skills(*, task_mode: str, task_tokens: frozenset[str], has_spanish_text: bool, task_text: str = "") -> tuple[PromptSkill, ...]:
-    """Select prompt skills with deterministic precedence and generic suppression."""
+    """Select pack-owned specialization skills first, then runtime generic fallback skills."""
     selected: list[PromptSkill] = [BASE_PROMPT_QUALITY_SKILL]
-    specific = [skill for skill in _SPECIFIC_SKILLS if _skill_applies(skill, task_mode, task_tokens, task_text)]
+    pack_specific = [skill for skill in _PACK_SPECIALIZATION_SKILLS if _skill_applies(skill, task_mode, task_tokens, task_text)]
+    runtime_fallback = [skill for skill in _RUNTIME_GENERIC_FALLBACK_SKILLS if _skill_applies(skill, task_mode, task_tokens, task_text)]
+    specific = [*pack_specific, *runtime_fallback]
     names = {skill.name for skill in specific}
 
     if "form_security_autofill_bug" in names:
         specific = [skill for skill in specific if skill.name != "ui_runtime_bug"]
     if "navigation_surface_convergence" in names:
         specific = [skill for skill in specific if skill.name != "ui_runtime_bug"]
-    if "localization_completion" in names:
-        specific = [skill for skill in specific if skill.name not in {"ui_runtime_bug", "mvp_surface_completion"}]
     if "global_pattern_change" in names:
         specific = [skill for skill in specific if skill.name != "ui_runtime_bug"]
     if "provider_bootstrap_diagnostic" in names:
@@ -342,16 +303,7 @@ def _skill_applies(skill: PromptSkill, task_mode: str, task_tokens: frozenset[st
         return skill.applies_to(task_mode, task_tokens) and bool(task_tokens & _NAVIGATION_STRONG_TERMS)
     if skill.name == "mvp_surface_completion":
         return skill.applies_to(task_mode, task_tokens) and bool(task_tokens & _MVP_SURFACE_STRONG_TERMS)
-    if skill.name == "localization_completion":
-        return skill.applies_to(task_mode, task_tokens) and _has_localization_intent(task_text)
     return skill.applies_to(task_mode, task_tokens)
-
-
-def _has_localization_intent(task_text: str) -> bool:
-    """Return whether task text explicitly targets localization instead of plain Spanish grammar."""
-    if _LOCALIZATION_RAW_INTENT_PATTERN.search(task_text) is not None:
-        return True
-    return re.search(r"\b(?:es\s*/\s*en|en\s*/\s*es|es-en|en-es)\b", task_text, flags=re.IGNORECASE) is not None
 
 
 def _dedupe_skills(skills: list[PromptSkill]) -> list[PromptSkill]:

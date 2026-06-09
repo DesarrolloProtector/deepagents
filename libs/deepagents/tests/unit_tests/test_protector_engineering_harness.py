@@ -381,6 +381,9 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
     assert "Protector pack prompt skills:" in output
     assert "- Declared: 8" in output
     assert "- Validation: valid" in output
+    assert "Protector prompt selection sources:" in output
+    assert "- Pack-owned specialization: 8" in output
+    assert "- Runtime generic fallback: 5" in output
     assert "- Declared sets: 1" in output
     assert "- Cases: 7" in output
     assert "- Runnable: yes" in output
@@ -756,13 +759,17 @@ def test_golden_email_password_autofill_prompt_quality(tmp_path: Path) -> None:
 
     rendered = _render(_build_repo(tmp_path), task)
     task_mode = engineering._classify_task_mode(task)
-    names = tuple(skill.name for skill in engineering._selected_prompt_skills(task, task_mode))
+    selected = engineering._selected_prompt_skills(task, task_mode)
+    names = tuple(skill.name for skill in selected)
+    sources = {skill.name: skill.source for skill in selected}
 
     assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
     assert "form_security_autofill_bug" in names
     assert "ui_runtime_bug" not in names
     assert "navigation_surface_convergence" not in names
     assert "mvp_surface_completion" not in names
+    assert sources["form_security_autofill_bug"] == "pack"
+    assert sources["implementation_fix"] == "runtime_generic"
     assert "Original user task:" not in rendered.codex_prompt
     assert task not in rendered.codex_prompt
     assert "Observed state:" in rendered.codex_prompt
@@ -791,12 +798,19 @@ def test_prompt_skill_selection_prefers_form_security_over_generic_ui(tmp_path: 
     skills = engineering._selected_prompt_skills(task, task_mode)
 
     names = tuple(skill.name for skill in skills)
+    sources = {skill.name: skill.source for skill in skills}
     assert names == (
         "base_prompt_quality",
         "form_security_autofill_bug",
         "implementation_fix",
         "spanish_implementation_task_preservation",
     )
+    assert sources == {
+        "base_prompt_quality": "runtime_generic",
+        "form_security_autofill_bug": "pack",
+        "implementation_fix": "runtime_generic",
+        "spanish_implementation_task_preservation": "pack",
+    }
     assert "ui_runtime_bug" not in names
     rendered = _render(_build_repo(tmp_path), task)
     assert "Prove the exact render/hide/loading condition" not in rendered.codex_prompt
@@ -809,9 +823,11 @@ def test_prompt_skill_selection_includes_ui_runtime_skill_for_non_form_ui_bug() 
     skills = engineering._selected_prompt_skills(task, task_mode)
 
     names = tuple(skill.name for skill in skills)
+    sources = {skill.name: skill.source for skill in skills}
     assert "base_prompt_quality" in names
     assert "ui_runtime_bug" in names
     assert "form_security_autofill_bug" not in names
+    assert sources["ui_runtime_bug"] == "runtime_generic"
 
 
 def test_prompt_skill_selection_includes_provider_api_skill() -> None:
@@ -821,8 +837,10 @@ def test_prompt_skill_selection_includes_provider_api_skill() -> None:
     skills = engineering._selected_prompt_skills(task, task_mode)
 
     names = tuple(skill.name for skill in skills)
+    sources = {skill.name: skill.source for skill in skills}
     assert "base_prompt_quality" in names
     assert "provider_api_bug" in names
+    assert sources["provider_api_bug"] == "pack"
 
 
 def test_prompt_skill_selection_prefers_provider_bootstrap_over_provider_api() -> None:
@@ -1276,6 +1294,8 @@ def test_cli_plan_prints_execution_plan(tmp_path: Path, capsys) -> None:
     assert "- validation-runner:" in stdout
     assert "- drift-guard:" in stdout
     assert "Skills:" in stdout
+    assert "- navigation_surface_convergence [pack]:" in stdout
+    assert "- implementation_fix [runtime_generic]:" in stdout
     assert "Reviewer chain:" in stdout
     assert "Safety gates:" in stdout
     assert "Codex execution: disabled" in stdout

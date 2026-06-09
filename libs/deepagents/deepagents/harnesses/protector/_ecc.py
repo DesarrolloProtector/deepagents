@@ -212,6 +212,7 @@ def render_ecc_status(discovery: EccDiscovery | None = None, pack_discovery: Pro
     pack = pack_discovery or discover_protector_pack(include_benchmarks=True)
     path = str(result.path) if result.path is not None else "(not found)"
     pack_path = str(pack.path) if pack.path is not None else "(not found)"
+    prompt_source_counts, prompt_source_warnings = _runtime_prompt_skill_source_status()
     rows = [
         "Protector ECC Status",
         f"ECC path: {path}",
@@ -240,6 +241,11 @@ def render_ecc_status(discovery: EccDiscovery | None = None, pack_discovery: Pro
         "Protector pack prompt skills:",
         f"- Declared: {pack.prompt_skills_count}",
         f"- Validation: {pack.prompt_skills_validation_status}",
+        "Protector prompt selection sources:",
+        f"- Pack-owned specialization: {prompt_source_counts.get('pack', 0)}",
+        f"- Runtime generic fallback: {prompt_source_counts.get('runtime_generic', 0)}",
+        "Protector prompt selection source warnings:",
+        _render_names(prompt_source_warnings),
         "Protector pack prompt skill warnings:",
         _render_names(pack.prompt_skill_warnings),
         "Protector pack benchmarks:",
@@ -521,6 +527,26 @@ def _runtime_prompt_skill_names() -> tuple[frozenset[str], str | None]:
         if isinstance(value, prompt_skill_type) and isinstance(value.name, str)
     }
     return frozenset(names), None
+
+
+def _runtime_prompt_skill_source_status() -> tuple[dict[str, int], tuple[str, ...]]:
+    """Return counts of loaded prompt skills by source."""
+    try:
+        prompt_skills = importlib.import_module("deepagents.harnesses.protector._prompt_skills")
+    except Exception as exc:  # noqa: BLE001  # report validation failure instead of crashing ecc-status
+        return {}, (f"could not load prompt skill sources: {exc}",)
+
+    prompt_skill_type = prompt_skills.PromptSkill
+    counts: dict[str, int] = {}
+    warnings: list[str] = []
+    for value in vars(prompt_skills).values():
+        if not isinstance(value, prompt_skill_type):
+            continue
+        source = value.source
+        counts[source] = counts.get(source, 0) + 1
+        if source not in {"pack", "runtime_generic"}:
+            warnings.append(f"unexpected prompt skill source for {value.name}: {source}")
+    return counts, tuple(warnings)
 
 
 def _benchmark_required_skill_coverage(root: Path, declarations: tuple[object, ...]) -> dict[str, tuple[str, ...]]:

@@ -62,6 +62,7 @@ class SkillDefinition:
     name: str
     trigger: str
     role: str
+    source: str = "runtime_generic"
 
 
 @dataclass(frozen=True)
@@ -300,6 +301,7 @@ def _skill_definition_for_prompt_skill(skill: PromptSkill) -> SkillDefinition:
         name=skill.name,
         trigger=_pack_skill_trigger(skill),
         role=_pack_skill_role(skill),
+        source=skill.source,
     )
 
 
@@ -389,7 +391,7 @@ def _render_skills(skills: tuple[SkillDefinition, ...]) -> str:
     """Render selected skills and their triggers."""
     if not skills:
         return "- (none)"
-    return "\n".join(f"- {skill.name}: {skill.role} Trigger: {skill.trigger}" for skill in skills)
+    return "\n".join(f"- {skill.name} [{skill.source}]: {skill.role} Trigger: {skill.trigger}" for skill in skills)
 
 
 def _render_bullets(items: tuple[str, ...]) -> str:
