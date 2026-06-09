@@ -663,6 +663,7 @@ Knowledge gates:
 {_one_line_list(selection.knowledge)}
 
 {_render_ecc_supervised_automation_pilot(
+    task=task,
     task_mode=task_mode,
     selection=selection,
     prompt_skills=prompt_skills,
@@ -680,6 +681,7 @@ Knowledge gates:
 
 def _render_ecc_supervised_automation_pilot(
     *,
+    task: str,
     task_mode: TaskMode,
     selection: _ContextSelection,
     prompt_skills: tuple[PromptSkill, ...],
@@ -729,7 +731,17 @@ Review criteria:
 {_one_line_list(_ecc_supervised_review_criteria(task_mode, selected_pack_skills, selected_runtime_skills))}
 
 Blockers or missing coverage:
-{_one_line_list(blockers)}"""
+{_one_line_list(blockers)}
+
+{_render_ecc_review_contract(
+    task=task,
+    task_mode=task_mode,
+    selection=selection,
+    prompt_skills=prompt_skills,
+    selected_pack_skills=selected_pack_skills,
+    selected_runtime_skills=selected_runtime_skills,
+    coverage=coverage,
+)}"""
 
 
 def _render_skill_source_rows(skills: tuple[PromptSkill, ...], coverage: dict[str, tuple[str, ...]]) -> str:
@@ -741,6 +753,153 @@ def _render_skill_source_rows(skills: tuple[PromptSkill, ...], coverage: dict[st
             coverage_text = f"covered by {', '.join(coverage.get(skill.name, ())) or 'no benchmark case'}"
         rows.append(f"{skill.name} [{skill.source}] - {coverage_text}")
     return _one_line_list(tuple(rows))
+
+
+def _render_ecc_review_contract(
+    *,
+    task: str,
+    task_mode: TaskMode,
+    selection: _ContextSelection,
+    prompt_skills: tuple[PromptSkill, ...],
+    selected_pack_skills: tuple[PromptSkill, ...],
+    selected_runtime_skills: tuple[PromptSkill, ...],
+    coverage: dict[str, tuple[str, ...]],
+) -> str:
+    """Render the ECC-supervised review contract for a planned Codex handoff."""
+    selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
+    return f"""ECC Review Contract:
+Contract owner: ECC
+Protector role: pack-backed review discipline and anti-drift criteria
+Review execution: manual/supervised only
+Git diff inspection: not automatic
+Codex execution: disabled
+
+Proposed Codex task:
+- {_task_objective(task)}
+
+Expected implementation areas:
+{_one_line_list(_expected_implementation_areas(prompt_skills, task_mode))}
+
+Expected files likely to change:
+{_one_line_list(_expected_files_likely_to_change(selected_paths))}
+
+Expected validation scope:
+{_one_line_list(_expected_review_validation_scope(task, task_mode, prompt_skills))}
+
+Benchmark relevance:
+{_one_line_list(_benchmark_relevance_rows(selected_pack_skills, coverage))}
+
+Review risks:
+{_one_line_list(_review_risk_rows(task_mode, selected_pack_skills, selected_runtime_skills))}
+
+Anti-drift checks:
+{_one_line_list(_anti_drift_checks(selection, selected_pack_skills))}
+
+PASS/FAIL criteria:
+{_one_line_list(_review_pass_fail_criteria(task_mode, selected_pack_skills))}"""
+
+
+def _expected_implementation_areas(skills: tuple[PromptSkill, ...], task_mode: TaskMode) -> tuple[str, ...]:
+    """Return expected implementation areas from selected pack and fallback skills."""
+    rows: list[str] = []
+    names = {skill.name for skill in skills}
+    if "localization_completion" in names:
+        rows.append("Selected UI localization/resources/language-selector surface.")
+    if "navigation_surface_convergence" in names or "mvp_surface_completion" in names:
+        rows.append("Route, menu, index, dashboard, or promoted operator-view entry points.")
+    if "provider_bootstrap_diagnostic" in names or "provider_api_bug" in names:
+        rows.append("Provider/API boundary, diagnostic/config evidence, and workflow-state translation.")
+    if "operational_workflow_convergence" in names:
+        rows.append("Workflow state, action eligibility, and rendered operator action surface.")
+    if "global_pattern_change" in names:
+        rows.append("Shared or repeated pattern usages named by the task.")
+    if "form_security_autofill_bug" in names:
+        rows.append("Authentication/form field rendering and browser autofill behavior.")
+    if not rows and task_mode != "review_only":
+        rows.append("Narrow implementation surface required by the proposed Codex task.")
+    if task_mode == "review_only":
+        rows.append("Review-only evidence and risk analysis; no implementation area should be changed.")
+    return tuple(_unique_preserve_order(rows))
+
+
+def _expected_files_likely_to_change(selected_paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Return likely file/change areas from already-selected context without scanning diffs."""
+    candidates = [
+        path
+        for path in selected_paths
+        if not path.endswith(("AGENTS.md", "MEMORY.md")) and "knowledge/" not in path.replace("\\", "/")
+    ]
+    if candidates:
+        return tuple(candidates[:6])
+    return ("Unknown until Codex inspects the selected context; reviewers should reject unrelated file churn.",)
+
+
+def _expected_review_validation_scope(task: str, task_mode: TaskMode, skills: tuple[PromptSkill, ...]) -> tuple[str, ...]:
+    """Return expected validation scope for the review contract."""
+    rows = list(_validation_expectations(task, task_mode))
+    for skill in skills:
+        rows.extend(skill.validation_expectations)
+    rows.append("Confirm validation is proportional to the changed files and behavior claimed by Codex.")
+    return tuple(_unique_preserve_order(rows))
+
+
+def _benchmark_relevance_rows(selected_pack_skills: tuple[PromptSkill, ...], coverage: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """Return benchmark relevance rows for selected pack skills."""
+    if not selected_pack_skills:
+        return ("No pack-specific benchmark is selected; rely on generic Protector review discipline.",)
+    rows: list[str] = []
+    for skill in selected_pack_skills:
+        cases = coverage.get(skill.name, ())
+        rows.append(f"{skill.name}: {', '.join(cases) if cases else 'missing benchmark coverage'}")
+    return tuple(rows)
+
+
+def _review_risk_rows(
+    task_mode: TaskMode,
+    selected_pack_skills: tuple[PromptSkill, ...],
+    selected_runtime_skills: tuple[PromptSkill, ...],
+) -> tuple[str, ...]:
+    """Return review risks from selected skills and task mode."""
+    risks = [
+        "Codex may broaden the task beyond the proposed prompt or selected pack capability.",
+        "Codex may claim PASS without concrete validation evidence.",
+    ]
+    for skill in selected_pack_skills:
+        risks.extend(skill.restriction_rules)
+    if selected_runtime_skills:
+        risks.append("Generic Protector fallback is present; verify it did not overpower pack-specific specialization.")
+    if task_mode == "diagnostic_bootstrap":
+        risks.append("Diagnostics may be mistaken for workflow completion.")
+    return tuple(_unique_preserve_order(risks))
+
+
+def _anti_drift_checks(selection: _ContextSelection, selected_pack_skills: tuple[PromptSkill, ...]) -> tuple[str, ...]:
+    """Return anti-drift checks for the review contract."""
+    checks = [
+        "Reject changes outside the proposed Codex task, selected context, or explicitly justified adjacent files.",
+        "Reject dashboard/session/workflow-engine/agent-loop additions unless the task explicitly requested them.",
+        "Reject raw knowledge dumps; knowledge should stay compact and task-relevant.",
+    ]
+    if selection.knowledge:
+        checks.append("Verify pack knowledge facts were applied only where relevant to the task.")
+    for skill in selected_pack_skills:
+        checks.extend(skill.forbidden_generic_wording)
+    return tuple(_unique_preserve_order(checks))
+
+
+def _review_pass_fail_criteria(task_mode: TaskMode, selected_pack_skills: tuple[PromptSkill, ...]) -> tuple[str, ...]:
+    """Return PASS/FAIL criteria for the review contract."""
+    criteria = [
+        "PASS only if the Codex output addresses the proposed task and respects every selected pack-skill restriction.",
+        "PASS only if validation evidence is concrete, scoped, and matches the claimed behavior.",
+        "FAIL if Codex executes autonomous loops, creates background sessions, or introduces unrelated framework/platform pieces.",
+        "FAIL if changed files or behavior drift beyond the task without explicit justification.",
+    ]
+    if task_mode == "review_only":
+        criteria.append("FAIL if Codex implements changes for a review-only task.")
+    if selected_pack_skills:
+        criteria.append(f"PASS must account for benchmark-covered pack skills: {', '.join(skill.name for skill in selected_pack_skills)}.")
+    return tuple(criteria)
 
 
 def _knowledge_used_rows(selection: _ContextSelection) -> tuple[str, ...]:

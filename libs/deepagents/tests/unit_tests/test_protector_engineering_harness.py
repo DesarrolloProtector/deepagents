@@ -676,6 +676,23 @@ def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
     assert "Review criteria:" in rendered.text
     assert "Blockers or missing coverage:" in rendered.text
     assert "None for read-only supervised planning." in rendered.text
+    assert "ECC Review Contract:" in rendered.text
+    assert "Contract owner: ECC" in rendered.text
+    assert "Review execution: manual/supervised only" in rendered.text
+    assert "Git diff inspection: not automatic" in rendered.text
+    assert "Proposed Codex task:" in rendered.text
+    assert "Expected implementation areas:" in rendered.text
+    assert "Route, menu, index, dashboard, or promoted operator-view entry points." in rendered.text
+    assert "Expected files likely to change:" in rendered.text
+    assert "Expected validation scope:" in rendered.text
+    assert "Benchmark relevance:" in rendered.text
+    assert "navigation_surface_convergence: legacy-onboarding-path-convergence, navigation-convergence" in rendered.text
+    assert "Review risks:" in rendered.text
+    assert "Generic Protector fallback is present; verify it did not overpower pack-specific specialization." in rendered.text
+    assert "Anti-drift checks:" in rendered.text
+    assert "Reject dashboard/session/workflow-engine/agent-loop additions unless the task explicitly requested them." in rendered.text
+    assert "PASS/FAIL criteria:" in rendered.text
+    assert "PASS only if the Codex output addresses the proposed task and respects every selected pack-skill restriction." in rendered.text
 
 
 def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:
