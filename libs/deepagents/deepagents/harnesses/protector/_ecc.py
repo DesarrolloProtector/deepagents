@@ -6,6 +6,7 @@ registries or execute ECC workflows from this adapter.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 from dataclasses import dataclass
@@ -90,7 +91,12 @@ class ProtectorPackDiscovery:
     skills_count: int
     knowledge_count: int
     validation_status: str
+    benchmark_sets_count: int
+    benchmark_cases_count: int
+    benchmark_runnable: bool
+    benchmark_validation_status: str
     warnings: tuple[str, ...]
+    benchmark_warnings: tuple[str, ...]
 
 
 def default_ecc_config_path() -> Path:
@@ -126,7 +132,7 @@ def discover_ecc() -> EccDiscovery:
     )
 
 
-def discover_protector_pack() -> ProtectorPackDiscovery:
+def discover_protector_pack(*, include_benchmarks: bool = False) -> ProtectorPackDiscovery:
     """Discover and validate the repo-local Protector ECC pack manifest."""
     manifest_path = _find_protector_pack_manifest()
     if manifest_path is None:
@@ -137,7 +143,12 @@ def discover_protector_pack() -> ProtectorPackDiscovery:
             skills_count=0,
             knowledge_count=0,
             validation_status="missing",
+            benchmark_sets_count=0,
+            benchmark_cases_count=0,
+            benchmark_runnable=False,
+            benchmark_validation_status="not_checked",
             warnings=(),
+            benchmark_warnings=(),
         )
 
     try:
@@ -151,10 +162,21 @@ def discover_protector_pack() -> ProtectorPackDiscovery:
             skills_count=0,
             knowledge_count=0,
             validation_status="invalid",
+            benchmark_sets_count=0,
+            benchmark_cases_count=0,
+            benchmark_runnable=False,
+            benchmark_validation_status="invalid",
             warnings=(warning,),
+            benchmark_warnings=(),
         )
 
-    warnings = _validate_protector_pack_manifest(manifest_path.parent, data)
+    manifest_warnings = _validate_protector_pack_manifest(manifest_path.parent, data)
+    benchmark_status, benchmark_cases, benchmark_runnable, benchmark_warnings = _discover_pack_benchmark_status(
+        manifest_path.parent,
+        data,
+        include_benchmarks=include_benchmarks,
+    )
+    warnings = (*manifest_warnings, *benchmark_warnings)
     return ProtectorPackDiscovery(
         path=manifest_path.parent,
         found=True,
@@ -162,14 +184,19 @@ def discover_protector_pack() -> ProtectorPackDiscovery:
         skills_count=len(_manifest_items(data, "skills")),
         knowledge_count=len(_manifest_items(data, "knowledge")),
         validation_status="valid" if not warnings else "invalid",
+        benchmark_sets_count=len(_benchmark_declarations(data)),
+        benchmark_cases_count=benchmark_cases,
+        benchmark_runnable=benchmark_runnable,
+        benchmark_validation_status=benchmark_status,
         warnings=warnings,
+        benchmark_warnings=benchmark_warnings,
     )
 
 
 def render_ecc_status(discovery: EccDiscovery | None = None, pack_discovery: ProtectorPackDiscovery | None = None) -> str:
     """Render compact ECC discovery status for `ph ecc-status`."""
     result = discovery or discover_ecc()
-    pack = pack_discovery or discover_protector_pack()
+    pack = pack_discovery or discover_protector_pack(include_benchmarks=True)
     path = str(result.path) if result.path is not None else "(not found)"
     pack_path = str(pack.path) if pack.path is not None else "(not found)"
     rows = [
@@ -197,6 +224,13 @@ def render_ecc_status(discovery: EccDiscovery | None = None, pack_discovery: Pro
         f"- Skills: {pack.skills_count}",
         f"- Knowledge: {pack.knowledge_count}",
         f"- Validation: {pack.validation_status}",
+        "Protector pack benchmarks:",
+        f"- Declared sets: {pack.benchmark_sets_count}",
+        f"- Cases: {pack.benchmark_cases_count}",
+        f"- Runnable: {_yes_no(value=pack.benchmark_runnable)}",
+        f"- Validation: {pack.benchmark_validation_status}",
+        "Protector pack benchmark warnings:",
+        _render_names(pack.benchmark_warnings),
         "Protector pack warnings:",
         _render_names(pack.warnings),
         "Warnings:",
@@ -298,7 +332,96 @@ def _validate_protector_pack_manifest(root: Path, data: object) -> tuple[str, ..
 
     warnings.extend(_validate_manifest_paths(root, _manifest_items(data, "skills"), item_name="skill"))
     warnings.extend(_validate_manifest_paths(root, _manifest_items(data, "knowledge"), item_name="knowledge"))
+    warnings.extend(_validate_benchmark_declarations(root, _benchmark_declarations(data)))
     return tuple(warnings)
+
+
+def _discover_pack_benchmark_status(
+    root: Path,
+    data: object,
+    *,
+    include_benchmarks: bool,
+) -> tuple[str, int, bool, tuple[str, ...]]:
+    """Return benchmark availability and optional execution status for a pack."""
+    declarations = _benchmark_declarations(data)
+    declaration_warnings = _validate_benchmark_declarations(root, declarations)
+    if not declarations:
+        return "not_declared", 0, False, ("Protector pack benchmark declaration missing: verification_assets.benchmarks",)
+    if declaration_warnings:
+        return "invalid", 0, False, declaration_warnings
+
+    cases_count = _declared_benchmark_case_count(root, declarations)
+    if not include_benchmarks:
+        return "not_checked", cases_count, True, ()
+
+    failures: list[str] = []
+    executed_cases = 0
+    for declaration in declarations:
+        path = _declaration_path(root, declaration)
+        if path is None:
+            continue
+        results = _run_declared_prompt_benchmarks(path)
+        executed_cases += len(results)
+        failures.extend(f"{result.name}: {'; '.join(result.failures)}" for result in results if not result.passed)
+    if failures:
+        return "failing", executed_cases, True, tuple(failures)
+    return "passing", executed_cases, True, ()
+
+
+def _validate_benchmark_declarations(root: Path, declarations: tuple[object, ...]) -> tuple[str, ...]:
+    """Validate pack benchmark declarations without creating a new runner."""
+    if not declarations:
+        return ("Protector pack benchmark declaration missing: verification_assets.benchmarks",)
+
+    warnings: list[str] = []
+    for index, declaration in enumerate(declarations, start=1):
+        if not isinstance(declaration, dict):
+            warnings.append(f"Protector pack benchmark declaration {index} must be an object")
+            continue
+        if _manifest_string(declaration, "runner", "") != "ph_benchmark":
+            warnings.append(f"Protector pack benchmark declaration {index} must use runner ph_benchmark")
+        path = _declaration_path(root, declaration)
+        if path is None:
+            warnings.append(f"Protector pack benchmark declaration {index} must include a path")
+        elif not path.is_dir():
+            warnings.append(f"Protector pack benchmark path does not exist: {_manifest_string(declaration, 'path', '')}")
+        expected = declaration.get("expected_cases")
+        if not isinstance(expected, int) or expected < 1:
+            warnings.append(f"Protector pack benchmark declaration {index} must include positive expected_cases")
+        elif path is not None and path.is_dir() and _benchmark_case_count(path) != expected:
+            warnings.append(f"Protector pack benchmark expected_cases mismatch for {path}: expected {expected}, found {_benchmark_case_count(path)}")
+    return tuple(warnings)
+
+
+def _declared_benchmark_case_count(root: Path, declarations: tuple[object, ...]) -> int:
+    """Return the total number of case directories declared by valid benchmark paths."""
+    count = 0
+    for declaration in declarations:
+        path = _declaration_path(root, declaration)
+        if path is not None and path.is_dir():
+            count += _benchmark_case_count(path)
+    return count
+
+
+def _benchmark_case_count(path: Path) -> int:
+    """Return the number of benchmark case directories."""
+    return len(tuple(item for item in path.iterdir() if item.is_dir()))
+
+
+def _run_declared_prompt_benchmarks(path: Path) -> tuple[object, ...]:
+    """Run declared Protector prompt benchmarks through the existing runner."""
+    engineering = importlib.import_module("deepagents.harnesses.protector._engineering")
+    return engineering.run_prompt_benchmarks(benchmarks_dir=path)
+
+
+def _declaration_path(root: Path, declaration: object) -> Path | None:
+    """Return a resolved benchmark path from a manifest declaration."""
+    if not isinstance(declaration, dict):
+        return None
+    value = declaration.get("path")
+    if not isinstance(value, str) or not value:
+        return None
+    return (root / value).resolve()
 
 
 def _validate_manifest_paths(root: Path, items: tuple[object, ...], *, item_name: str) -> tuple[str, ...]:
@@ -322,6 +445,17 @@ def _manifest_items(data: object, key: str) -> tuple[object, ...]:
     if not isinstance(data, dict):
         return ()
     value = data.get(key)
+    return tuple(value) if isinstance(value, list) else ()
+
+
+def _benchmark_declarations(data: object) -> tuple[object, ...]:
+    """Return pack benchmark declarations."""
+    if not isinstance(data, dict):
+        return ()
+    assets = data.get("verification_assets")
+    if not isinstance(assets, dict):
+        return ()
+    value = assets.get("benchmarks")
     return tuple(value) if isinstance(value, list) else ()
 
 

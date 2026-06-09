@@ -59,6 +59,16 @@
       "path": "knowledge/FinanciacionCore.md"
     }
   ],
+  "verification_assets": {
+    "benchmarks": [
+      {
+        "name": "protector-prompt-benchmarks",
+        "runner": "ph_benchmark",
+        "path": "../../tests/prompt_benchmarks",
+        "expected_cases": 7
+      }
+    ]
+  },
   "quality_gate": {
     "command": "ph benchmark --benchmarks tests/prompt_benchmarks",
     "runner_status": "existing_ph_runner"

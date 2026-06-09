@@ -262,7 +262,12 @@ def test_pack_knowledge_warns_when_legacy_duplicate_differs(tmp_path: Path, monk
             skills_count=5,
             knowledge_count=1,
             validation_status="valid",
+            benchmark_sets_count=1,
+            benchmark_cases_count=7,
+            benchmark_runnable=True,
+            benchmark_validation_status="not_checked",
             warnings=(),
+            benchmark_warnings=(),
         ),
     )
     monkeypatch.setattr(engineering, "_knowledge_directories", lambda: (legacy,))
@@ -352,6 +357,11 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
     assert "- Skills: 5" in output
     assert "- Knowledge: 1" in output
     assert "- Validation: valid" in output
+    assert "Protector pack benchmarks:" in output
+    assert "- Declared sets: 1" in output
+    assert "- Cases: 7" in output
+    assert "- Runnable: yes" in output
+    assert "- Validation: passing" in output
 
 
 def test_protector_platform_boundaries_are_explicit() -> None:
@@ -380,6 +390,7 @@ def test_protector_ecc_pack_files_are_discoverable() -> None:
     ).read_text(encoding="utf-8")
 
     skill_paths = tuple(skill["path"] for skill in manifest["skills"])
+    benchmark_paths = tuple(benchmark["path"] for benchmark in manifest["verification_assets"]["benchmarks"])
     assert skill_paths == (
         "skills/protector-prompt-quality/SKILL.md",
         "skills/protector-codex-handoff/SKILL.md",
@@ -387,6 +398,7 @@ def test_protector_ecc_pack_files_are_discoverable() -> None:
         "skills/protector-anti-drift/SKILL.md",
         "skills/financiacioncore-method/SKILL.md",
     )
+    assert benchmark_paths == ("../../tests/prompt_benchmarks",)
     for relative in skill_paths:
         text = (pack / relative).read_text(encoding="utf-8")
         assert "origin: Protector ECC pack" in text
@@ -401,7 +413,33 @@ def test_protector_pack_discovery_validates_static_pack() -> None:
     assert discovery.skills_count == 5
     assert discovery.knowledge_count == 1
     assert discovery.validation_status == "valid"
+    assert discovery.benchmark_sets_count == 1
+    assert discovery.benchmark_cases_count == 7
+    assert discovery.benchmark_runnable
+    assert discovery.benchmark_validation_status == "not_checked"
     assert discovery.warnings == ()
+    assert discovery.benchmark_warnings == ()
+
+
+def test_protector_pack_discovery_runs_declared_benchmarks() -> None:
+    discovery = ecc.discover_protector_pack(include_benchmarks=True)
+
+    assert discovery.validation_status == "valid"
+    assert discovery.benchmark_sets_count == 1
+    assert discovery.benchmark_cases_count == 7
+    assert discovery.benchmark_runnable
+    assert discovery.benchmark_validation_status == "passing"
+    assert discovery.benchmark_warnings == ()
+
+
+def test_protector_pack_manifest_requires_benchmark_declarations() -> None:
+    pack = _protector_pack_dir()
+    manifest = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+    manifest.pop("verification_assets")
+
+    warnings = ecc._validate_protector_pack_manifest(pack, manifest)
+
+    assert "Protector pack benchmark declaration missing: verification_assets.benchmarks" in warnings
 
 
 def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
