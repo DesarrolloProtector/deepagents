@@ -41,8 +41,21 @@ FEATURE_HINTS = frozenset(
 )
 TOKEN_ALIASES: dict[str, tuple[str, ...]] = {
     "contract": ("firma", "signature"),
+    "english": ("en", "language", "languages"),
+    "en": ("english", "language", "languages"),
+    "es": ("spanish", "language", "languages"),
     "firma": ("contract", "signature"),
+    "i18n": ("localization", "language", "languages"),
+    "idiomas": ("localization", "language", "languages"),
+    "language": ("localization", "languages"),
+    "languages": ("localization", "language"),
+    "localizacion": ("localization", "language", "languages"),
+    "localización": ("localization", "language", "languages"),
+    "multidioma": ("localization", "language", "languages", "multilingual"),
+    "multilingual": ("localization", "language", "languages"),
     "payment": ("pay", "receipt", "receipts"),
+    "spanish": ("es", "language", "languages"),
+    "traducir": ("localization", "translate", "language", "languages"),
     "ui": ("operator", "surface"),
     "workflow": ("flow",),
 }
@@ -134,6 +147,25 @@ PLANNING_ONLY_TERMS = frozenset(
         "roadmap",
     }
 )
+LOCALIZATION_TASK_TERMS = frozenset(
+    {
+        "en",
+        "english",
+        "es",
+        "i18n",
+        "idiomas",
+        "language",
+        "languages",
+        "localizacion",
+        "localización",
+        "localization",
+        "multidioma",
+        "multilingual",
+        "spanish",
+        "traducir",
+        "translate",
+    }
+)
 DIAGNOSTIC_BOOTSTRAP_TERMS = frozenset(
     {
         "bootstrap",
@@ -222,6 +254,10 @@ SPANISH_SUMMARY_TERMS = frozenset(
         "quitemos",
         "tabla",
         "vistas",
+        "idiomas",
+        "localización",
+        "multidioma",
+        "traducir",
     }
 )
 SPANISH_LITERAL_REFERENCES = (
