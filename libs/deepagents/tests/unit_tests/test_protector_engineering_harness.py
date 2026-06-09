@@ -276,6 +276,15 @@ def test_pack_knowledge_warns_when_legacy_duplicate_differs(tmp_path: Path, monk
             name="protector-financiacioncore",
             skills_count=5,
             knowledge_count=1,
+            capabilities=(
+                "workflow_convergence",
+                "provider_diagnostics",
+                "onboarding_convergence",
+                "localization_completion",
+                "navigation_convergence",
+                "form_security",
+            ),
+            capabilities_validation_status="valid",
             validation_status="valid",
             prompt_skills_count=9,
             prompt_skills_validation_status="valid",
@@ -284,6 +293,7 @@ def test_pack_knowledge_warns_when_legacy_duplicate_differs(tmp_path: Path, monk
             benchmark_runnable=True,
             benchmark_validation_status="not_checked",
             warnings=(),
+            capability_warnings=(),
             prompt_skill_warnings=(),
             benchmark_warnings=(),
         ),
@@ -377,6 +387,13 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
     assert "- Skills: 5" in output
     assert "- Knowledge: 1" in output
     assert "- Validation: valid" in output
+    assert "Protector pack capabilities:" in output
+    assert "- Declared: 6" in output
+    assert "Protector pack capability names:" in output
+    assert "- workflow_convergence" in output
+    assert "- provider_diagnostics" in output
+    assert "- localization_completion" in output
+    assert "Protector pack capability warnings:" in output
     assert "Protector pack benchmarks:" in output
     assert "Protector pack prompt skills:" in output
     assert "- Declared: 9" in output
@@ -414,6 +431,14 @@ def test_protector_ecc_pack_files_are_discoverable() -> None:
     assert (pack / "knowledge" / "FinanciacionCore.md").read_text(encoding="utf-8") == (
         Path(__file__).resolve().parents[4] / ".protector-harness" / "knowledge" / "FinanciacionCore.md"
     ).read_text(encoding="utf-8")
+    assert tuple(capability["name"] for capability in manifest["capabilities"]) == (
+        "workflow_convergence",
+        "provider_diagnostics",
+        "onboarding_convergence",
+        "localization_completion",
+        "navigation_convergence",
+        "form_security",
+    )
 
     skill_paths = tuple(skill["path"] for skill in manifest["skills"])
     benchmark_paths = tuple(benchmark["path"] for benchmark in manifest["verification_assets"]["benchmarks"])
@@ -453,6 +478,15 @@ def test_protector_pack_discovery_validates_static_pack() -> None:
     assert discovery.name == "protector-financiacioncore"
     assert discovery.skills_count == 5
     assert discovery.knowledge_count == 1
+    assert discovery.capabilities == (
+        "workflow_convergence",
+        "provider_diagnostics",
+        "onboarding_convergence",
+        "localization_completion",
+        "navigation_convergence",
+        "form_security",
+    )
+    assert discovery.capabilities_validation_status == "valid"
     assert discovery.validation_status == "valid"
     assert discovery.prompt_skills_count == 9
     assert discovery.prompt_skills_validation_status == "valid"
@@ -461,6 +495,7 @@ def test_protector_pack_discovery_validates_static_pack() -> None:
     assert discovery.benchmark_runnable
     assert discovery.benchmark_validation_status == "not_checked"
     assert discovery.warnings == ()
+    assert discovery.capability_warnings == ()
     assert discovery.prompt_skill_warnings == ()
     assert discovery.benchmark_warnings == ()
 
@@ -545,6 +580,61 @@ def test_protector_pack_prompt_skill_metadata_requires_runtime_skill_and_benchma
     assert "Protector pack prompt skill benchmark case does not require form_security_autofill_bug: covered-case" in warnings
 
 
+def test_protector_pack_capabilities_require_pack_skill_and_benchmark_coverage(tmp_path: Path) -> None:
+    root = tmp_path / "pack"
+    benchmarks = tmp_path / "benchmarks"
+    metadata = root / "verification" / "prompt-skills.json"
+    _write_prompt_benchmark(
+        benchmarks,
+        "covered-case",
+        "Fix scoped form security issue",
+        """# Expected Characteristics
+
+## Required skills
+- form_security_autofill_bug
+""",
+    )
+    _write(
+        metadata,
+        json.dumps(
+            {
+                "schema_version": "protector-pack-prompt-skills-v1",
+                "selection_behavior": "pack_owned_runtime_loaded",
+                "changes_prompt_output": False,
+                "prompt_skills": [
+                    _pack_prompt_skill_metadata_item("form_security_autofill_bug", ["covered-case"]),
+                    _pack_prompt_skill_metadata_item("provider_api_bug", ["covered-case"]),
+                ],
+            }
+        ),
+    )
+    manifest = {
+        "capabilities": [
+            {"name": "form_security", "prompt_skills": ["form_security_autofill_bug"]},
+            {"name": "orphan_unknown", "prompt_skills": ["missing_pack_skill"]},
+            {"name": "orphan_uncovered", "prompt_skills": ["provider_api_bug"]},
+        ],
+        "verification_assets": {
+            "benchmarks": [
+                {
+                    "name": "fixture",
+                    "runner": "ph_benchmark",
+                    "path": str(benchmarks),
+                    "expected_cases": 1,
+                }
+            ],
+            "prompt_skills": {"path": "verification/prompt-skills.json"},
+        },
+    }
+
+    warnings = ecc._validate_pack_capabilities(root, manifest)
+
+    assert "Protector pack capability references unknown pack skill: orphan_unknown -> missing_pack_skill" in warnings
+    assert "Protector pack capability is not backed by any pack skill: orphan_unknown" in warnings
+    assert "Protector pack capability is not covered by any benchmark case: orphan_uncovered" in warnings
+    assert not any("form_security" in warning for warning in warnings)
+
+
 def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
     rendered = engineering.render_controlled_execution_plan(
         task="Fix legacy onboarding path convergence for operator UI views",
@@ -569,6 +659,23 @@ def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
     assert "Drift-guard must block broad audits and unrelated architecture." in rendered.text
     assert "Knowledge gates:" in rendered.text
     assert "contract-first company and financer onboarding" in rendered.text
+    assert "ECC Supervised Automation Pilot:" in rendered.text
+    assert "Concept owner: ECC" in rendered.text
+    assert "Pilot mode: read-only planning" in rendered.text
+    assert "Selected ECC pack:" in rendered.text
+    assert "- Name: protector-financiacioncore" in rendered.text
+    assert "Selected skills:" in rendered.text
+    assert "navigation_surface_convergence [pack] - covered by legacy-onboarding-path-convergence, navigation-convergence" in rendered.text
+    assert "implementation_fix [runtime_generic] - generic fallback; no pack benchmark required" in rendered.text
+    assert "Knowledge used:" in rendered.text
+    assert "Knowledge path:" in rendered.text
+    assert "Benchmark confidence:" in rendered.text
+    assert "Confidence: high: verified pack and selected pack skills are benchmark-covered" in rendered.text
+    assert "Proposed Codex prompt:" in rendered.text
+    assert "Codex Prompt:" in rendered.text
+    assert "Review criteria:" in rendered.text
+    assert "Blockers or missing coverage:" in rendered.text
+    assert "None for read-only supervised planning." in rendered.text
 
 
 def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:

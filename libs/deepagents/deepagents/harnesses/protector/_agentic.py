@@ -39,6 +39,7 @@ PACK_OWNED_PROMPT_SKILL_NAMES = frozenset(
         "provider_api_bug",
         "operational_workflow_convergence",
         "global_pattern_change",
+        "localization_completion",
         "mvp_surface_completion",
         "spanish_implementation_task_preservation",
     }

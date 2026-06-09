@@ -31,6 +31,47 @@
     "financiacioncore_vameco_method",
     "repo_operational_knowledge"
   ],
+  "capabilities": [
+    {
+      "name": "workflow_convergence",
+      "prompt_skills": [
+        "operational_workflow_convergence",
+        "global_pattern_change"
+      ]
+    },
+    {
+      "name": "provider_diagnostics",
+      "prompt_skills": [
+        "provider_bootstrap_diagnostic",
+        "provider_api_bug"
+      ]
+    },
+    {
+      "name": "onboarding_convergence",
+      "prompt_skills": [
+        "navigation_surface_convergence"
+      ]
+    },
+    {
+      "name": "localization_completion",
+      "prompt_skills": [
+        "localization_completion"
+      ]
+    },
+    {
+      "name": "navigation_convergence",
+      "prompt_skills": [
+        "navigation_surface_convergence",
+        "mvp_surface_completion"
+      ]
+    },
+    {
+      "name": "form_security",
+      "prompt_skills": [
+        "form_security_autofill_bug"
+      ]
+    }
+  ],
   "skills": [
     {
       "name": "protector-prompt-quality",

@@ -15,7 +15,7 @@ from pydantic import Field
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.harnesses.protector._agentic import build_execution_plan, render_execution_plan as render_agentic_execution_plan
-from deepagents.harnesses.protector._ecc import discover_protector_pack
+from deepagents.harnesses.protector._ecc import discover_pack_prompt_skill_benchmark_coverage, discover_protector_pack
 from deepagents.harnesses.protector._prompt_skills import PromptSkill, select_prompt_skills
 
 if TYPE_CHECKING:
@@ -652,6 +652,7 @@ def render_controlled_execution_plan(*, task: str, repo: Path | None, repo_alias
     prompt_skills = _selected_prompt_skills(task, task_mode)
     plan = build_execution_plan(task_mode=task_mode, prompt_skills=prompt_skills)
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
+    codex_prompt = _render_codex_prompt(task, selection)
     text = f"""{render_agentic_execution_plan(plan)}
 
 Task mode: {task_mode}
@@ -659,7 +660,14 @@ Selected context paths:
 {_one_line_list(selected_paths)}
 
 Knowledge gates:
-{_one_line_list(selection.knowledge)}"""
+{_one_line_list(selection.knowledge)}
+
+{_render_ecc_supervised_automation_pilot(
+    task_mode=task_mode,
+    selection=selection,
+    prompt_skills=prompt_skills,
+    codex_prompt=codex_prompt,
+)}"""
     return RenderedExecutionPlan(
         text=text,
         profile=plan.profile.name,
@@ -668,6 +676,138 @@ Knowledge gates:
         safety_gates=plan.safety_gates,
         selected_context_count=_selected_context_count(selection),
     )
+
+
+def _render_ecc_supervised_automation_pilot(
+    *,
+    task_mode: TaskMode,
+    selection: _ContextSelection,
+    prompt_skills: tuple[PromptSkill, ...],
+    codex_prompt: str,
+) -> str:
+    """Render the read-only ECC-supervised Codex handoff pilot."""
+    pack = discover_protector_pack(include_benchmarks=True)
+    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    selected_pack_skills = tuple(skill for skill in prompt_skills if skill.source == "pack")
+    selected_runtime_skills = tuple(skill for skill in prompt_skills if skill.source != "pack")
+    missing_coverage = tuple(skill.name for skill in selected_pack_skills if not coverage.get(skill.name))
+    blockers = _ecc_supervised_blockers(pack, missing_coverage)
+    confidence = _benchmark_confidence(pack, missing_coverage)
+    return f"""ECC Supervised Automation Pilot:
+Concept owner: ECC
+Protector role: verified pack inputs and prompt-quality behavior
+Pilot mode: read-only planning
+Codex execution: disabled
+File edits: disabled
+Autonomous loops: disabled
+Background sessions: disabled
+
+Selected ECC pack:
+- Name: {pack.name}
+- Path: {pack.path if pack.path is not None else "(not found)"}
+- Pack validation: {pack.validation_status}
+- Prompt skill validation: {pack.prompt_skills_validation_status}
+- Capability validation: {pack.capabilities_validation_status}
+
+Selected skills:
+{_render_skill_source_rows(prompt_skills, coverage)}
+
+Knowledge used:
+{_one_line_list(_knowledge_used_rows(selection))}
+
+Benchmark confidence:
+- Confidence: {confidence}
+- Benchmark validation: {pack.benchmark_validation_status}
+- Benchmark cases: {pack.benchmark_cases_count}
+- Covered selected pack skills: {_comma_or_none(tuple(skill.name for skill in selected_pack_skills if coverage.get(skill.name)))}
+- Missing selected pack skill coverage: {_comma_or_none(missing_coverage)}
+
+Proposed Codex prompt:
+{codex_prompt}
+
+Review criteria:
+{_one_line_list(_ecc_supervised_review_criteria(task_mode, selected_pack_skills, selected_runtime_skills))}
+
+Blockers or missing coverage:
+{_one_line_list(blockers)}"""
+
+
+def _render_skill_source_rows(skills: tuple[PromptSkill, ...], coverage: dict[str, tuple[str, ...]]) -> str:
+    """Render selected skill source and benchmark coverage rows."""
+    rows: list[str] = []
+    for skill in skills:
+        coverage_text = "generic fallback; no pack benchmark required"
+        if skill.source == "pack":
+            coverage_text = f"covered by {', '.join(coverage.get(skill.name, ())) or 'no benchmark case'}"
+        rows.append(f"{skill.name} [{skill.source}] - {coverage_text}")
+    return _one_line_list(tuple(rows))
+
+
+def _knowledge_used_rows(selection: _ContextSelection) -> tuple[str, ...]:
+    """Return plan rows for selected knowledge paths and compact knowledge facts."""
+    rows = [f"Knowledge path: {path}" for path in _selected_knowledge_paths(selection)]
+    rows.extend(f"Knowledge fact: {item}" for item in selection.knowledge)
+    return tuple(rows)
+
+
+def _selected_knowledge_paths(selection: _ContextSelection) -> tuple[str, ...]:
+    """Return selected pack or legacy knowledge path rows."""
+    paths: list[str] = []
+    for item in selection.selected:
+        normalized = item.replace("\\", "/")
+        if "knowledge/" in normalized and (".protector-harness/" in normalized or "protector-financiacioncore/" in normalized):
+            paths.append(item)
+    return tuple(paths)
+
+
+def _benchmark_confidence(pack: object, missing_coverage: tuple[str, ...]) -> str:
+    """Return a compact confidence label for the supervised pilot."""
+    pack_validation = getattr(pack, "validation_status", "")
+    benchmark_validation = getattr(pack, "benchmark_validation_status", "")
+    if pack_validation == "valid" and benchmark_validation == "passing" and not missing_coverage:
+        return "high: verified pack and selected pack skills are benchmark-covered"
+    return "reduced: review blockers or missing benchmark coverage before execution"
+
+
+def _ecc_supervised_blockers(pack: object, missing_coverage: tuple[str, ...]) -> tuple[str, ...]:
+    """Return blockers that keep the pilot from future execution."""
+    blockers: list[str] = []
+    if getattr(pack, "validation_status", "") != "valid":
+        blockers.append("Pack validation is not valid.")
+    if getattr(pack, "prompt_skills_validation_status", "") != "valid":
+        blockers.append("Pack prompt-skill validation is not valid.")
+    if getattr(pack, "capabilities_validation_status", "") != "valid":
+        blockers.append("Pack capability validation is not valid.")
+    if getattr(pack, "benchmark_validation_status", "") != "passing":
+        blockers.append("Pack benchmark validation is not passing.")
+    if missing_coverage:
+        blockers.append(f"Selected pack skills missing benchmark coverage: {', '.join(missing_coverage)}.")
+    return tuple(blockers) or ("None for read-only supervised planning.",)
+
+
+def _ecc_supervised_review_criteria(
+    task_mode: TaskMode,
+    selected_pack_skills: tuple[PromptSkill, ...],
+    selected_runtime_skills: tuple[PromptSkill, ...],
+) -> tuple[str, ...]:
+    """Return review criteria for the supervised Codex handoff."""
+    criteria = [
+        "Confirm the proposed Codex prompt is task-specific and keeps pack knowledge compact.",
+        "Confirm no Codex execution, file edits, autonomous loops, or background sessions are requested by this pilot.",
+        "Review any future Codex output against the selected pack skill guardrails and prompt benchmark expectations.",
+    ]
+    if task_mode != "review_only":
+        criteria.append("Require focused validation evidence before accepting PASS from a future Codex run.")
+    if selected_pack_skills:
+        criteria.append(f"Pack skills under review: {', '.join(skill.name for skill in selected_pack_skills)}.")
+    if selected_runtime_skills:
+        criteria.append(f"Generic Protector fallback used only where needed: {', '.join(skill.name for skill in selected_runtime_skills)}.")
+    return tuple(criteria)
+
+
+def _comma_or_none(items: tuple[str, ...]) -> str:
+    """Render comma-separated names or `(none)`."""
+    return ", ".join(items) if items else "(none)"
 
 
 def _run_prompt_benchmark_case(path: Path, repo: Path | None, repo_alias: str | None) -> PromptBenchmarkResult:
