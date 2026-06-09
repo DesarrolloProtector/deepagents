@@ -387,6 +387,15 @@ class ReviewFindings:
 
 
 @dataclass(frozen=True)
+class OutcomeReport:
+    """Supervised Codex outcome report plus machine-readable status."""
+
+    text: str
+    status: str
+    follow_up: str | None
+
+
+@dataclass(frozen=True)
 class RenderedReviewerPrompt:
     """Codex reviewer prompt plus deterministic findings metadata."""
 
@@ -1161,6 +1170,89 @@ def write_prompt_output(path: Path, prompt: str, *, overwrite: bool) -> None:
 def render_review_findings(path: Path, task: str, text: str) -> str:
     """Render compact reviewer findings for a Codex output file."""
     return review_codex_output(task=task, output=text, source=str(path.resolve())).text
+
+
+def render_supervised_outcome_report(
+    *,
+    task: str,
+    repo: Path | None,
+    codex_output: str,
+    source: str,
+    repo_alias: str | None = None,
+) -> OutcomeReport:
+    """Render a supervised ECC outcome report without executing Codex or inspecting git."""
+    selection = _select_context(repo, task, repo_alias=repo_alias)
+    task_mode = _classify_task_mode(task)
+    skills = _selected_prompt_skills(task, task_mode)
+    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    pack = discover_protector_pack(include_benchmarks=True)
+    selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
+    selected_pack_skills = tuple(skill for skill in skills if skill.source == "pack")
+    selected_runtime_skills = tuple(skill for skill in skills if skill.source != "pack")
+    expected_files = _expected_files_likely_to_change(selected_paths)
+    actual_changed_files = _output_section_items(codex_output, "Files changed")
+    expected_validation = _expected_review_validation_scope(task, task_mode, skills)
+    actual_validation = _output_section_items(codex_output, "Validation")
+    review = _review_codex_output(task, codex_output)
+    selected_skill_deviations = _selected_skill_behavior_deviations(codex_output, selected_pack_skills, selected_runtime_skills)
+    blocker_deviations = _outcome_blocker_deviations(pack, selected_pack_skills, coverage)
+    file_deviations = _changed_file_deviations(expected_files, actual_changed_files)
+    validation_gaps = _outcome_validation_gaps(expected_validation, actual_validation, review.validation_warnings)
+    pass_fail_gaps = _pass_fail_consistency_gaps(codex_output, review)
+    deviations = _unique_preserve_order([*file_deviations, *selected_skill_deviations, *blocker_deviations, *review.drift_warnings, *pass_fail_gaps])
+    status = _outcome_status(review, deviations=tuple(deviations), validation_gaps=validation_gaps)
+    follow_up = _outcome_follow_up_prompt(task, deviations=tuple(deviations), validation_gaps=validation_gaps, status=status)
+    benchmark_additions = _suggested_benchmark_additions(selected_pack_skills, coverage, codex_output, deviations)
+    text = f"""ECC Supervised Outcome Report
+Status: {status}
+Codex output: {source}
+Original planned task:
+- {_task_objective(task)}
+
+Selected pack:
+- Name: {pack.name}
+- Validation: {pack.validation_status}
+- Benchmark validation: {pack.benchmark_validation_status}
+
+Selected skills:
+{_render_skill_source_rows(skills, coverage)}
+
+Knowledge used:
+{_one_line_list(_knowledge_used_rows(selection))}
+
+Expected files likely to change:
+{_one_line_list(expected_files)}
+
+Actual files changed:
+{_one_line_list(actual_changed_files)}
+
+Deviations from plan:
+{_one_line_list(tuple(deviations))}
+
+Expected validation scope:
+{_one_line_list(expected_validation)}
+
+Executed validation:
+{_one_line_list(actual_validation)}
+
+Validation gaps:
+{_one_line_list(validation_gaps)}
+
+PASS/FAIL consistency:
+{_one_line_list(pass_fail_gaps)}
+
+Suggested benchmark additions:
+{_one_line_list(benchmark_additions)}
+
+Follow-up prompt:
+- {follow_up or "(none)"}
+
+Supervision boundaries:
+- Codex execution was not invoked.
+- Git diffs were not inspected automatically.
+- No memory/session persistence was written.
+- No autonomous loop was started."""
+    return OutcomeReport(text=text, status=status, follow_up=follow_up)
 
 
 def review_codex_output(*, task: str, output: str, source: str) -> ReviewFindings:
@@ -2133,6 +2225,40 @@ def _contains_section(text: str, section: str) -> bool:
     return re.search(rf"(^|\n)\s*-?\s*{re.escape(section)}\b", text, flags=re.IGNORECASE) is not None
 
 
+def _output_section_items(text: str, section: str) -> tuple[str, ...]:
+    """Extract simple bullet/plain lines from one Codex output section."""
+    lines = text.splitlines()
+    start = _section_start_index(lines, section)
+    if start is None:
+        return ()
+    items: list[str] = []
+    for raw in lines[start + 1 :]:
+        stripped = raw.strip()
+        if _is_known_output_section_header(stripped):
+            break
+        if not stripped:
+            continue
+        if stripped.startswith("- "):
+            stripped = stripped[2:].strip()
+        items.append(stripped)
+    return tuple(items)
+
+
+def _section_start_index(lines: list[str], section: str) -> int | None:
+    """Return the index of a section header line."""
+    pattern = re.compile(rf"^\s*-?\s*{re.escape(section)}\s*:?\s*$", flags=re.IGNORECASE)
+    for index, line in enumerate(lines):
+        if pattern.match(line):
+            return index
+    return None
+
+
+def _is_known_output_section_header(line: str) -> bool:
+    """Return whether a line starts a known Codex output section."""
+    headers = ("Files read", "Files changed", "Summary", "Validation", "PASS", "FAIL")
+    return any(re.fullmatch(rf"{re.escape(header)}\s*:?", line, flags=re.IGNORECASE) for header in headers)
+
+
 def _has_pass_or_fail(text: str) -> bool:
     """Return whether `text` contains an explicit PASS or FAIL token."""
     return re.search(r"\b(PASS|FAIL)\b", text, flags=re.IGNORECASE) is not None
@@ -2187,3 +2313,128 @@ def _review_codex_output(task: str, output: str) -> _ReviewResult:
         validation_warnings=tuple(validation_warnings),
         follow_up=follow_up,
     )
+
+
+def _changed_file_deviations(expected_files: tuple[str, ...], actual_files: tuple[str, ...]) -> tuple[str, ...]:
+    """Return file-change deviations from the supervised plan."""
+    if not actual_files:
+        return ("Codex output did not report changed files.",)
+    if expected_files and expected_files[0].startswith("Unknown until Codex"):
+        return ()
+    expected_tokens = _tokens(" ".join(expected_files))
+    deviations: list[str] = []
+    for file in actual_files:
+        if file.lower() in {"(none)", "none"}:
+            continue
+        if not (_tokens(file) & expected_tokens):
+            deviations.append(f"Changed file outside expected plan context: {file}")
+    return tuple(deviations)
+
+
+def _outcome_validation_gaps(
+    expected_validation: tuple[str, ...],
+    actual_validation: tuple[str, ...],
+    deterministic_warnings: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return validation gaps compared with the review contract."""
+    gaps = list(deterministic_warnings)
+    if not actual_validation:
+        gaps.append("Codex output did not report executed validation.")
+    elif not _validation_evidence_present(" ".join(actual_validation)):
+        gaps.append("Reported validation lacks build/test/smoke/check evidence.")
+    expected_tokens = _tokens(" ".join(expected_validation))
+    actual_tokens = _tokens(" ".join(actual_validation))
+    missing_terms = tuple(sorted((expected_tokens & {"build", "check", "smoke", "test", "verified", "workflow", "ui"}) - actual_tokens))
+    if missing_terms:
+        gaps.append(f"Validation may not cover expected scope terms: {', '.join(missing_terms)}.")
+    return tuple(_unique_preserve_order(gaps))
+
+
+def _selected_skill_behavior_deviations(
+    output: str,
+    selected_pack_skills: tuple[PromptSkill, ...],
+    selected_runtime_skills: tuple[PromptSkill, ...],
+) -> tuple[str, ...]:
+    """Return deviations between selected skills and described Codex behavior."""
+    output_tokens = _tokens(output)
+    deviations: list[str] = []
+    for skill in selected_pack_skills:
+        skill_terms = _tokens(" ".join((skill.name, skill.expected_behavior or "", *skill.scope_rules, *skill.restriction_rules)))
+        if skill_terms and not (output_tokens & skill_terms):
+            deviations.append(f"Codex output does not mention behavior tied to selected pack skill: {skill.name}")
+    if selected_runtime_skills and not any(skill.name == "base_prompt_quality" for skill in selected_runtime_skills):
+        deviations.append("Runtime fallback was selected; verify generic behavior did not replace pack-specific constraints.")
+    return tuple(deviations)
+
+
+def _outcome_blocker_deviations(
+    pack: object,
+    selected_pack_skills: tuple[PromptSkill, ...],
+    coverage: dict[str, tuple[str, ...]],
+) -> tuple[str, ...]:
+    """Return pack or benchmark blockers visible at outcome time."""
+    missing_coverage = tuple(skill.name for skill in selected_pack_skills if not coverage.get(skill.name))
+    blockers = _ecc_supervised_blockers(pack, missing_coverage)
+    return tuple(item for item in blockers if item != "None for read-only supervised planning.")
+
+
+def _pass_fail_consistency_gaps(output: str, review: _ReviewResult) -> tuple[str, ...]:
+    """Return PASS/FAIL consistency findings."""
+    verdict = _status_token(output)
+    if verdict is None:
+        return ("Codex output did not include PASS or FAIL.",)
+    if verdict == "PASS" and review.status != "PASS":
+        return ("Codex claimed PASS but deterministic review found unresolved gaps.",)
+    if verdict == "FAIL" and review.status == "FAIL":
+        return ("Codex reported FAIL; outcome cannot be accepted.",)
+    return ()
+
+
+def _outcome_status(
+    review: _ReviewResult,
+    *,
+    deviations: tuple[str, ...],
+    validation_gaps: tuple[str, ...],
+) -> str:
+    """Return accepted / needs review / failed for an outcome report."""
+    if review.status == "FAIL" or any("reported FAIL" in item for item in deviations):
+        return "failed"
+    meaningful_deviations = tuple(item for item in deviations if item != "None for read-only supervised planning.")
+    if review.status != "PASS" or meaningful_deviations or validation_gaps:
+        return "needs review"
+    return "accepted"
+
+
+def _outcome_follow_up_prompt(
+    task: str,
+    *,
+    deviations: tuple[str, ...],
+    validation_gaps: tuple[str, ...],
+    status: str,
+) -> str | None:
+    """Return a compact follow-up prompt when the outcome is not accepted."""
+    if status == "accepted":
+        return None
+    issues = tuple(item for item in (*deviations, *validation_gaps) if item != "None for read-only supervised planning.")
+    issue_text = "; ".join(issues[:4]) or "Outcome requires supervised review."
+    return f"Revise or justify the Codex result for: {task}. Address these outcome gaps: {issue_text}."
+
+
+def _suggested_benchmark_additions(
+    selected_pack_skills: tuple[PromptSkill, ...],
+    coverage: dict[str, tuple[str, ...]],
+    output: str,
+    deviations: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Suggest benchmark additions only for real uncovered behavior described by the output."""
+    suggestions: list[str] = []
+    output_tokens = _tokens(output)
+    for skill in selected_pack_skills:
+        if coverage.get(skill.name):
+            continue
+        skill_terms = _tokens(" ".join((skill.name, skill.expected_behavior or "")))
+        if output_tokens & skill_terms:
+            suggestions.append(f"Add prompt benchmark coverage for uncovered pack skill: {skill.name}.")
+    if any("does not mention behavior tied to selected pack skill" in item for item in deviations):
+        suggestions.append("No benchmark addition suggested until the real uncovered behavior is clarified.")
+    return tuple(suggestions) or ("(none)",)

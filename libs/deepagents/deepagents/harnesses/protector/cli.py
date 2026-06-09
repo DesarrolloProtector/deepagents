@@ -27,6 +27,7 @@ from deepagents.harnesses.protector._engineering import (
     render_output,
     render_prompt_benchmark_report,
     render_review_findings,
+    render_supervised_outcome_report,
     resolve_harness_profile,
     review_codex_output,
     run_prompt_benchmarks,
@@ -48,7 +49,7 @@ _MIN_POSITIONAL_REPO_TASK_ARGS = 2
 _INTERACTIVE_SENTINEL = "END"
 _GMEM_MOVEABLE = 0x0002
 _CF_UNICODETEXT = 13
-STABLE_ECC_PACK_COMMANDS = ("task", "review", "review-codex", "benchmark", "ecc-status")
+STABLE_ECC_PACK_COMMANDS = ("task", "review", "review-codex", "outcome", "benchmark", "ecc-status")
 DEPRECATED_PLATFORM_COMPATIBILITY_COMMANDS = ("plan",)
 
 
@@ -194,6 +195,12 @@ def _build_parser() -> argparse.ArgumentParser:
     review_codex.add_argument("--no-copy", action="store_true", help="Print the generated reviewer prompt instead of copying it to the clipboard.")
     review_codex.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     review_codex.add_argument("task", nargs="*", help="Original task text used to build the reviewer prompt.")
+
+    outcome = subparsers.add_parser("outcome", help="Compare pasted Codex output against the ECC supervised plan/review contract.")
+    outcome.add_argument("--repo", default=None, help="Explicit target repository path.")
+    outcome.add_argument("--codex-output", type=Path, required=True, help="Text file containing Codex implementation output to capture.")
+    outcome.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
+    outcome.add_argument("task", nargs="*", help="Original planned task text used to compare the outcome.")
 
     plan = subparsers.add_parser(
         "plan",
@@ -552,6 +559,22 @@ def _run_review_codex(args: argparse.Namespace, parser: argparse.ArgumentParser)
     return 0
 
 
+def _run_outcome(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph outcome`."""
+    repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
+    text = args.codex_output.read_text(encoding="utf-8")
+    report = render_supervised_outcome_report(
+        task=task,
+        repo=repo,
+        repo_alias=repo_alias,
+        codex_output=text,
+        source=str(args.codex_output.resolve()),
+    )
+    sys.stdout.write(report.text)
+    sys.stdout.write("\n")
+    return 0
+
+
 def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run the deprecated `ph plan` compatibility view."""
     repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
@@ -619,7 +642,7 @@ def _run_benchmark(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     return 0 if all(result.passed for result in results) else 1
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901  # explicit argparse dispatch keeps command behavior readable
     """Run the `ph` CLI."""
     _configure_utf8_stdio()
     parser = _build_parser()
@@ -630,6 +653,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = _run_review(args, parser)
     elif args.command == "review-codex":
         result = _run_review_codex(args, parser)
+    elif args.command == "outcome":
+        result = _run_outcome(args, parser)
     elif args.command == "plan":
         result = _run_plan(args, parser)
     elif args.command == "run":

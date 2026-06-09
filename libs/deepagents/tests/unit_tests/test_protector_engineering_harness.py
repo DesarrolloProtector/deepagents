@@ -409,7 +409,7 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
 
 def test_protector_platform_boundaries_are_explicit() -> None:
     assert agentic.PLATFORM_COMPATIBILITY_STATUS == "deprecated_compatibility_layer"
-    assert cli.STABLE_ECC_PACK_COMMANDS == ("task", "review", "review-codex", "benchmark", "ecc-status")
+    assert cli.STABLE_ECC_PACK_COMMANDS == ("task", "review", "review-codex", "outcome", "benchmark", "ecc-status")
     assert cli.DEPRECATED_PLATFORM_COMPATIBILITY_COMMANDS == ("plan",)
     assert any("ECC owns reusable agents" in boundary for boundary in agentic.PLATFORM_COMPATIBILITY_BOUNDARIES)
     assert any("Discovery is read-only" in boundary for boundary in ecc.ECC_DISCOVERY_BOUNDARY)
@@ -693,6 +693,101 @@ def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
     assert "Reject dashboard/session/workflow-engine/agent-loop additions unless the task explicitly requested them." in rendered.text
     assert "PASS/FAIL criteria:" in rendered.text
     assert "PASS only if the Codex output addresses the proposed task and respects every selected pack-skill restriction." in rendered.text
+
+
+def test_supervised_outcome_report_accepts_plan_consistent_codex_output(tmp_path: Path) -> None:
+    report = engineering.render_supervised_outcome_report(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+        codex_output="""Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build verified and UI workflow route smoke test check passed.
+
+PASS
+""",
+        source="codex-output.txt",
+    )
+
+    assert report.status == "accepted"
+    assert report.follow_up is None
+    assert "ECC Supervised Outcome Report" in report.text
+    assert "Status: accepted" in report.text
+    assert "Selected skills:" in report.text
+    assert "navigation_surface_convergence [pack] - covered by legacy-onboarding-path-convergence, navigation-convergence" in report.text
+    assert "Knowledge used:" in report.text
+    assert "Actual files changed:\n- Views/Operator/Index.cshtml" in report.text
+    assert "Deviations from plan:\n- (none)" in report.text
+    assert "Validation gaps:\n- (none)" in report.text
+    assert "PASS/FAIL consistency:\n- (none)" in report.text
+    assert "Follow-up prompt:\n- (none)" in report.text
+    assert "Codex execution was not invoked." in report.text
+    assert "Git diffs were not inspected automatically." in report.text
+
+
+def test_supervised_outcome_report_flags_drift_and_validation_gaps(tmp_path: Path) -> None:
+    report = engineering.render_supervised_outcome_report(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+        codex_output="""Summary
+- Added dashboard memory graph governance changes.
+
+Validation
+- not run
+
+PASS
+""",
+        source="codex-output.txt",
+    )
+
+    assert report.status == "needs review"
+    assert report.follow_up is not None
+    assert "Status: needs review" in report.text
+    assert "Codex output did not report changed files." in report.text
+    assert "dashboard mentioned without task scope" in report.text
+    assert "memory mentioned without task scope" in report.text
+    assert "Codex claimed PASS but deterministic review found unresolved gaps." in report.text
+    assert "Reported validation lacks build/test/smoke/check evidence." in report.text
+    assert "Follow-up prompt:\n- Revise or justify the Codex result" in report.text
+
+
+def test_supervised_outcome_report_marks_reported_fail_as_failed(tmp_path: Path) -> None:
+    report = engineering.render_supervised_outcome_report(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+        codex_output="""Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Blocked before changing navigation route menu view operator onboarding convergence.
+
+Validation
+- Build not run because the task was blocked.
+
+FAIL
+""",
+        source="codex-output.txt",
+    )
+
+    assert report.status == "failed"
+    assert "Status: failed" in report.text
+    assert "Codex reported FAIL; outcome cannot be accepted." in report.text
+    assert "Follow-up prompt:\n- Revise or justify the Codex result" in report.text
 
 
 def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:
@@ -1624,6 +1719,64 @@ PASS
     assert stdout.startswith("Codex Reviewer Prompt\n")
     assert "Implementation Codex output:" in stdout
     assert "Deterministic reviewer findings:" in stdout
+
+
+def test_cli_outcome_prints_supervised_outcome_report(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_output = tmp_path / "codex-output.txt"
+    codex_output.write_text(
+        """Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build verified and UI workflow route smoke test check passed.
+
+PASS
+""",
+        encoding="utf-8",
+    )
+
+    def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
+        _ = text
+        msg = "clipboard should not be used by ph outcome"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
+
+    assert (
+        cli.main(
+            [
+                "outcome",
+                "--repo",
+                str(repo),
+                "--codex-output",
+                str(codex_output),
+                "Fix",
+                "legacy",
+                "onboarding",
+                "path",
+                "convergence",
+                "for",
+                "operator",
+                "UI",
+                "views",
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    assert stdout.startswith("ECC Supervised Outcome Report\n")
+    assert "Status: accepted" in stdout
+    assert "Actual files changed:\n- Views/Operator/Index.cshtml" in stdout
+    assert "Supervision boundaries:" in stdout
 
 
 def test_cli_task_unknown_alias_fails(capsys) -> None:
