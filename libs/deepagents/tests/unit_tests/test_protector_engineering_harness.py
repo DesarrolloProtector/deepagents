@@ -290,6 +290,12 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
     assert "Relevant profiles: 1" in output
     assert "Codex execution: disabled" in output
     assert "Protector role: ECC-backed specialization layer" in output
+    assert "Protector pack:" in output
+    assert "- Discovered: yes" in output
+    assert "- Name: protector-financiacioncore" in output
+    assert "- Skills: 5" in output
+    assert "- Knowledge: 1" in output
+    assert "- Validation: valid" in output
 
 
 def test_protector_platform_boundaries_are_explicit() -> None:
@@ -329,6 +335,17 @@ def test_protector_ecc_pack_files_are_discoverable() -> None:
         text = (pack / relative).read_text(encoding="utf-8")
         assert "origin: Protector ECC pack" in text
         assert text.startswith("---\n")
+
+
+def test_protector_pack_discovery_validates_static_pack() -> None:
+    discovery = ecc.discover_protector_pack()
+
+    assert discovery.found
+    assert discovery.name == "protector-financiacioncore"
+    assert discovery.skills_count == 5
+    assert discovery.knowledge_count == 1
+    assert discovery.validation_status == "valid"
+    assert discovery.warnings == ()
 
 
 def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:

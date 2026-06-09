@@ -22,6 +22,7 @@ ECC_DISCOVERY_BOUNDARY = (
     "No Codex execution, model calls, shell execution, or autonomous loops happen here.",
     "Protector uses this adapter only to expose ECC availability while remaining a specialization pack.",
 )
+PROTECTOR_PACK_RELATIVE_PATH = Path("packs") / "protector-financiacioncore"
 _PROTECTOR_CONFIG_DIR = ".protector-harness"
 _ECC_CONFIG_FILE = "ecc.json"
 _RELEVANT_TERMS = frozenset(
@@ -79,6 +80,19 @@ class EccDiscovery:
     warnings: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ProtectorPackDiscovery:
+    """Read-only Protector pack discovery result for status surfaces."""
+
+    path: Path | None
+    found: bool
+    name: str
+    skills_count: int
+    knowledge_count: int
+    validation_status: str
+    warnings: tuple[str, ...]
+
+
 def default_ecc_config_path() -> Path:
     """Return the local Protector ECC config path."""
     override = os.environ.get(ECC_CONFIG_ENV_VAR)
@@ -112,10 +126,52 @@ def discover_ecc() -> EccDiscovery:
     )
 
 
-def render_ecc_status(discovery: EccDiscovery | None = None) -> str:
+def discover_protector_pack() -> ProtectorPackDiscovery:
+    """Discover and validate the repo-local Protector ECC pack manifest."""
+    manifest_path = _find_protector_pack_manifest()
+    if manifest_path is None:
+        return ProtectorPackDiscovery(
+            path=None,
+            found=False,
+            name="(not found)",
+            skills_count=0,
+            knowledge_count=0,
+            validation_status="missing",
+            warnings=(),
+        )
+
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        warning = f"invalid Protector pack JSON at {manifest_path}: {exc.msg}"
+        return ProtectorPackDiscovery(
+            path=manifest_path.parent,
+            found=True,
+            name="(invalid)",
+            skills_count=0,
+            knowledge_count=0,
+            validation_status="invalid",
+            warnings=(warning,),
+        )
+
+    warnings = _validate_protector_pack_manifest(manifest_path.parent, data)
+    return ProtectorPackDiscovery(
+        path=manifest_path.parent,
+        found=True,
+        name=_manifest_string(data, "name", "(unnamed)"),
+        skills_count=len(_manifest_items(data, "skills")),
+        knowledge_count=len(_manifest_items(data, "knowledge")),
+        validation_status="valid" if not warnings else "invalid",
+        warnings=warnings,
+    )
+
+
+def render_ecc_status(discovery: EccDiscovery | None = None, pack_discovery: ProtectorPackDiscovery | None = None) -> str:
     """Render compact ECC discovery status for `ph ecc-status`."""
     result = discovery or discover_ecc()
+    pack = pack_discovery or discover_protector_pack()
     path = str(result.path) if result.path is not None else "(not found)"
+    pack_path = str(pack.path) if pack.path is not None else "(not found)"
     rows = [
         "Protector ECC Status",
         f"ECC path: {path}",
@@ -134,6 +190,15 @@ def render_ecc_status(discovery: EccDiscovery | None = None) -> str:
         _render_names(tuple(skill.name for skill in result.skills)),
         "Profiles:",
         _render_names(tuple(profile.name for profile in result.profiles)),
+        "Protector pack:",
+        f"- Path: {pack_path}",
+        f"- Discovered: {_yes_no(value=pack.found)}",
+        f"- Name: {pack.name}",
+        f"- Skills: {pack.skills_count}",
+        f"- Knowledge: {pack.knowledge_count}",
+        f"- Validation: {pack.validation_status}",
+        "Protector pack warnings:",
+        _render_names(pack.warnings),
         "Warnings:",
         _render_names(result.warnings),
     ]
@@ -199,6 +264,73 @@ def _package_roots() -> tuple[Path, ...]:
 def _looks_like_ecc_repo(path: Path) -> bool:
     """Return whether `path` has the minimal ECC repository shape."""
     return path.is_dir() and (path / "agents").is_dir() and (path / "skills").is_dir()
+
+
+def _find_protector_pack_manifest() -> Path | None:
+    """Return the repo-local Protector pack manifest when present."""
+    for base in (Path.cwd(), *_package_roots()):
+        for parent in (base, *base.parents):
+            candidate = parent / PROTECTOR_PACK_RELATIVE_PATH / "pack.json"
+            if candidate.is_file():
+                return candidate.resolve()
+    return None
+
+
+def _validate_protector_pack_manifest(root: Path, data: object) -> tuple[str, ...]:
+    """Validate the static Protector pack manifest without loading pack behavior."""
+    if not isinstance(data, dict):
+        return (f"Protector pack manifest must be a JSON object: {root / 'pack.json'}",)
+
+    warnings: list[str] = []
+    if _manifest_string(data, "name", "") != "protector-financiacioncore":
+        warnings.append("Protector pack manifest name must be protector-financiacioncore")
+
+    runtime = data.get("runtime_behavior")
+    expected_runtime = {
+        "loaded_by_ph": False,
+        "changes_prompt_output": False,
+        "codex_execution": False,
+        "model_calls": False,
+        "autonomous_loops": False,
+    }
+    if runtime != expected_runtime:
+        warnings.append("Protector pack runtime_behavior must keep ph loading, prompt changes, Codex execution, model calls, and loops disabled")
+
+    warnings.extend(_validate_manifest_paths(root, _manifest_items(data, "skills"), item_name="skill"))
+    warnings.extend(_validate_manifest_paths(root, _manifest_items(data, "knowledge"), item_name="knowledge"))
+    return tuple(warnings)
+
+
+def _validate_manifest_paths(root: Path, items: tuple[object, ...], *, item_name: str) -> tuple[str, ...]:
+    """Validate manifest entries that reference repo-local files."""
+    warnings: list[str] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            warnings.append(f"Protector pack {item_name} entry {index} must be an object")
+            continue
+        path = item.get("path")
+        if not isinstance(path, str) or not path:
+            warnings.append(f"Protector pack {item_name} entry {index} must include a path")
+            continue
+        if not (root / path).is_file():
+            warnings.append(f"Protector pack {item_name} path does not exist: {path}")
+    return tuple(warnings)
+
+
+def _manifest_items(data: object, key: str) -> tuple[object, ...]:
+    """Return a manifest list field as a tuple."""
+    if not isinstance(data, dict):
+        return ()
+    value = data.get(key)
+    return tuple(value) if isinstance(value, list) else ()
+
+
+def _manifest_string(data: object, key: str, default: str) -> str:
+    """Return a manifest string field."""
+    if not isinstance(data, dict):
+        return default
+    value = data.get(key)
+    return value if isinstance(value, str) else default
 
 
 def _discover_capability_files(root: Path, pattern: str) -> tuple[EccCapability, ...]:
