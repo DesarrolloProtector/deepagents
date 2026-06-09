@@ -15,6 +15,7 @@ from pydantic import Field
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.harnesses.protector._agentic import build_execution_plan, render_execution_plan as render_agentic_execution_plan
+from deepagents.harnesses.protector._ecc import discover_protector_pack
 from deepagents.harnesses.protector._prompt_skills import PromptSkill, select_prompt_skills
 
 if TYPE_CHECKING:
@@ -445,6 +446,7 @@ class _RepoKnowledge:
     alias: str
     path: Path
     summary: tuple[str, ...]
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1067,6 +1069,8 @@ def _select_context(repo: Path | None, task: str, *, repo_alias: str | None = No
     if context.feature_contract is not None and selected_feature_contract is None:
         not_selected.append(f"{_relative_path(context.root, context.feature_contract)} (task does not suggest feature/contract behavior)")
     not_selected.extend(f"{warning} (expected artifact not found)" for warning in context.warnings)
+    if knowledge is not None:
+        not_selected.extend(knowledge.warnings)
     return _ContextSelection(
         selected=tuple(selected),
         not_selected=tuple(not_selected),
@@ -1086,16 +1090,13 @@ Not Selected:
 def _load_repo_knowledge(repo: Path, task: str, *, repo_alias: str | None) -> _RepoKnowledge | None:
     """Load compact repo knowledge for the resolved repo alias when available."""
     alias_candidates = _repo_knowledge_alias_candidates(repo, repo_alias)
-    for directory in _knowledge_directories():
-        for alias in alias_candidates:
-            path = directory / f"{alias}.md"
-            if not path.is_file():
-                continue
-            sections = _parse_repo_knowledge_sections(path.read_text(encoding="utf-8"))
-            summary = _compact_repo_knowledge_summary(sections, task)
-            if not summary:
-                return None
-            return _RepoKnowledge(alias=alias, path=path.resolve(), summary=summary)
+    for candidate in _repo_knowledge_candidates(alias_candidates):
+        sections = _parse_repo_knowledge_sections(candidate.path.read_text(encoding="utf-8"))
+        summary = _compact_repo_knowledge_summary(sections, task)
+        if not summary:
+            return None
+        warnings = _repo_knowledge_duplicate_warnings(candidate)
+        return _RepoKnowledge(alias=candidate.alias, path=candidate.path.resolve(), summary=summary, warnings=warnings)
     return None
 
 
@@ -1112,6 +1113,83 @@ def _knowledge_directories() -> tuple[Path, ...]:
     """Return possible Protector knowledge directories without scanning repos."""
     candidates = [base / ".protector-harness" / "knowledge" for base in (Path.cwd().resolve(), *Path(__file__).resolve().parents)]
     return tuple(path for path in _unique_paths(candidates) if path.is_dir())
+
+
+@dataclass(frozen=True)
+class _RepoKnowledgeCandidate:
+    """One ordered repo knowledge candidate."""
+
+    alias: str
+    path: Path
+    source: str
+    duplicate: Path | None = None
+
+
+def _repo_knowledge_candidates(alias_candidates: tuple[str, ...]) -> tuple[_RepoKnowledgeCandidate, ...]:
+    """Return pack knowledge candidates before legacy duplicates."""
+    candidates: list[_RepoKnowledgeCandidate] = []
+    pack_directory = _valid_pack_knowledge_directory()
+    legacy_directories = _knowledge_directories()
+
+    if pack_directory is not None:
+        for alias in alias_candidates:
+            path = pack_directory / f"{alias}.md"
+            if path.is_file():
+                candidates.append(
+                    _RepoKnowledgeCandidate(
+                        alias=alias,
+                        path=path.resolve(),
+                        source="pack",
+                        duplicate=_first_legacy_duplicate(alias, legacy_directories),
+                    )
+                )
+
+    for directory in legacy_directories:
+        for alias in alias_candidates:
+            path = directory / f"{alias}.md"
+            if path.is_file():
+                candidates.append(_RepoKnowledgeCandidate(alias=alias, path=path.resolve(), source="legacy"))
+    return _dedupe_knowledge_candidates(tuple(candidates))
+
+
+def _valid_pack_knowledge_directory() -> Path | None:
+    """Return the Protector pack knowledge directory when the pack is valid."""
+    pack = discover_protector_pack()
+    if not pack.found or pack.validation_status != "valid" or pack.path is None:
+        return None
+    directory = pack.path / "knowledge"
+    return directory if directory.is_dir() else None
+
+
+def _first_legacy_duplicate(alias: str, legacy_directories: tuple[Path, ...]) -> Path | None:
+    """Return the first legacy knowledge duplicate for an alias."""
+    for directory in legacy_directories:
+        path = directory / f"{alias}.md"
+        if path.is_file():
+            return path.resolve()
+    return None
+
+
+def _repo_knowledge_duplicate_warnings(candidate: _RepoKnowledgeCandidate) -> tuple[str, ...]:
+    """Return a warning when pack and legacy knowledge diverge."""
+    if candidate.source != "pack" or candidate.duplicate is None:
+        return ()
+    if candidate.path.read_text(encoding="utf-8") == candidate.duplicate.read_text(encoding="utf-8"):
+        return ()
+    return (f"pack knowledge differs from legacy duplicate for {candidate.alias}: {candidate.path} vs {candidate.duplicate}",)
+
+
+def _dedupe_knowledge_candidates(candidates: tuple[_RepoKnowledgeCandidate, ...]) -> tuple[_RepoKnowledgeCandidate, ...]:
+    """Return candidates by first alias/source/path occurrence."""
+    seen: set[tuple[str, Path]] = set()
+    result: list[_RepoKnowledgeCandidate] = []
+    for candidate in candidates:
+        key = (candidate.alias, candidate.path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+    return tuple(result)
 
 
 def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:

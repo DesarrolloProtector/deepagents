@@ -215,7 +215,7 @@ def test_financiacioncore_short_task_uses_compact_repo_knowledge(tmp_path: Path)
     )
 
     assert "Repo knowledge:" in rendered.codex_prompt
-    assert "FinanciacionCore.md" in rendered.codex_prompt
+    assert "protector-financiacioncore/knowledge/FinanciacionCore.md" in rendered.codex_prompt.replace("\\", "/")
     assert "Preserve contract-first company and financer onboarding as the promoted workflow." in rendered.codex_prompt
     assert "Legacy direct routes may stay backend-compatible, but should not be promoted in normal UI." in rendered.codex_prompt
     assert "Avoid broad audits unless the task explicitly requests one." in rendered.codex_prompt
@@ -225,6 +225,62 @@ def test_financiacioncore_short_task_uses_compact_repo_knowledge(tmp_path: Path)
     knowledge_block = rendered.codex_prompt.split("Repo knowledge:\n", maxsplit=1)[1].split("\nScope boundaries:", maxsplit=1)[0]
     knowledge_lines = [line for line in knowledge_block.splitlines() if line.startswith("- ")]
     assert len(knowledge_lines) <= 6
+
+
+def test_pack_knowledge_warns_when_legacy_duplicate_differs(tmp_path: Path, monkeypatch) -> None:
+    pack = tmp_path / "pack"
+    legacy = tmp_path / "legacy"
+    pack_knowledge = pack / "knowledge" / "FinanciacionCore.md"
+    legacy_knowledge = legacy / "FinanciacionCore.md"
+    pack_knowledge.parent.mkdir(parents=True)
+    legacy_knowledge.parent.mkdir(parents=True)
+    pack_knowledge.write_text(
+        """# FinanciacionCore
+
+## Current phase
+
+- MVP convergence toward a usable SaaS as soon as possible.
+""",
+        encoding="utf-8",
+    )
+    legacy_knowledge.write_text(
+        """# FinanciacionCore
+
+## Current phase
+
+- Legacy-only divergent content.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        engineering,
+        "discover_protector_pack",
+        lambda: ecc.ProtectorPackDiscovery(
+            path=pack,
+            found=True,
+            name="protector-financiacioncore",
+            skills_count=5,
+            knowledge_count=1,
+            validation_status="valid",
+            warnings=(),
+        ),
+    )
+    monkeypatch.setattr(engineering, "_knowledge_directories", lambda: (legacy,))
+
+    rendered = engineering.render_output(
+        task="Fix legacy onboarding path convergence",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+        mode="auto",
+        harness_profile=engineering.HARNESS_PROFILE,
+        real_model=None,
+        agent_type="CompiledStateGraph",
+        output=None,
+    )
+
+    assert str(pack_knowledge.resolve()) in rendered.payload
+    assert "pack knowledge differs from legacy duplicate for FinanciacionCore" in rendered.payload
+    assert "Legacy-only divergent content" not in rendered.codex_prompt
 
 
 def test_agentic_registries_define_initial_infrastructure() -> None:
