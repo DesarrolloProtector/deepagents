@@ -16,6 +16,14 @@ public sealed record PromptResult(string Prompt, string TaskMode, int SelectedCo
 
 public sealed record ReviewResult(string Text, string Status);
 
+public sealed record ExecutionPlanResult(
+    string Text,
+    string Profile,
+    IReadOnlyList<string> Agents,
+    IReadOnlyList<string> Skills,
+    IReadOnlyList<string> SafetyGates
+);
+
 public sealed class PhBackend
 {
     private static readonly Encoding Utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
@@ -116,6 +124,24 @@ public sealed class PhBackend
         }
     }
 
+    public async Task<ExecutionPlanResult> GenerateExecutionPlanAsync(string repo, string task, CancellationToken cancellationToken)
+    {
+        ProcessResult result = await RunPhAsync(["plan", repo, task], cancellationToken);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(DescribeFailure("ph plan", result));
+        }
+
+        string text = result.Stdout.TrimEnd();
+        return new ExecutionPlanResult(
+            text,
+            ParseProfile(text),
+            ParseSectionNames(text, "Agents"),
+            ParseSectionNames(text, "Skills"),
+            ParseSafetyGates(text)
+        );
+    }
+
     private async Task<ProcessResult> RunPhAsync(IReadOnlyList<string> args, CancellationToken cancellationToken)
     {
         try
@@ -200,6 +226,56 @@ public sealed class PhBackend
     {
         Match match = Regex.Match(text, @"(?im)^Status:\s*(?<status>PASS|REVIEW_NEEDED)\s*$");
         return match.Success ? match.Groups["status"].Value : "(unknown)";
+    }
+
+    private static string ParseProfile(string text)
+    {
+        Match match = Regex.Match(text, @"(?im)^Profile:\s*(?<profile>\S+)\s*$");
+        return match.Success ? match.Groups["profile"].Value : "(unknown)";
+    }
+
+    private static IReadOnlyList<string> ParseSectionNames(string text, string section)
+    {
+        return SectionLines(text, section)
+            .SplitLines()
+            .Select(line => Regex.Match(line, @"^\s*-\s*(?<name>[^:]+):"))
+            .Where(item => item.Success)
+            .Select(item => item.Groups["name"].Value.Trim())
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> ParseSafetyGates(string text)
+    {
+        return SectionLines(text, "Safety gates")
+            .SplitLines()
+            .Select(line => Regex.Match(line, @"^\s*-\s*(?<gate>.+?)\s*$"))
+            .Where(item => item.Success)
+            .Select(item => item.Groups["gate"].Value)
+            .ToArray();
+    }
+
+    private static string SectionLines(string text, string section)
+    {
+        string[] lines = text.SplitLines();
+        List<string> selected = [];
+        bool inSection = false;
+        foreach (string line in lines)
+        {
+            if (!inSection)
+            {
+                inSection = string.Equals(line.Trim(), $"{section}:", StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            if (line.Trim().Length == 0)
+            {
+                break;
+            }
+
+            selected.Add(line);
+        }
+
+        return string.Join('\n', selected);
     }
 
     private static int ParseSelectedContextCount(string prompt)

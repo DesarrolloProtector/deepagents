@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from deepagents.harnesses.protector import _engineering as engineering, cli
+from deepagents.harnesses.protector import _agentic as agentic, _ecc as ecc, _engineering as engineering, cli
 
 
 def _write(path: Path, text: str = "x") -> None:
@@ -25,6 +25,33 @@ def _build_repo(root: Path) -> Path:
     _write(root / "Docs" / "flows" / "payment-c.md")
     _write(root / "Docs" / "flows" / "nested" / "payment-nested.md")
     _write(root / ".codex" / "agent-workflow" / "feature-contract-template.md")
+    return root
+
+
+def _build_ecc_repo(root: Path) -> Path:
+    _write(root / "agents" / "code-reviewer.md")
+    _write(root / "agents" / "planner.md")
+    _write(root / "agents" / "unrelated.md")
+    _write(root / "skills" / "prompt-optimizer" / "SKILL.md")
+    _write(root / "skills" / "verification-loop" / "SKILL.md")
+    _write(root / "skills" / "unrelated" / "SKILL.md")
+    _write(
+        root / "manifests" / "install-profiles.json",
+        json.dumps(
+            {
+                "profiles": {
+                    "developer": {
+                        "description": "Default workflow profile with agents and quality gates.",
+                        "modules": ["agents-core", "workflow-quality"],
+                    },
+                    "archive": {
+                        "description": "Static archive export only.",
+                        "modules": ["archive"],
+                    },
+                }
+            }
+        ),
+    )
     return root
 
 
@@ -169,6 +196,122 @@ def test_codex_prompt_uses_selected_context_only(tmp_path: Path) -> None:
     assert "Docs/flows/payment-c.md" not in rendered.codex_prompt
     assert "(no task keyword match)" not in rendered.codex_prompt
     assert "Not Selected:" not in rendered.codex_prompt
+
+
+def test_financiacioncore_short_task_uses_compact_repo_knowledge(tmp_path: Path) -> None:
+    rendered = engineering.render_output(
+        task="Fix legacy onboarding path convergence",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+        mode="auto",
+        harness_profile=engineering.HARNESS_PROFILE,
+        real_model=None,
+        agent_type="CompiledStateGraph",
+        output=None,
+    )
+
+    assert "Repo knowledge:" in rendered.codex_prompt
+    assert "FinanciacionCore.md" in rendered.codex_prompt
+    assert "Preserve contract-first company and financer onboarding as the promoted workflow." in rendered.codex_prompt
+    assert "Legacy direct routes may stay backend-compatible, but should not be promoted in normal UI." in rendered.codex_prompt
+    assert "Avoid broad audits unless the task explicitly requests one." in rendered.codex_prompt
+    assert "Do not touch Contabilidad, telemetry, or resilience unless targeted." in rendered.codex_prompt
+    assert "## Current phase" not in rendered.codex_prompt
+    assert "## Protected decisions" not in rendered.codex_prompt
+    knowledge_block = rendered.codex_prompt.split("Repo knowledge:\n", maxsplit=1)[1].split("\nScope boundaries:", maxsplit=1)[0]
+    knowledge_lines = [line for line in knowledge_block.splitlines() if line.startswith("- ")]
+    assert len(knowledge_lines) <= 6
+
+
+def test_agentic_registries_define_initial_infrastructure() -> None:
+    assert set(agentic.AGENT_REGISTRY) == {
+        "planner",
+        "context-loader",
+        "implementer",
+        "reviewer",
+        "validation-runner",
+        "drift-guard",
+    }
+    assert set(agentic.EXECUTION_PROFILE_REGISTRY) == {
+        "prompt_only",
+        "review_only",
+        "supervised_implementation",
+        "bounded_loop_candidate",
+    }
+    assert "navigation_surface_convergence" in agentic.SKILL_REGISTRY
+    assert "provider_bootstrap_diagnostic" in agentic.SKILL_REGISTRY
+    assert not any(agent.may_execute_codex for agent in agentic.AGENT_REGISTRY.values())
+
+
+def test_ecc_discovery_uses_env_path_without_importing_registries(tmp_path: Path, monkeypatch) -> None:
+    ecc_repo = _build_ecc_repo(tmp_path / "ECC")
+    monkeypatch.setenv(ecc.ECC_REPO_ENV_VAR, str(ecc_repo))
+
+    discovery = ecc.discover_ecc()
+
+    assert discovery.found
+    assert discovery.path == ecc_repo.resolve()
+    assert discovery.source == f"env:{ecc.ECC_REPO_ENV_VAR}"
+    assert tuple(agent.name for agent in discovery.agents) == ("code-reviewer", "planner")
+    assert tuple(skill.name for skill in discovery.skills) == ("prompt-optimizer", "verification-loop")
+    assert tuple(profile.name for profile in discovery.profiles) == ("developer",)
+
+
+def test_ecc_discovery_uses_config_path(tmp_path: Path, monkeypatch) -> None:
+    ecc_repo = _build_ecc_repo(tmp_path / "ECC")
+    config = tmp_path / "ecc.json"
+    config.write_text(json.dumps({"path": str(ecc_repo)}), encoding="utf-8")
+    monkeypatch.delenv(ecc.ECC_REPO_ENV_VAR, raising=False)
+    monkeypatch.setenv(ecc.ECC_CONFIG_ENV_VAR, str(config))
+
+    discovery = ecc.discover_ecc()
+
+    assert discovery.found
+    assert discovery.path == ecc_repo.resolve()
+    assert discovery.source == f"config:{config}"
+
+
+def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, capsys) -> None:
+    ecc_repo = _build_ecc_repo(tmp_path / "ECC")
+    monkeypatch.setenv(ecc.ECC_REPO_ENV_VAR, str(ecc_repo))
+
+    assert cli.main(["ecc-status"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Protector ECC Status" in output
+    assert f"ECC path: {ecc_repo.resolve()}" in output
+    assert "ECC discovered: yes" in output
+    assert "Relevant agents: 2" in output
+    assert "Relevant skills: 2" in output
+    assert "Relevant profiles: 1" in output
+    assert "Codex execution: disabled" in output
+    assert "Protector role: ECC-backed specialization layer" in output
+
+
+def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+    )
+
+    assert rendered.profile == "supervised_implementation"
+    assert rendered.agents == (
+        "planner",
+        "context-loader",
+        "implementer",
+        "reviewer",
+        "validation-runner",
+        "drift-guard",
+    )
+    assert "navigation_surface_convergence" in rendered.skills
+    assert "implementation_fix" in rendered.skills
+    assert "Codex execution: disabled" in rendered.text
+    assert "Autonomous code execution: disabled" in rendered.text
+    assert "Reviewer chain:" in rendered.text
+    assert "Drift-guard must block broad audits and unrelated architecture." in rendered.text
+    assert "Knowledge gates:" in rendered.text
+    assert "contract-first company and financer onboarding" in rendered.text
 
 
 def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:
@@ -575,6 +718,7 @@ def test_prompt_benchmark_fixtures_pass(tmp_path: Path) -> None:
 
     assert {result.name for result in results} == {
         "email-password-autofill",
+        "legacy-onboarding-path-convergence",
         "navigation-convergence",
         "single-bank-account-everywhere",
         "lleida-set-config-bootstrap",
@@ -863,6 +1007,26 @@ def test_cli_task_uses_builtin_fallback_alias(capsys) -> None:
     assert "Task: small test task" in stdout
 
 
+def test_cli_plan_prints_execution_plan(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+
+    assert cli.main(["plan", "--repo", str(repo), "Fix", "legacy", "operator", "navigation", "views"]) == 0
+
+    stdout = capsys.readouterr().out
+    assert "Execution Plan:" in stdout
+    assert "Profile: supervised_implementation" in stdout
+    assert "- planner:" in stdout
+    assert "- context-loader:" in stdout
+    assert "- implementer:" in stdout
+    assert "- reviewer:" in stdout
+    assert "- validation-runner:" in stdout
+    assert "- drift-guard:" in stdout
+    assert "Skills:" in stdout
+    assert "Reviewer chain:" in stdout
+    assert "Safety gates:" in stdout
+    assert "Codex execution: disabled" in stdout
+
+
 def test_cli_benchmark_runs_prompt_benchmarks(tmp_path: Path, capsys) -> None:
     repo = _build_repo(tmp_path / "repo")
 
@@ -872,7 +1036,7 @@ def test_cli_benchmark_runs_prompt_benchmarks(tmp_path: Path, capsys) -> None:
     assert "Prompt Benchmark Results" in stdout
     assert "PASS email-password-autofill" in stdout
     assert "PASS spinner-after-provider-dispatch" in stdout
-    assert "Summary: 6 passed, 0 failed" in stdout
+    assert "Summary: 7 passed, 0 failed" in stdout
 
 
 def test_cli_benchmark_returns_nonzero_for_failed_characteristics(tmp_path: Path, capsys) -> None:

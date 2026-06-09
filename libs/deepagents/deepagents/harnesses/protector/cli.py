@@ -16,12 +16,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from deepagents._version import __version__
+from deepagents.harnesses.protector._ecc import render_ecc_status
 from deepagents.harnesses.protector._engineering import (
     HARNESS_PROFILE,
     HarnessUsageError,
     RenderedOutput,
     build_read_only_agent,
     render_codex_reviewer_prompt,
+    render_controlled_execution_plan,
     render_output,
     render_prompt_benchmark_report,
     render_review_findings,
@@ -54,6 +56,14 @@ class _ClipboardCopyResult:
 
     copied: bool
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class _ResolvedRepo:
+    """Resolved repository path plus the alias token when one was used."""
+
+    path: Path
+    alias: str | None = None
 
 
 def _repos_config_path() -> Path:
@@ -111,13 +121,18 @@ def _resolve_explicit_repo(repo: str, parser: argparse.ArgumentParser) -> Path:
 
 def _resolve_positional_repo(repo: str, parser: argparse.ArgumentParser) -> Path:
     """Resolve a positional repo argument as alias or existing path."""
+    return _resolve_positional_repo_with_alias(repo, parser).path
+
+
+def _resolve_positional_repo_with_alias(repo: str, parser: argparse.ArgumentParser) -> _ResolvedRepo:
+    """Resolve a positional repo argument as alias or existing path."""
     aliases = _repo_aliases(parser)
     alias = aliases.get(repo)
     candidate = alias if alias is not None else Path(repo)
     resolved = candidate.expanduser().resolve()
     if not resolved.exists() or not resolved.is_dir():
         parser.error(f"unknown repo alias or missing repo path: {repo}")
-    return resolved
+    return _ResolvedRepo(path=resolved, alias=repo if alias is not None else None)
 
 
 def _resolve_repo_and_task(
@@ -125,21 +140,21 @@ def _resolve_repo_and_task(
     explicit_repo: str | None,
     positional: list[str],
     parser: argparse.ArgumentParser,
-) -> tuple[Path | None, str]:
+) -> tuple[Path | None, str | None, str]:
     """Resolve repo from `--repo` or leading positional alias/path plus task."""
     if explicit_repo is not None:
         task = _task_text(positional)
         if not task:
             parser.error("task text is required")
-        return _resolve_explicit_repo(explicit_repo, parser), task
+        return _resolve_explicit_repo(explicit_repo, parser), None, task
 
     if len(positional) < _MIN_POSITIONAL_REPO_TASK_ARGS:
         parser.error("repo alias/path and task text are required unless --repo is used")
-    repo = _resolve_positional_repo(positional[0], parser)
+    resolved = _resolve_positional_repo_with_alias(positional[0], parser)
     task = _task_text(positional[1:])
     if not task:
         parser.error("task text is required")
-    return repo, task
+    return resolved.path, resolved.alias, task
 
 
 def _task_text(parts: list[str]) -> str:
@@ -178,6 +193,11 @@ def _build_parser() -> argparse.ArgumentParser:
     review_codex.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     review_codex.add_argument("task", nargs="*", help="Original task text used to build the reviewer prompt.")
 
+    plan = subparsers.add_parser("plan", help="Generate a controlled multi-agent execution plan without invoking Codex.")
+    plan.add_argument("--repo", default=None, help="Explicit target repository path.")
+    plan.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
+    plan.add_argument("task", nargs="*", help="Task text to turn into a controlled execution plan.")
+
     run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
     run.add_argument("repo", help="Repo alias/path to target.")
 
@@ -189,14 +209,15 @@ def _build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--benchmarks", type=Path, default=None, help="Optional prompt benchmark fixture directory.")
     benchmark.add_argument("--repo", default=None, help="Optional repository path or alias used for context selection.")
 
+    subparsers.add_parser("ecc-status", help="Show read-only ECC discovery status.")
     subparsers.add_parser("status", help="Show Protector harness CLI status.")
     return parser
 
 
 def _run_task(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run `ph task`."""
-    repo, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
-    rendered = _render_task_prompt(repo=repo, task=task, output=args.output, parser=parser)
+    repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
+    rendered = _render_task_prompt(repo=repo, repo_alias=repo_alias, task=task, output=args.output, parser=parser)
     if args.output is not None:
         try:
             write_prompt_output(args.output, rendered.codex_prompt, overwrite=args.overwrite)
@@ -238,7 +259,7 @@ def _run_interactive_enabled(args: argparse.Namespace, parser: argparse.Argument
         sys.stdout.write("Cancelled.\n")
         return 0
 
-    rendered = _render_task_prompt(repo=repo, task=task, output=None, parser=parser)
+    rendered = _render_task_prompt(repo=repo, repo_alias=args.repo, task=task, output=None, parser=parser)
     copy_result = _copy_to_clipboard(rendered.codex_prompt)
     if copy_result.copied:
         sys.stdout.write(_render_task_confirmation(repo, rendered.selected_context_count, "Codex prompt copied to clipboard"))
@@ -340,6 +361,7 @@ def _run_editor(command: tuple[str, ...], path: Path) -> None:
 def _render_task_prompt(
     *,
     repo: Path | None,
+    repo_alias: str | None = None,
     task: str,
     output: Path | None,
     parser: argparse.ArgumentParser,
@@ -358,6 +380,7 @@ def _render_task_prompt(
     return render_output(
         task=task,
         repo=repo,
+        repo_alias=repo_alias,
         mode="auto",
         harness_profile=harness_profile,
         real_model=None,
@@ -482,7 +505,7 @@ Selected context count: {selected_context_count}
 
 def _run_review(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run `ph review`."""
-    _repo, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
+    _repo, _repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
 
     text = args.codex_output.read_text(encoding="utf-8")
     sys.stdout.write(render_review_findings(args.codex_output, task, text))
@@ -492,11 +515,12 @@ def _run_review(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
 
 def _run_review_codex(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run `ph review-codex`."""
-    repo, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
+    repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
     text = args.codex_output.read_text(encoding="utf-8")
     rendered = render_codex_reviewer_prompt(
         task=task,
         repo=repo,
+        repo_alias=repo_alias,
         codex_output=text,
         source=str(args.codex_output.resolve()),
     )
@@ -523,6 +547,15 @@ def _run_review_codex(args: argparse.Namespace, parser: argparse.ArgumentParser)
     return 0
 
 
+def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph plan`."""
+    repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
+    rendered = render_controlled_execution_plan(task=task, repo=repo, repo_alias=repo_alias)
+    sys.stdout.write(rendered.text)
+    sys.stdout.write("\n")
+    return 0
+
+
 def _run_status() -> int:
     """Run `ph status`."""
     profile = _get_harness_profile(HARNESS_PROFILE)
@@ -535,6 +568,13 @@ cwd: {Path.cwd()}
 cli module: {Path(__file__).resolve()}
 """
     )
+    return 0
+
+
+def _run_ecc_status() -> int:
+    """Run `ph ecc-status`."""
+    sys.stdout.write(render_ecc_status())
+    sys.stdout.write("\n")
     return 0
 
 
@@ -562,9 +602,11 @@ Aliases:
 
 def _run_benchmark(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run `ph benchmark`."""
-    repo = _resolve_positional_repo(args.repo, parser) if args.repo is not None else None
+    resolved = _resolve_positional_repo_with_alias(args.repo, parser) if args.repo is not None else None
+    repo = resolved.path if resolved is not None else None
+    repo_alias = resolved.alias if resolved is not None else None
     try:
-        results = run_prompt_benchmarks(benchmarks_dir=args.benchmarks, repo=repo)
+        results = run_prompt_benchmarks(benchmarks_dir=args.benchmarks, repo=repo, repo_alias=repo_alias)
     except HarnessUsageError as exc:
         parser.error(str(exc))
     sys.stdout.write(render_prompt_benchmark_report(results))
@@ -583,10 +625,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = _run_review(args, parser)
     elif args.command == "review-codex":
         result = _run_review_codex(args, parser)
+    elif args.command == "plan":
+        result = _run_plan(args, parser)
     elif args.command == "run":
         result = _run_interactive(args, parser)
     elif args.command == "status":
         result = _run_status()
+    elif args.command == "ecc-status":
+        result = _run_ecc_status()
     elif args.command == "repos":
         result = _run_repos(args, parser)
     elif args.command == "benchmark":

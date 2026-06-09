@@ -1,0 +1,1 @@
+Fix legacy onboarding path convergence so the operator UI promotes the right onboarding path without turning this into a broad audit.

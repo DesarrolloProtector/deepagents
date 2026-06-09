@@ -14,6 +14,7 @@ from pydantic import Field
 
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
+from deepagents.harnesses.protector._agentic import build_execution_plan, render_execution_plan as render_agentic_execution_plan
 from deepagents.harnesses.protector._prompt_skills import PromptSkill, select_prompt_skills
 
 if TYPE_CHECKING:
@@ -250,6 +251,14 @@ STRUCTURED_TASK_HEADINGS = (
     "Validation",
     "PASS",
 )
+KNOWLEDGE_SECTION_HEADINGS = (
+    "Current phase",
+    "Current priorities",
+    "Authoritative workflows",
+    "Protected decisions",
+    "Forbidden directions",
+    "Known useful routes/views/tests",
+)
 TaskMode = Literal[
     "implementation_fix",
     "review_only",
@@ -348,9 +357,22 @@ class RenderedReviewerPrompt:
 
 
 @dataclass(frozen=True)
+class RenderedExecutionPlan:
+    """Controlled execution-plan output for Operator UI and CLI."""
+
+    text: str
+    profile: str
+    agents: tuple[str, ...]
+    skills: tuple[str, ...]
+    safety_gates: tuple[str, ...]
+    selected_context_count: int
+
+
+@dataclass(frozen=True)
 class PromptBenchmarkExpected:
     """Expected prompt characteristics for one benchmark case."""
 
+    repo_alias: str | None
     task_mode: TaskMode | None
     required_skills: tuple[str, ...]
     forbidden_skills: tuple[str, ...]
@@ -381,11 +403,21 @@ class _RepoContext:
 
 
 @dataclass(frozen=True)
+class _RepoKnowledge:
+    """Compact repo knowledge derived from a Protector knowledge file."""
+
+    alias: str
+    path: Path
+    summary: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _ContextSelection:
     """Selected and rejected context display rows."""
 
     selected: tuple[str, ...]
     not_selected: tuple[str, ...]
+    knowledge: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -494,10 +526,11 @@ def render_output(
     real_model: str | None,
     agent_type: str,
     output: Path | None,
+    repo_alias: str | None = None,
 ) -> RenderedOutput:
     """Render a compact read-only handoff payload for Codex."""
     repo_text = str(repo.resolve()) if repo is not None else "(not provided)"
-    selection = _select_context(repo, task)
+    selection = _select_context(repo, task, repo_alias=repo_alias)
     context_route = _render_context_route(selection)
     codex_prompt = _render_codex_prompt(task, selection)
     selected_context_count = _selected_context_count(selection)
@@ -535,7 +568,12 @@ API note:
     return RenderedOutput(payload=payload, codex_prompt=codex_prompt, selected_context_count=selected_context_count)
 
 
-def run_prompt_benchmarks(*, benchmarks_dir: Path | None = None, repo: Path | None = None) -> tuple[PromptBenchmarkResult, ...]:
+def run_prompt_benchmarks(
+    *,
+    benchmarks_dir: Path | None = None,
+    repo: Path | None = None,
+    repo_alias: str | None = None,
+) -> tuple[PromptBenchmarkResult, ...]:
     """Run prompt-quality benchmarks from fixture directories."""
     root = benchmarks_dir or _default_prompt_benchmarks_dir()
     if not root.is_dir():
@@ -548,7 +586,7 @@ def run_prompt_benchmarks(*, benchmarks_dir: Path | None = None, repo: Path | No
         raise HarnessUsageError(msg)
 
     context_repo = repo if repo is not None else _default_prompt_benchmark_repo()
-    return tuple(_run_prompt_benchmark_case(path, context_repo) for path in cases)
+    return tuple(_run_prompt_benchmark_case(path, context_repo, repo_alias) for path in cases)
 
 
 def render_prompt_benchmark_report(results: tuple[PromptBenchmarkResult, ...]) -> str:
@@ -567,7 +605,32 @@ def render_prompt_benchmark_report(results: tuple[PromptBenchmarkResult, ...]) -
     return "\n".join(rows)
 
 
-def _run_prompt_benchmark_case(path: Path, repo: Path | None) -> PromptBenchmarkResult:
+def render_controlled_execution_plan(*, task: str, repo: Path | None, repo_alias: str | None = None) -> RenderedExecutionPlan:
+    """Render a controlled multi-agent execution plan without invoking Codex."""
+    selection = _select_context(repo, task, repo_alias=repo_alias)
+    task_mode = _classify_task_mode(task)
+    prompt_skills = _selected_prompt_skills(task, task_mode)
+    plan = build_execution_plan(task_mode=task_mode, prompt_skills=prompt_skills)
+    selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
+    text = f"""{render_agentic_execution_plan(plan)}
+
+Task mode: {task_mode}
+Selected context paths:
+{_one_line_list(selected_paths)}
+
+Knowledge gates:
+{_one_line_list(selection.knowledge)}"""
+    return RenderedExecutionPlan(
+        text=text,
+        profile=plan.profile.name,
+        agents=tuple(agent.name for agent in plan.agents),
+        skills=tuple(skill.name for skill in plan.skills),
+        safety_gates=plan.safety_gates,
+        selected_context_count=_selected_context_count(selection),
+    )
+
+
+def _run_prompt_benchmark_case(path: Path, repo: Path | None, repo_alias: str | None) -> PromptBenchmarkResult:
     """Run one prompt benchmark fixture case."""
     task_path = path / "task.txt"
     expected_path = path / "expected_characteristics.md"
@@ -578,7 +641,7 @@ def _run_prompt_benchmark_case(path: Path, repo: Path | None) -> PromptBenchmark
 
     task = task_path.read_text(encoding="utf-8").strip()
     expected = _parse_prompt_benchmark_expected(expected_path.read_text(encoding="utf-8"))
-    selection = _select_context(repo, task)
+    selection = _select_context(repo, task, repo_alias=expected.repo_alias or repo_alias)
     prompt = _render_codex_prompt(task, selection)
     task_mode = _classify_task_mode(task)
     selected_skills = tuple(skill.name for skill in _selected_prompt_skills(task, task_mode))
@@ -596,6 +659,7 @@ def _parse_prompt_benchmark_expected(text: str) -> PromptBenchmarkExpected:
     """Parse a Markdown expected-characteristics fixture."""
     sections = _parse_markdown_characteristic_sections(text)
     return PromptBenchmarkExpected(
+        repo_alias=_parse_expected_repo_alias(sections.get("repo alias", ())),
         task_mode=_parse_expected_task_mode(sections.get("task mode", ())),
         required_skills=_section_items(sections.get("required skills", ())),
         forbidden_skills=_section_items(sections.get("forbidden skills", ())),
@@ -638,6 +702,14 @@ def _parse_expected_task_mode(lines: tuple[str, ...]) -> TaskMode | None:
         msg = f"unsupported prompt benchmark task mode: {mode}"
         raise HarnessUsageError(msg)
     return cast("TaskMode", mode)
+
+
+def _parse_expected_repo_alias(lines: tuple[str, ...]) -> str | None:
+    """Parse an optional benchmark repo alias section."""
+    items = _section_items(lines)
+    if not items:
+        return None
+    return items[0]
 
 
 def _section_items(lines: tuple[str, ...]) -> tuple[str, ...]:
@@ -776,9 +848,10 @@ def render_codex_reviewer_prompt(
     repo: Path | None,
     codex_output: str,
     source: str,
+    repo_alias: str | None = None,
 ) -> RenderedReviewerPrompt:
     """Render a prompt for a separate Codex reviewer without invoking a model."""
-    selection = _select_context(repo, task)
+    selection = _select_context(repo, task, repo_alias=repo_alias)
     task_mode = _classify_task_mode(task)
     implementation_prompt = _render_codex_prompt(task, selection)
     findings = review_codex_output(task=task, output=codex_output, source=source)
@@ -924,7 +997,7 @@ def _feature_contract_applies(task_tokens: frozenset[str]) -> bool:
     return bool(task_tokens & FEATURE_HINTS)
 
 
-def _select_context(repo: Path | None, task: str) -> _ContextSelection:
+def _select_context(repo: Path | None, task: str, *, repo_alias: str | None = None) -> _ContextSelection:
     """Select bounded context rows for the handoff."""
     if repo is None:
         return _ContextSelection(
@@ -937,9 +1010,12 @@ def _select_context(repo: Path | None, task: str) -> _ContextSelection:
     selected_skills = _select_skills(context, task_tokens)
     selected_flows = _select_flows(context, task_tokens)
     selected_feature_contract = context.feature_contract if context.feature_contract is not None and _feature_contract_applies(task_tokens) else None
+    knowledge = _load_repo_knowledge(context.root, task, repo_alias=repo_alias)
 
     selected: list[str] = []
     selected.extend(_relative_path(context.root, path) for path in context.mandatory)
+    if knowledge is not None:
+        selected.append(_relative_path(Path.cwd().resolve(), knowledge.path))
     selected.extend(_relative_path(context.root, path) for _, path in selected_skills)
     selected.extend(_relative_path(context.root, path) for path in selected_flows)
     if selected_feature_contract is not None:
@@ -955,7 +1031,11 @@ def _select_context(repo: Path | None, task: str) -> _ContextSelection:
     if context.feature_contract is not None and selected_feature_contract is None:
         not_selected.append(f"{_relative_path(context.root, context.feature_contract)} (task does not suggest feature/contract behavior)")
     not_selected.extend(f"{warning} (expected artifact not found)" for warning in context.warnings)
-    return _ContextSelection(selected=tuple(selected), not_selected=tuple(not_selected))
+    return _ContextSelection(
+        selected=tuple(selected),
+        not_selected=tuple(not_selected),
+        knowledge=knowledge.summary if knowledge is not None else (),
+    )
 
 
 def _render_context_route(selection: _ContextSelection) -> str:
@@ -965,6 +1045,121 @@ def _render_context_route(selection: _ContextSelection) -> str:
 
 Not Selected:
 {_one_line_list(selection.not_selected)}"""
+
+
+def _load_repo_knowledge(repo: Path, task: str, *, repo_alias: str | None) -> _RepoKnowledge | None:
+    """Load compact repo knowledge for the resolved repo alias when available."""
+    alias_candidates = _repo_knowledge_alias_candidates(repo, repo_alias)
+    for directory in _knowledge_directories():
+        for alias in alias_candidates:
+            path = directory / f"{alias}.md"
+            if not path.is_file():
+                continue
+            sections = _parse_repo_knowledge_sections(path.read_text(encoding="utf-8"))
+            summary = _compact_repo_knowledge_summary(sections, task)
+            if not summary:
+                return None
+            return _RepoKnowledge(alias=alias, path=path.resolve(), summary=summary)
+    return None
+
+
+def _repo_knowledge_alias_candidates(repo: Path, repo_alias: str | None) -> tuple[str, ...]:
+    """Return ordered aliases that may have matching knowledge files."""
+    candidates: list[str] = []
+    if repo_alias and not any(separator in repo_alias for separator in ("/", "\\")):
+        candidates.append(repo_alias)
+    candidates.append(repo.name)
+    return tuple(_unique_preserve_order(candidates))
+
+
+def _knowledge_directories() -> tuple[Path, ...]:
+    """Return possible Protector knowledge directories without scanning repos."""
+    candidates = [base / ".protector-harness" / "knowledge" for base in (Path.cwd().resolve(), *Path(__file__).resolve().parents)]
+    return tuple(path for path in _unique_paths(candidates) if path.is_dir())
+
+
+def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:
+    """Return paths by first resolved occurrence."""
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for path in paths:
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            result.append(resolved)
+    return tuple(result)
+
+
+def _parse_repo_knowledge_sections(text: str) -> dict[str, tuple[str, ...]]:
+    """Parse supported repo knowledge sections from Markdown."""
+    supported = {heading.lower(): heading for heading in KNOWLEDGE_SECTION_HEADINGS}
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("# "):
+            continue
+        if line.startswith("## "):
+            current = supported.get(line[3:].strip().lower())
+            if current is not None:
+                sections.setdefault(current, [])
+            continue
+        if current is not None and line:
+            sections[current].append(_strip_markdown_bullet(line))
+    return {heading: tuple(items) for heading, items in sections.items() if items}
+
+
+def _strip_markdown_bullet(line: str) -> str:
+    """Strip simple Markdown bullet markers from a knowledge line."""
+    if line.startswith(("- ", "* ")):
+        return line[2:].strip()
+    return line
+
+
+def _compact_repo_knowledge_summary(sections: dict[str, tuple[str, ...]], task: str) -> tuple[str, ...]:
+    """Render compact synthesized knowledge without dumping the source file."""
+    all_text = " ".join(item for items in sections.values() for item in items).lower()
+    task_tokens = _tokens(task)
+    summary: list[str] = []
+    if "mvp" in all_text or "saas" in all_text:
+        summary.append("Align with FinanciacionCore MVP convergence toward a usable SaaS surface.")
+    if "contract-first" in all_text:
+        summary.append("Preserve contract-first company and financer onboarding as the promoted workflow.")
+    if "legacy" in all_text and "direct route" in all_text:
+        summary.append("Legacy direct routes may stay backend-compatible, but should not be promoted in normal UI.")
+    if "broad audit" in all_text or "broad audits" in all_text:
+        summary.append(
+            "Avoid broad audits unless the task explicitly requests one. Do not touch Contabilidad, telemetry, or resilience unless targeted."
+        )
+
+    priorities = _knowledge_priority_summary(sections.get("Current priorities", ()), task_tokens)
+    if priorities is not None:
+        summary.append(priorities)
+    route_summary = _knowledge_route_summary(sections.get("Known useful routes/views/tests", ()), task_tokens)
+    if route_summary is not None:
+        summary.append(route_summary)
+    if {"contabilidad", "telemetry", "resilience"} & _tokens(all_text) and not any("Contabilidad" in item for item in summary):
+        summary.append("Do not touch Contabilidad, telemetry, or resilience unless this task targets them.")
+    return tuple(_unique_preserve_order(summary[:6]))
+
+
+def _knowledge_priority_summary(priorities: tuple[str, ...], task_tokens: frozenset[str]) -> str | None:
+    """Return one task-relevant priority line when repo knowledge has one."""
+    matched = [priority.rstrip(".") for priority in priorities if _tokens(priority) & task_tokens]
+    if matched:
+        return f"Relevant repo priority: {'; '.join(matched[:2])}."
+    if priorities:
+        return "Current repo priorities include legacy onboarding reachability, accounting gaps, visual fixes, languages, telemetry, and resilience."
+    return None
+
+
+def _knowledge_route_summary(routes: tuple[str, ...], task_tokens: frozenset[str]) -> str | None:
+    """Return compact route/view/test hints when the task is route or onboarding related."""
+    if not routes:
+        return None
+    if not (task_tokens & {"legacy", "onboarding", "route", "routes", "view", "views", "test", "tests", "workflow"}):
+        return None
+    return f"Useful route/view/test hints: {'; '.join(route.rstrip('.') for route in routes[:3])}."
 
 
 def _title_from_task(task: str) -> str:
@@ -1473,6 +1668,11 @@ def _render_codex_prompt(task: str, selection: _ContextSelection) -> str:
     task_details_text = _task_details(task, task_mode)
     mode_requirements = _mode_requirements(task, task_mode)
     mode_requirements_text = _render_bullets(mode_requirements) if mode_requirements else "- (none)"
+    knowledge_text = ""
+    if selection.knowledge:
+        knowledge_text = f"""
+Repo knowledge:
+{_one_line_list(selection.knowledge)}"""
     return f"""Codex Prompt:
 Title: {_title_from_task(task)}
 Task mode: {task_mode}
@@ -1481,6 +1681,7 @@ Task details:
 {task_details_text}
 Selected context paths:
 {_one_line_list(selected_paths)}
+{knowledge_text}
 Scope boundaries:
 {_render_bullets(_scope_boundaries(task, task_mode))}
 No-drift rules:
