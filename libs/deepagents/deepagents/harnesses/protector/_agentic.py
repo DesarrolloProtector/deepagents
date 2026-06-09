@@ -31,6 +31,18 @@ PLATFORM_COMPATIBILITY_BOUNDARIES = (
     "Protector keeps this module only to preserve current `ph plan` and Operator behavior during the ECC-pack migration.",
     "Do not add new Protector-local generic registries or autonomous execution behavior here.",
 )
+PACK_OWNED_PROMPT_SKILL_NAMES = frozenset(
+    {
+        "form_security_autofill_bug",
+        "navigation_surface_convergence",
+        "provider_bootstrap_diagnostic",
+        "provider_api_bug",
+        "operational_workflow_convergence",
+        "global_pattern_change",
+        "mvp_surface_completion",
+        "spanish_implementation_task_preservation",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -171,46 +183,6 @@ SKILL_REGISTRY: dict[str, SkillDefinition] = {
         trigger="Concrete UI, Razor, JS, DOM, modal, view, table, or spinner terms.",
         role="Require proof of the rendered condition before UI changes.",
     ),
-    "navigation_surface_convergence": SkillDefinition(
-        name="navigation_surface_convergence",
-        trigger="Navigation, menu, dashboard, index, view, or legacy surface terms.",
-        role="Converge route/menu/view entry points without dashboard redesign.",
-    ),
-    "form_security_autofill_bug": SkillDefinition(
-        name="form_security_autofill_bug",
-        trigger="Autofill, autocomplete, login, Email, password, or `contraseña` terms.",
-        role="Keep authentication field behavior specific instead of generic UI work.",
-    ),
-    "provider_api_bug": SkillDefinition(
-        name="provider_api_bug",
-        trigger="Provider, API, dispatch, payload, signature, or Lleida state terms.",
-        role="Protect provider/config/payload boundaries while fixing workflow state mapping.",
-    ),
-    "provider_bootstrap_diagnostic": SkillDefinition(
-        name="provider_bootstrap_diagnostic",
-        trigger="Bootstrap, diagnostic, probe, config, SET_CONFIG, or smoke provider terms.",
-        role="Keep provider diagnostics bounded and evidence-driven.",
-    ),
-    "operational_workflow_convergence": SkillDefinition(
-        name="operational_workflow_convergence",
-        trigger="Workflow action, activation, pending, signature, account, or entity terms.",
-        role="Trace workflow state and operator action eligibility before changing behavior.",
-    ),
-    "mvp_surface_completion": SkillDefinition(
-        name="mvp_surface_completion",
-        trigger="MVP, useful, operational, operator, surface, or complete terms.",
-        role="Complete only the requested daily operator surface.",
-    ),
-    "global_pattern_change": SkillDefinition(
-        name="global_pattern_change",
-        trigger="Global, everywhere, all usages, entities, or repeated pattern terms.",
-        role="Change targeted repeated usages consistently without broadening scope.",
-    ),
-    "spanish_implementation_task_preservation": SkillDefinition(
-        name="spanish_implementation_task_preservation",
-        trigger="Spanish UI labels, identifiers, accents, or task wording.",
-        role="Preserve literal UI labels and identifiers while rendering English prompt structure.",
-    ),
 }
 
 _NO_CODEX_SANDBOX = SandboxPolicy(
@@ -309,10 +281,42 @@ EXECUTION_PROFILE_REGISTRY: dict[str, ExecutionProfile] = {
 def build_execution_plan(*, task_mode: TaskMode, prompt_skills: tuple[PromptSkill, ...]) -> ExecutionPlan:
     """Build the deprecated compatibility plan without invoking Codex or shell tools."""
     profile = _select_execution_profile(task_mode)
-    skills = tuple(SKILL_REGISTRY[skill.name] for skill in prompt_skills if skill.name in SKILL_REGISTRY)
+    skills = tuple(_skill_definition_for_prompt_skill(skill) for skill in prompt_skills if _should_render_prompt_skill(skill))
     agents = tuple(AGENT_REGISTRY[name] for name in profile.agent_names)
     safety_gates = _execution_safety_gates(profile)
     return ExecutionPlan(profile=profile, agents=agents, skills=skills, safety_gates=safety_gates)
+
+
+def _should_render_prompt_skill(skill: PromptSkill) -> bool:
+    """Return whether the compatibility plan can render a selected prompt skill."""
+    return skill.name in SKILL_REGISTRY or skill.name in PACK_OWNED_PROMPT_SKILL_NAMES
+
+
+def _skill_definition_for_prompt_skill(skill: PromptSkill) -> SkillDefinition:
+    """Return a plan display row without duplicating pack-owned skill definitions."""
+    if skill.name in SKILL_REGISTRY:
+        return SKILL_REGISTRY[skill.name]
+    return SkillDefinition(
+        name=skill.name,
+        trigger=_pack_skill_trigger(skill),
+        role=_pack_skill_role(skill),
+    )
+
+
+def _pack_skill_trigger(skill: PromptSkill) -> str:
+    """Render a compact trigger from pack-owned skill metadata."""
+    if not skill.trigger_keywords:
+        return "Selected by pack-owned prompt-skill metadata."
+    return f"Pack-owned keywords: {', '.join(sorted(skill.trigger_keywords))}."
+
+
+def _pack_skill_role(skill: PromptSkill) -> str:
+    """Render a compact role from pack-owned skill metadata."""
+    if skill.expected_behavior:
+        return skill.expected_behavior
+    if skill.scope_rules:
+        return skill.scope_rules[0]
+    return "Pack-owned prompt specialization."
 
 
 def render_execution_plan(plan: ExecutionPlan) -> str:

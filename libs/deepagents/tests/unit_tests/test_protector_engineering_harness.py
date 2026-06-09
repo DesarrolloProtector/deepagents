@@ -90,6 +90,21 @@ def _write_prompt_benchmark(root: Path, name: str, task: str, expected: str) -> 
     return case
 
 
+def _pack_prompt_skill_metadata_item(name: str, cases: list[str]) -> dict[str, object]:
+    return {
+        "name": name,
+        "trigger_keywords": ["fixture"],
+        "task_modes": ["implementation_fix"],
+        "observed_state": "Observed state.",
+        "expected_behavior": "Expected behavior.",
+        "scope_rules": ["Scope rule."],
+        "restriction_rules": ["Restriction rule."],
+        "validation_expectations": ["Validation expectation."],
+        "forbidden_generic_wording": [],
+        "benchmark_cases": cases,
+    }
+
+
 STRUCTURED_SIGNATURE_REGRESSION_TASK = """Title: Restore missing platform-company signature action
 
 Current regression:
@@ -262,11 +277,14 @@ def test_pack_knowledge_warns_when_legacy_duplicate_differs(tmp_path: Path, monk
             skills_count=5,
             knowledge_count=1,
             validation_status="valid",
+            prompt_skills_count=8,
+            prompt_skills_validation_status="valid",
             benchmark_sets_count=1,
             benchmark_cases_count=7,
             benchmark_runnable=True,
             benchmark_validation_status="not_checked",
             warnings=(),
+            prompt_skill_warnings=(),
             benchmark_warnings=(),
         ),
     )
@@ -303,8 +321,10 @@ def test_agentic_registries_define_initial_infrastructure() -> None:
         "supervised_implementation",
         "bounded_loop_candidate",
     }
-    assert "navigation_surface_convergence" in agentic.SKILL_REGISTRY
-    assert "provider_bootstrap_diagnostic" in agentic.SKILL_REGISTRY
+    assert "navigation_surface_convergence" not in agentic.SKILL_REGISTRY
+    assert "provider_bootstrap_diagnostic" not in agentic.SKILL_REGISTRY
+    assert "navigation_surface_convergence" in agentic.PACK_OWNED_PROMPT_SKILL_NAMES
+    assert "provider_bootstrap_diagnostic" in agentic.PACK_OWNED_PROMPT_SKILL_NAMES
     assert not any(agent.may_execute_codex for agent in agentic.AGENT_REGISTRY.values())
 
 
@@ -358,6 +378,9 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
     assert "- Knowledge: 1" in output
     assert "- Validation: valid" in output
     assert "Protector pack benchmarks:" in output
+    assert "Protector pack prompt skills:" in output
+    assert "- Declared: 8" in output
+    assert "- Validation: valid" in output
     assert "- Declared sets: 1" in output
     assert "- Cases: 7" in output
     assert "- Runnable: yes" in output
@@ -378,7 +401,7 @@ def test_protector_ecc_pack_files_are_discoverable() -> None:
 
     assert manifest["name"] == "protector-financiacioncore"
     assert manifest["runtime_behavior"] == {
-        "loaded_by_ph": False,
+        "loaded_by_ph": True,
         "changes_prompt_output": False,
         "codex_execution": False,
         "model_calls": False,
@@ -391,6 +414,7 @@ def test_protector_ecc_pack_files_are_discoverable() -> None:
 
     skill_paths = tuple(skill["path"] for skill in manifest["skills"])
     benchmark_paths = tuple(benchmark["path"] for benchmark in manifest["verification_assets"]["benchmarks"])
+    prompt_skill_path = manifest["verification_assets"]["prompt_skills"]["path"]
     assert skill_paths == (
         "skills/protector-prompt-quality/SKILL.md",
         "skills/protector-codex-handoff/SKILL.md",
@@ -399,6 +423,19 @@ def test_protector_ecc_pack_files_are_discoverable() -> None:
         "skills/financiacioncore-method/SKILL.md",
     )
     assert benchmark_paths == ("../../tests/prompt_benchmarks",)
+    assert prompt_skill_path == "verification/prompt-skills.json"
+    prompt_skill_metadata = json.loads((pack / prompt_skill_path).read_text(encoding="utf-8"))
+    assert prompt_skill_metadata["selection_behavior"] == "pack_owned_runtime_loaded"
+    assert tuple(skill["name"] for skill in prompt_skill_metadata["prompt_skills"]) == (
+        "form_security_autofill_bug",
+        "navigation_surface_convergence",
+        "provider_bootstrap_diagnostic",
+        "provider_api_bug",
+        "operational_workflow_convergence",
+        "global_pattern_change",
+        "mvp_surface_completion",
+        "spanish_implementation_task_preservation",
+    )
     for relative in skill_paths:
         text = (pack / relative).read_text(encoding="utf-8")
         assert "origin: Protector ECC pack" in text
@@ -413,11 +450,14 @@ def test_protector_pack_discovery_validates_static_pack() -> None:
     assert discovery.skills_count == 5
     assert discovery.knowledge_count == 1
     assert discovery.validation_status == "valid"
+    assert discovery.prompt_skills_count == 8
+    assert discovery.prompt_skills_validation_status == "valid"
     assert discovery.benchmark_sets_count == 1
     assert discovery.benchmark_cases_count == 7
     assert discovery.benchmark_runnable
     assert discovery.benchmark_validation_status == "not_checked"
     assert discovery.warnings == ()
+    assert discovery.prompt_skill_warnings == ()
     assert discovery.benchmark_warnings == ()
 
 
@@ -440,6 +480,65 @@ def test_protector_pack_manifest_requires_benchmark_declarations() -> None:
     warnings = ecc._validate_protector_pack_manifest(pack, manifest)
 
     assert "Protector pack benchmark declaration missing: verification_assets.benchmarks" in warnings
+
+
+def test_protector_pack_manifest_requires_prompt_skill_metadata() -> None:
+    pack = _protector_pack_dir()
+    manifest = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+    manifest["verification_assets"].pop("prompt_skills")
+
+    warnings = ecc._validate_protector_pack_manifest(pack, manifest)
+
+    assert "Protector pack prompt skill metadata declaration missing: verification_assets.prompt_skills.path" in warnings
+
+
+def test_protector_pack_prompt_skill_metadata_requires_runtime_skill_and_benchmark_coverage(tmp_path: Path) -> None:
+    root = tmp_path / "pack"
+    benchmarks = tmp_path / "benchmarks"
+    metadata = root / "verification" / "prompt-skills.json"
+    _write_prompt_benchmark(
+        benchmarks,
+        "covered-case",
+        "Fix scoped issue",
+        """# Expected Characteristics
+
+## Required skills
+- implementation_fix
+""",
+    )
+    _write(
+        metadata,
+        json.dumps(
+            {
+                "schema_version": "protector-pack-prompt-skills-v1",
+                "selection_behavior": "pack_owned_runtime_loaded",
+                "changes_prompt_output": False,
+                "prompt_skills": [
+                    _pack_prompt_skill_metadata_item("not_a_runtime_skill", ["covered-case"]),
+                    _pack_prompt_skill_metadata_item("form_security_autofill_bug", ["covered-case"]),
+                ],
+            }
+        ),
+    )
+    manifest = {
+        "verification_assets": {
+            "benchmarks": [
+                {
+                    "name": "fixture",
+                    "runner": "ph_benchmark",
+                    "path": str(benchmarks),
+                    "expected_cases": 1,
+                }
+            ],
+            "prompt_skills": {"path": "verification/prompt-skills.json"},
+        }
+    }
+
+    warnings = ecc._validate_prompt_skill_metadata(root, manifest)
+
+    assert "Protector pack prompt skill is not defined by current runtime: not_a_runtime_skill" in warnings
+    assert "Protector pack prompt skill is not covered by any benchmark case: form_security_autofill_bug" in warnings
+    assert "Protector pack prompt skill benchmark case does not require form_security_autofill_bug: covered-case" in warnings
 
 
 def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:

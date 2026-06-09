@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 _NAVIGATION_STRONG_TERMS = frozenset({"accounting", "dashboard", "index", "legacy", "menu", "menus", "nav", "navigation"})
 _MVP_SURFACE_STRONG_TERMS = frozenset({"complete", "mvp", "useful"})
@@ -45,6 +47,20 @@ _NEGATIVE_PROVIDER_CONFIG_PHRASES = (
     "without touching config_id",
     "without touching set_config",
 )
+_PROTECTOR_PACK_RELATIVE_PATH = Path("packs") / "protector-financiacioncore"
+_PACK_PROMPT_SKILLS_RELATIVE_PATH = Path("verification") / "prompt-skills.json"
+_PACK_OWNED_PROMPT_SKILL_NAMES = frozenset(
+    {
+        "form_security_autofill_bug",
+        "navigation_surface_convergence",
+        "provider_bootstrap_diagnostic",
+        "provider_api_bug",
+        "operational_workflow_convergence",
+        "global_pattern_change",
+        "mvp_surface_completion",
+        "spanish_implementation_task_preservation",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -66,6 +82,105 @@ class PromptSkill:
         mode_matches = not self.task_modes or task_mode in self.task_modes
         keyword_matches = not self.trigger_keywords or bool(task_tokens & self.trigger_keywords)
         return mode_matches and keyword_matches
+
+
+def _load_pack_prompt_skill(name: str) -> PromptSkill:
+    """Load one pack-owned prompt skill from the Protector ECC pack."""
+    metadata = _load_pack_prompt_skill_metadata()
+    for item in _metadata_items(metadata):
+        if item.get("name") == name:
+            return _prompt_skill_from_metadata(item)
+    msg = f"Protector pack prompt skill metadata is missing required skill: {name}"
+    raise RuntimeError(msg)
+
+
+def _load_pack_prompt_skill_metadata() -> dict[str, object]:
+    """Return pack-owned prompt skill metadata."""
+    path = _find_pack_prompt_skill_metadata()
+    if path is None:
+        msg = f"Protector pack prompt skill metadata not found: {_PACK_PROMPT_SKILLS_RELATIVE_PATH}"
+        raise RuntimeError(msg)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        msg = f"invalid Protector pack prompt skill metadata JSON at {path}: {exc.msg}"
+        raise RuntimeError(msg) from exc
+    if not isinstance(data, dict):
+        msg = f"Protector pack prompt skill metadata must be a JSON object: {path}"
+        raise TypeError(msg)
+    return data
+
+
+def _find_pack_prompt_skill_metadata() -> Path | None:
+    """Find the repo-local Protector pack prompt-skill metadata file."""
+    for base in (Path.cwd(), *_package_roots()):
+        for parent in (base, *base.parents):
+            candidate = parent / _PROTECTOR_PACK_RELATIVE_PATH / _PACK_PROMPT_SKILLS_RELATIVE_PATH
+            if candidate.is_file():
+                return candidate.resolve()
+    return None
+
+
+def _package_roots() -> tuple[Path, ...]:
+    """Return package roots used only for locating the repo-local pack."""
+    current = Path(__file__).resolve()
+    return tuple(current.parents[:8])
+
+
+def _metadata_items(data: dict[str, object]) -> tuple[dict[str, object], ...]:
+    """Return prompt skill metadata entries."""
+    value = data.get("prompt_skills")
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, dict))
+
+
+def _prompt_skill_from_metadata(item: dict[str, object]) -> PromptSkill:
+    """Convert pack metadata into the runtime prompt-skill model."""
+    name = _metadata_string(item, "name")
+    if name not in _PACK_OWNED_PROMPT_SKILL_NAMES:
+        msg = f"unexpected pack-owned prompt skill: {name}"
+        raise RuntimeError(msg)
+    return PromptSkill(
+        name=name,
+        trigger_keywords=frozenset(_metadata_string_items(item, "trigger_keywords")),
+        task_modes=frozenset(_metadata_string_items(item, "task_modes")),
+        observed_state=_metadata_optional_string(item, "observed_state"),
+        expected_behavior=_metadata_optional_string(item, "expected_behavior"),
+        scope_rules=_metadata_string_items(item, "scope_rules"),
+        restriction_rules=_metadata_string_items(item, "restriction_rules"),
+        validation_expectations=_metadata_string_items(item, "validation_expectations"),
+        forbidden_generic_wording=_metadata_string_items(item, "forbidden_generic_wording"),
+    )
+
+
+def _metadata_string(item: dict[str, object], key: str) -> str:
+    """Return a required metadata string."""
+    value = item.get(key)
+    if isinstance(value, str) and value:
+        return value
+    msg = f"Protector pack prompt skill metadata must include string field: {key}"
+    raise RuntimeError(msg)
+
+
+def _metadata_optional_string(item: dict[str, object], key: str) -> str | None:
+    """Return an optional metadata string."""
+    value = item.get(key)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    msg = f"Protector pack prompt skill metadata field must be string or null: {key}"
+    raise RuntimeError(msg)
+
+
+def _metadata_string_items(item: dict[str, object], key: str) -> tuple[str, ...]:
+    """Return a required metadata list of strings."""
+    value = item.get(key)
+    if isinstance(value, list) and all(isinstance(entry, str) for entry in value):
+        return tuple(value)
+    msg = f"Protector pack prompt skill metadata must include string list field: {key}"
+    raise RuntimeError(msg)
 
 
 BASE_PROMPT_QUALITY_SKILL = PromptSkill(
@@ -139,137 +254,17 @@ UI_RUNTIME_BUG_SKILL = PromptSkill(
     validation_expectations=("Prove the exact condition that hides or renders the button/modal/spinner/view before changing it.",),
 )
 
-NAVIGATION_SURFACE_CONVERGENCE_SKILL = PromptSkill(
-    name="navigation_surface_convergence",
-    trigger_keywords=frozenset(
-        {
-            "accounting",
-            "dashboard",
-            "index",
-            "legacy",
-            "menu",
-            "menus",
-            "navigation",
-            "nav",
-            "surface",
-            "view",
-            "views",
-            "vista",
-            "vistas",
-        }
-    ),
-    task_modes=frozenset({"implementation_fix", "ui_runtime_bug", "planning_only"}),
-    observed_state="Navigation, menu, dashboard, or view surfaces are not converging on one coherent operator path.",
-    expected_behavior="Operators should reach the same useful workflow surface consistently from navigation, menus, indexes, and legacy views.",
-    scope_rules=("Trace route/menu/view entry points and converge only the requested navigation surface.",),
-    restriction_rules=("Do not redesign dashboards or unrelated navigation; preserve existing permissions and routes.",),
-    validation_expectations=("Verify the affected navigation entries land on the intended operational view.",),
-    forbidden_generic_wording=("spinner", "button render condition"),
-)
+NAVIGATION_SURFACE_CONVERGENCE_SKILL = _load_pack_prompt_skill("navigation_surface_convergence")
 
-FORM_SECURITY_AUTOFILL_SKILL = PromptSkill(
-    name="form_security_autofill_bug",
-    trigger_keywords=frozenset(
-        {
-            "autocomplete",
-            "autofill",
-            "autofilled",
-            "autofills",
-            "autocompleta",
-            "autocompletan",
-            "contraseña",
-            "email",
-            "login",
-            "password",
-            "security",
-        }
-    ),
-    task_modes=frozenset({"implementation_fix", "ui_runtime_bug"}),
-    observed_state="Email/password fields are being autofilled or prepopulated when the requested login flow should not do that.",
-    expected_behavior="The login UI should preserve the requested `Email` and `contraseña` behavior without unwanted autofill side effects.",
-    scope_rules=("Stay on authentication/form field behavior; do not use generic UI runtime rules unless that state is actually involved.",),
-    restriction_rules=("Do not redesign login, account creation, or authentication flow semantics.",),
-    validation_expectations=("Verify the `Email` and `contraseña` fields render with the expected autofill behavior.",),
-    forbidden_generic_wording=("render/hide/loading condition", "spinner/loading state"),
-)
+FORM_SECURITY_AUTOFILL_SKILL = _load_pack_prompt_skill("form_security_autofill_bug")
 
-PROVIDER_API_BUG_SKILL = PromptSkill(
-    name="provider_api_bug",
-    trigger_keywords=frozenset(
-        {
-            "api",
-            "dispatch",
-            "lleida",
-            "payload",
-            "provider",
-            "providerstatus",
-            "providercorrelationid",
-            "signature",
-            "start_signature",
-        }
-    ),
-    task_modes=frozenset({"implementation_fix", "provider_api_bug", "continuation_followup"}),
-    observed_state="Provider/API state is not being translated correctly into the surrounding workflow state.",
-    expected_behavior="Provider dispatch success means the provider accepted the request; it must not be treated as workflow completion.",
-    scope_rules=("Stay on the provider/API-to-workflow boundary.",),
-    restriction_rules=(
-        "Provider dispatch success only proves provider acceptance; it does not prove signature completion or workflow completion.",
-        "Protect config, payload, and dispatch behavior unless the task explicitly targets them.",
-        "Do not modify ConfigId, SET_CONFIG, START_SIGNATURE, payload, or dispatch behavior unless the task specifically targets it.",
-    ),
-    validation_expectations=("Verify provider dispatch success remains intact and the workflow state is not incorrectly marked complete.",),
-)
+PROVIDER_API_BUG_SKILL = _load_pack_prompt_skill("provider_api_bug")
 
-PROVIDER_BOOTSTRAP_DIAGNOSTIC_SKILL = PromptSkill(
-    name="provider_bootstrap_diagnostic",
-    trigger_keywords=frozenset({"bootstrap", "config", "config_id", "configure", "diagnostic", "probe", "set_config", "smoke"}),
-    task_modes=frozenset({"diagnostic_bootstrap", "provider_api_bug", "implementation_fix"}),
-    observed_state="Provider bootstrap/configuration needs bounded verification before changing runtime workflow behavior.",
-    expected_behavior="Diagnostics should prove provider configuration and bootstrap state without treating acceptance as workflow completion.",
-    scope_rules=("Limit work to explicit provider bootstrap, config, SET_CONFIG, or smoke-diagnostic checks.",),
-    restriction_rules=("Do not modify provider payloads or workflow lifecycle unless the diagnostic proves that exact target.",),
-    validation_expectations=("Report exact bounded diagnostic/config evidence and whether provider calls were made.",),
-)
+PROVIDER_BOOTSTRAP_DIAGNOSTIC_SKILL = _load_pack_prompt_skill("provider_bootstrap_diagnostic")
 
-OPERATIONAL_WORKFLOW_CONVERGENCE_SKILL = PromptSkill(
-    name="operational_workflow_convergence",
-    trigger_keywords=frozenset(
-        {
-            "action",
-            "actions",
-            "activation",
-            "account",
-            "accounts",
-            "bank",
-            "cuenta",
-            "cuentas",
-            "entity",
-            "entidad",
-            "entidades",
-            "pending",
-            "resend",
-            "signature",
-            "workflow",
-        }
-    ),
-    task_modes=frozenset({"implementation_fix", "ui_runtime_bug", "provider_api_bug", "continuation_followup"}),
-    observed_state="The operational workflow has a dead end or inconsistent operator action path.",
-    expected_behavior="The operator should have the correct next action while the workflow remains pending.",
-    scope_rules=("Trace the real workflow state, action eligibility, and rendered operator surface before editing.",),
-    restriction_rules=("Do not redesign the workflow or activate/complete work earlier than the existing lifecycle allows.",),
-    validation_expectations=("Verify the relevant operator action appears only in the correct workflow state.",),
-)
+OPERATIONAL_WORKFLOW_CONVERGENCE_SKILL = _load_pack_prompt_skill("operational_workflow_convergence")
 
-MVP_SURFACE_COMPLETION_SKILL = PromptSkill(
-    name="mvp_surface_completion",
-    trigger_keywords=frozenset({"complete", "mvp", "operational", "operator", "surface", "useful", "views", "vista", "vistas"}),
-    task_modes=frozenset({"implementation_fix", "ui_runtime_bug", "planning_only"}),
-    observed_state="The MVP/operator surface is incomplete or not useful enough for the daily workflow.",
-    expected_behavior="The MVP surface should expose the minimum useful operational path without adding dashboard sprawl.",
-    scope_rules=("Complete only the requested operator-facing surface needed for the daily workflow.",),
-    restriction_rules=("Do not add dashboards, background workers, storage, autonomy, or unrelated navigation redesign.",),
-    validation_expectations=("Smoke the completed surface through the operator entry point that matters.",),
-)
+MVP_SURFACE_COMPLETION_SKILL = _load_pack_prompt_skill("mvp_surface_completion")
 
 LOCALIZATION_COMPLETION_SKILL = PromptSkill(
     name="localization_completion",
@@ -290,58 +285,9 @@ LOCALIZATION_COMPLETION_SKILL = PromptSkill(
     forbidden_generic_wording=("generic UI", "button render condition", "spinner/loading state"),
 )
 
-GLOBAL_PATTERN_CHANGE_SKILL = PromptSkill(
-    name="global_pattern_change",
-    trigger_keywords=frozenset(
-        {
-            "all",
-            "cualquier",
-            "entidad",
-            "entidades",
-            "entities",
-            "everywhere",
-            "global",
-            "lados",
-            "pattern",
-            "todas",
-            "todos",
-            "usages",
-        }
-    ),
-    task_modes=frozenset({"implementation_fix", "ui_runtime_bug", "provider_api_bug", "continuation_followup"}),
-    observed_state="The requested behavior is a repeated pattern and inconsistent implementations can drift across usages.",
-    expected_behavior="All targeted usages should follow one consistent behavior while unrelated surfaces remain unchanged.",
-    scope_rules=("Find the shared pattern or all targeted usages; change them consistently without broad redesign.",),
-    restriction_rules=("Do not expand scope beyond the named global pattern or entity set.",),
-    validation_expectations=("Verify representative usages plus at least one guard against missed pattern drift.",),
-)
+GLOBAL_PATTERN_CHANGE_SKILL = _load_pack_prompt_skill("global_pattern_change")
 
-SPANISH_TASK_PRESERVATION_SKILL = PromptSkill(
-    name="spanish_implementation_task_preservation",
-    trigger_keywords=frozenset(
-        {
-            "añadir",
-            "botón",
-            "contraseña",
-            "crear",
-            "cuenta",
-            "cuentas",
-            "eliminar",
-            "eliminemos",
-            "entidades",
-            "más",
-            "opción",
-            "quitar",
-            "quitemos",
-            "tabla",
-            "vistas",
-        }
-    ),
-    task_modes=frozenset(),
-    scope_rules=("Preserve exact Spanish UI text and identifiers without reintroducing the raw user task.",),
-    restriction_rules=("Do not translate identifiers or literal UI labels such as `Email`, `contraseña`, `login`, or button text.",),
-    validation_expectations=("Verify Spanish accents and `ñ` remain intact in generated prompt text.",),
-)
+SPANISH_TASK_PRESERVATION_SKILL = _load_pack_prompt_skill("spanish_implementation_task_preservation")
 
 _SPECIFIC_SKILLS = (
     FORM_SECURITY_AUTOFILL_SKILL,

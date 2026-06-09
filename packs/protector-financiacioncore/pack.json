@@ -6,7 +6,7 @@
   "status": "slice_2_static_pack",
   "description": "ECC-backed Protector specialization pack for FinanciacionCore/Vameco prompt quality, Codex handoff/review discipline, anti-drift rules, and repo knowledge.",
   "runtime_behavior": {
-    "loaded_by_ph": false,
+    "loaded_by_ph": true,
     "changes_prompt_output": false,
     "codex_execution": false,
     "model_calls": false,
@@ -67,7 +67,10 @@
         "path": "../../tests/prompt_benchmarks",
         "expected_cases": 7
       }
-    ]
+    ],
+    "prompt_skills": {
+      "path": "verification/prompt-skills.json"
+    }
   },
   "quality_gate": {
     "command": "ph benchmark --benchmarks tests/prompt_benchmarks",

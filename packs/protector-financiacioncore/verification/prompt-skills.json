@@ -1,0 +1,309 @@
+{
+  "schema_version": "protector-pack-prompt-skills-v1",
+  "runtime_source": "deepagents.harnesses.protector._prompt_skills",
+  "selection_behavior": "pack_owned_runtime_loaded",
+  "changes_prompt_output": false,
+  "prompt_skills": [
+    {
+      "name": "form_security_autofill_bug",
+      "trigger_keywords": [
+        "autocomplete",
+        "autofill",
+        "autofilled",
+        "autofills",
+        "autocompleta",
+        "autocompletan",
+        "contraseña",
+        "email",
+        "login",
+        "password",
+        "security"
+      ],
+      "task_modes": [
+        "implementation_fix",
+        "ui_runtime_bug"
+      ],
+      "observed_state": "Email/password fields are being autofilled or prepopulated when the requested login flow should not do that.",
+      "expected_behavior": "The login UI should preserve the requested `Email` and `contraseña` behavior without unwanted autofill side effects.",
+      "scope_rules": [
+        "Stay on authentication/form field behavior; do not use generic UI runtime rules unless that state is actually involved."
+      ],
+      "restriction_rules": [
+        "Do not redesign login, account creation, or authentication flow semantics."
+      ],
+      "validation_expectations": [
+        "Verify the `Email` and `contraseña` fields render with the expected autofill behavior."
+      ],
+      "forbidden_generic_wording": [
+        "render/hide/loading condition",
+        "spinner/loading state"
+      ],
+      "benchmark_cases": [
+        "email-password-autofill"
+      ]
+    },
+    {
+      "name": "navigation_surface_convergence",
+      "trigger_keywords": [
+        "accounting",
+        "dashboard",
+        "index",
+        "legacy",
+        "menu",
+        "menus",
+        "navigation",
+        "nav",
+        "surface",
+        "view",
+        "views",
+        "vista",
+        "vistas"
+      ],
+      "task_modes": [
+        "implementation_fix",
+        "ui_runtime_bug",
+        "planning_only"
+      ],
+      "observed_state": "Navigation, menu, dashboard, or view surfaces are not converging on one coherent operator path.",
+      "expected_behavior": "Operators should reach the same useful workflow surface consistently from navigation, menus, indexes, and legacy views.",
+      "scope_rules": [
+        "Trace route/menu/view entry points and converge only the requested navigation surface."
+      ],
+      "restriction_rules": [
+        "Do not redesign dashboards or unrelated navigation; preserve existing permissions and routes."
+      ],
+      "validation_expectations": [
+        "Verify the affected navigation entries land on the intended operational view."
+      ],
+      "forbidden_generic_wording": [
+        "spinner",
+        "button render condition"
+      ],
+      "benchmark_cases": [
+        "legacy-onboarding-path-convergence",
+        "navigation-convergence"
+      ]
+    },
+    {
+      "name": "provider_bootstrap_diagnostic",
+      "trigger_keywords": [
+        "bootstrap",
+        "config",
+        "config_id",
+        "configure",
+        "diagnostic",
+        "probe",
+        "set_config",
+        "smoke"
+      ],
+      "task_modes": [
+        "diagnostic_bootstrap",
+        "provider_api_bug",
+        "implementation_fix"
+      ],
+      "observed_state": "Provider bootstrap/configuration needs bounded verification before changing runtime workflow behavior.",
+      "expected_behavior": "Diagnostics should prove provider configuration and bootstrap state without treating acceptance as workflow completion.",
+      "scope_rules": [
+        "Limit work to explicit provider bootstrap, config, SET_CONFIG, or smoke-diagnostic checks."
+      ],
+      "restriction_rules": [
+        "Do not modify provider payloads or workflow lifecycle unless the diagnostic proves that exact target."
+      ],
+      "validation_expectations": [
+        "Report exact bounded diagnostic/config evidence and whether provider calls were made."
+      ],
+      "forbidden_generic_wording": [],
+      "benchmark_cases": [
+        "lleida-set-config-bootstrap"
+      ]
+    },
+    {
+      "name": "provider_api_bug",
+      "trigger_keywords": [
+        "api",
+        "dispatch",
+        "lleida",
+        "payload",
+        "provider",
+        "providerstatus",
+        "providercorrelationid",
+        "signature",
+        "start_signature"
+      ],
+      "task_modes": [
+        "implementation_fix",
+        "provider_api_bug",
+        "continuation_followup"
+      ],
+      "observed_state": "Provider/API state is not being translated correctly into the surrounding workflow state.",
+      "expected_behavior": "Provider dispatch success means the provider accepted the request; it must not be treated as workflow completion.",
+      "scope_rules": [
+        "Stay on the provider/API-to-workflow boundary."
+      ],
+      "restriction_rules": [
+        "Provider dispatch success only proves provider acceptance; it does not prove signature completion or workflow completion.",
+        "Protect config, payload, and dispatch behavior unless the task explicitly targets them.",
+        "Do not modify ConfigId, SET_CONFIG, START_SIGNATURE, payload, or dispatch behavior unless the task specifically targets it."
+      ],
+      "validation_expectations": [
+        "Verify provider dispatch success remains intact and the workflow state is not incorrectly marked complete."
+      ],
+      "forbidden_generic_wording": [],
+      "benchmark_cases": [
+        "resend-signature-after-provider-success",
+        "spinner-after-provider-dispatch"
+      ]
+    },
+    {
+      "name": "operational_workflow_convergence",
+      "trigger_keywords": [
+        "action",
+        "actions",
+        "activation",
+        "account",
+        "accounts",
+        "bank",
+        "cuenta",
+        "cuentas",
+        "entity",
+        "entidad",
+        "entidades",
+        "pending",
+        "resend",
+        "signature",
+        "workflow"
+      ],
+      "task_modes": [
+        "implementation_fix",
+        "ui_runtime_bug",
+        "provider_api_bug",
+        "continuation_followup"
+      ],
+      "observed_state": "The operational workflow has a dead end or inconsistent operator action path.",
+      "expected_behavior": "The operator should have the correct next action while the workflow remains pending.",
+      "scope_rules": [
+        "Trace the real workflow state, action eligibility, and rendered operator surface before editing."
+      ],
+      "restriction_rules": [
+        "Do not redesign the workflow or activate/complete work earlier than the existing lifecycle allows."
+      ],
+      "validation_expectations": [
+        "Verify the relevant operator action appears only in the correct workflow state."
+      ],
+      "forbidden_generic_wording": [],
+      "benchmark_cases": [
+        "resend-signature-after-provider-success",
+        "single-bank-account-everywhere"
+      ]
+    },
+    {
+      "name": "global_pattern_change",
+      "trigger_keywords": [
+        "all",
+        "cualquier",
+        "entidad",
+        "entidades",
+        "entities",
+        "everywhere",
+        "global",
+        "lados",
+        "pattern",
+        "todas",
+        "todos",
+        "usages"
+      ],
+      "task_modes": [
+        "implementation_fix",
+        "ui_runtime_bug",
+        "provider_api_bug",
+        "continuation_followup"
+      ],
+      "observed_state": "The requested behavior is a repeated pattern and inconsistent implementations can drift across usages.",
+      "expected_behavior": "All targeted usages should follow one consistent behavior while unrelated surfaces remain unchanged.",
+      "scope_rules": [
+        "Find the shared pattern or all targeted usages; change them consistently without broad redesign."
+      ],
+      "restriction_rules": [
+        "Do not expand scope beyond the named global pattern or entity set."
+      ],
+      "validation_expectations": [
+        "Verify representative usages plus at least one guard against missed pattern drift."
+      ],
+      "forbidden_generic_wording": [],
+      "benchmark_cases": [
+        "single-bank-account-everywhere"
+      ]
+    },
+    {
+      "name": "mvp_surface_completion",
+      "trigger_keywords": [
+        "complete",
+        "mvp",
+        "operational",
+        "operator",
+        "surface",
+        "useful",
+        "views",
+        "vista",
+        "vistas"
+      ],
+      "task_modes": [
+        "implementation_fix",
+        "ui_runtime_bug",
+        "planning_only"
+      ],
+      "observed_state": "The MVP/operator surface is incomplete or not useful enough for the daily workflow.",
+      "expected_behavior": "The MVP surface should expose the minimum useful operational path without adding dashboard sprawl.",
+      "scope_rules": [
+        "Complete only the requested operator-facing surface needed for the daily workflow."
+      ],
+      "restriction_rules": [
+        "Do not add dashboards, background workers, storage, autonomy, or unrelated navigation redesign."
+      ],
+      "validation_expectations": [
+        "Smoke the completed surface through the operator entry point that matters."
+      ],
+      "forbidden_generic_wording": [],
+      "benchmark_cases": [
+        "navigation-convergence"
+      ]
+    },
+    {
+      "name": "spanish_implementation_task_preservation",
+      "trigger_keywords": [
+        "añadir",
+        "botón",
+        "contraseña",
+        "crear",
+        "cuenta",
+        "cuentas",
+        "eliminar",
+        "eliminemos",
+        "entidades",
+        "más",
+        "opción",
+        "quitar",
+        "quitemos",
+        "tabla",
+        "vistas"
+      ],
+      "task_modes": [],
+      "observed_state": null,
+      "expected_behavior": null,
+      "scope_rules": [
+        "Preserve exact Spanish UI text and identifiers without reintroducing the raw user task."
+      ],
+      "restriction_rules": [
+        "Do not translate identifiers or literal UI labels such as `Email`, `contraseña`, `login`, or button text."
+      ],
+      "validation_expectations": [
+        "Verify Spanish accents and `ñ` remain intact in generated prompt text."
+      ],
+      "forbidden_generic_wording": [],
+      "benchmark_cases": [
+        "email-password-autofill",
+        "single-bank-account-everywhere"
+      ]
+    }
+  ]
+}

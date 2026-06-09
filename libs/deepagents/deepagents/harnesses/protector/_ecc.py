@@ -91,11 +91,14 @@ class ProtectorPackDiscovery:
     skills_count: int
     knowledge_count: int
     validation_status: str
+    prompt_skills_count: int
+    prompt_skills_validation_status: str
     benchmark_sets_count: int
     benchmark_cases_count: int
     benchmark_runnable: bool
     benchmark_validation_status: str
     warnings: tuple[str, ...]
+    prompt_skill_warnings: tuple[str, ...]
     benchmark_warnings: tuple[str, ...]
 
 
@@ -143,11 +146,14 @@ def discover_protector_pack(*, include_benchmarks: bool = False) -> ProtectorPac
             skills_count=0,
             knowledge_count=0,
             validation_status="missing",
+            prompt_skills_count=0,
+            prompt_skills_validation_status="not_checked",
             benchmark_sets_count=0,
             benchmark_cases_count=0,
             benchmark_runnable=False,
             benchmark_validation_status="not_checked",
             warnings=(),
+            prompt_skill_warnings=(),
             benchmark_warnings=(),
         )
 
@@ -162,21 +168,25 @@ def discover_protector_pack(*, include_benchmarks: bool = False) -> ProtectorPac
             skills_count=0,
             knowledge_count=0,
             validation_status="invalid",
+            prompt_skills_count=0,
+            prompt_skills_validation_status="invalid",
             benchmark_sets_count=0,
             benchmark_cases_count=0,
             benchmark_runnable=False,
             benchmark_validation_status="invalid",
             warnings=(warning,),
+            prompt_skill_warnings=(),
             benchmark_warnings=(),
         )
 
     manifest_warnings = _validate_protector_pack_manifest(manifest_path.parent, data)
+    prompt_skill_status, prompt_skills_count, prompt_skill_warnings = _discover_pack_prompt_skill_status(manifest_path.parent, data)
     benchmark_status, benchmark_cases, benchmark_runnable, benchmark_warnings = _discover_pack_benchmark_status(
         manifest_path.parent,
         data,
         include_benchmarks=include_benchmarks,
     )
-    warnings = (*manifest_warnings, *benchmark_warnings)
+    warnings = _unique_strings((*manifest_warnings, *prompt_skill_warnings, *benchmark_warnings))
     return ProtectorPackDiscovery(
         path=manifest_path.parent,
         found=True,
@@ -184,11 +194,14 @@ def discover_protector_pack(*, include_benchmarks: bool = False) -> ProtectorPac
         skills_count=len(_manifest_items(data, "skills")),
         knowledge_count=len(_manifest_items(data, "knowledge")),
         validation_status="valid" if not warnings else "invalid",
+        prompt_skills_count=prompt_skills_count,
+        prompt_skills_validation_status=prompt_skill_status,
         benchmark_sets_count=len(_benchmark_declarations(data)),
         benchmark_cases_count=benchmark_cases,
         benchmark_runnable=benchmark_runnable,
         benchmark_validation_status=benchmark_status,
         warnings=warnings,
+        prompt_skill_warnings=prompt_skill_warnings,
         benchmark_warnings=benchmark_warnings,
     )
 
@@ -224,6 +237,11 @@ def render_ecc_status(discovery: EccDiscovery | None = None, pack_discovery: Pro
         f"- Skills: {pack.skills_count}",
         f"- Knowledge: {pack.knowledge_count}",
         f"- Validation: {pack.validation_status}",
+        "Protector pack prompt skills:",
+        f"- Declared: {pack.prompt_skills_count}",
+        f"- Validation: {pack.prompt_skills_validation_status}",
+        "Protector pack prompt skill warnings:",
+        _render_names(pack.prompt_skill_warnings),
         "Protector pack benchmarks:",
         f"- Declared sets: {pack.benchmark_sets_count}",
         f"- Cases: {pack.benchmark_cases_count}",
@@ -321,18 +339,22 @@ def _validate_protector_pack_manifest(root: Path, data: object) -> tuple[str, ..
 
     runtime = data.get("runtime_behavior")
     expected_runtime = {
-        "loaded_by_ph": False,
+        "loaded_by_ph": True,
         "changes_prompt_output": False,
         "codex_execution": False,
         "model_calls": False,
         "autonomous_loops": False,
     }
     if runtime != expected_runtime:
-        warnings.append("Protector pack runtime_behavior must keep ph loading, prompt changes, Codex execution, model calls, and loops disabled")
+        warnings.append(
+            "Protector pack runtime_behavior must enable PH pack loading while keeping prompt changes, "
+            "Codex execution, model calls, and loops disabled"
+        )
 
     warnings.extend(_validate_manifest_paths(root, _manifest_items(data, "skills"), item_name="skill"))
     warnings.extend(_validate_manifest_paths(root, _manifest_items(data, "knowledge"), item_name="knowledge"))
     warnings.extend(_validate_benchmark_declarations(root, _benchmark_declarations(data)))
+    warnings.extend(_validate_prompt_skill_metadata(root, data))
     return tuple(warnings)
 
 
@@ -366,6 +388,228 @@ def _discover_pack_benchmark_status(
     if failures:
         return "failing", executed_cases, True, tuple(failures)
     return "passing", executed_cases, True, ()
+
+
+def _discover_pack_prompt_skill_status(root: Path, data: object) -> tuple[str, int, tuple[str, ...]]:
+    """Return prompt-skill metadata validation status for a pack."""
+    declaration = _prompt_skill_metadata_declaration(data)
+    path = _prompt_skill_metadata_path(root, declaration)
+    count = _declared_prompt_skill_count(path)
+    warnings = _validate_prompt_skill_metadata(root, data)
+    if warnings:
+        return "invalid", count, warnings
+    return "valid", count, ()
+
+
+def _validate_prompt_skill_metadata(root: Path, data: object) -> tuple[str, ...]:
+    """Validate pack-native prompt-skill metadata without using it for routing."""
+    declaration = _prompt_skill_metadata_declaration(data)
+    path = _prompt_skill_metadata_path(root, declaration)
+    if path is None:
+        return ("Protector pack prompt skill metadata declaration missing: verification_assets.prompt_skills.path",)
+    if not path.is_file():
+        return (f"Protector pack prompt skill metadata path does not exist: {_manifest_string(declaration, 'path', '')}",)
+
+    try:
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return (f"invalid Protector pack prompt skill metadata JSON at {path}: {exc.msg}",)
+    if not isinstance(metadata, dict):
+        return (f"Protector pack prompt skill metadata must be a JSON object: {path}",)
+
+    warnings = list(_validate_prompt_skill_metadata_header(metadata))
+    declared = _prompt_skill_metadata_items(metadata)
+    if not declared:
+        warnings.append("Protector pack prompt skill metadata must declare prompt_skills")
+        return tuple(warnings)
+
+    runtime_names, runtime_warning = _runtime_prompt_skill_names()
+    if runtime_warning is not None:
+        warnings.append(runtime_warning)
+    benchmark_coverage = _benchmark_required_skill_coverage(root, _benchmark_declarations(data))
+    warnings.extend(_validate_prompt_skill_entries(declared, runtime_names=runtime_names, benchmark_coverage=benchmark_coverage))
+    return tuple(warnings)
+
+
+def _validate_prompt_skill_metadata_header(metadata: dict[str, object]) -> tuple[str, ...]:
+    """Validate pack prompt-skill metadata header fields."""
+    warnings: list[str] = []
+    if _manifest_string(metadata, "schema_version", "") != "protector-pack-prompt-skills-v1":
+        warnings.append("Protector pack prompt skill metadata schema_version must be protector-pack-prompt-skills-v1")
+    if _manifest_string(metadata, "selection_behavior", "") != "pack_owned_runtime_loaded":
+        warnings.append("Protector pack prompt skill metadata selection_behavior must be pack_owned_runtime_loaded")
+    if metadata.get("changes_prompt_output") is not False:
+        warnings.append("Protector pack prompt skill metadata must keep changes_prompt_output false")
+    return tuple(warnings)
+
+
+def _validate_prompt_skill_entries(
+    declared: tuple[object, ...],
+    *,
+    runtime_names: frozenset[str],
+    benchmark_coverage: dict[str, tuple[str, ...]],
+) -> tuple[str, ...]:
+    """Validate declared pack prompt-skill entries."""
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(declared, start=1):
+        if not isinstance(item, dict):
+            warnings.append(f"Protector pack prompt skill entry {index} must be an object")
+            continue
+        name = _manifest_string(item, "name", "")
+        if not name:
+            warnings.append(f"Protector pack prompt skill entry {index} must include a name")
+            continue
+        if name in seen:
+            warnings.append(f"Protector pack prompt skill declared more than once: {name}")
+        seen.add(name)
+        if name not in runtime_names:
+            warnings.append(f"Protector pack prompt skill is not defined by current runtime: {name}")
+        warnings.extend(_validate_prompt_skill_definition_fields(item, name=name))
+        covered_cases = benchmark_coverage.get(name, ())
+        if not covered_cases:
+            warnings.append(f"Protector pack prompt skill is not covered by any benchmark case: {name}")
+        warnings.extend(_validate_declared_skill_cases(item, name=name, covered_cases=covered_cases))
+    return tuple(warnings)
+
+
+def _validate_declared_skill_cases(item: dict[str, object], *, name: str, covered_cases: tuple[str, ...]) -> tuple[str, ...]:
+    """Validate declared benchmark case names for one prompt skill."""
+    cases = item.get("benchmark_cases")
+    if not isinstance(cases, list) or not cases:
+        return (f"Protector pack prompt skill must declare benchmark_cases: {name}",)
+    warnings: list[str] = []
+    for case in cases:
+        if not isinstance(case, str) or not case:
+            warnings.append(f"Protector pack prompt skill benchmark_cases must be non-empty strings: {name}")
+        elif case not in covered_cases:
+            warnings.append(f"Protector pack prompt skill benchmark case does not require {name}: {case}")
+    return tuple(warnings)
+
+
+def _validate_prompt_skill_definition_fields(item: dict[str, object], *, name: str) -> tuple[str, ...]:
+    """Validate fields needed to construct a runtime prompt skill."""
+    warnings: list[str] = []
+    for key in (
+        "trigger_keywords",
+        "task_modes",
+        "scope_rules",
+        "restriction_rules",
+        "validation_expectations",
+        "forbidden_generic_wording",
+    ):
+        value = item.get(key)
+        if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
+            warnings.append(f"Protector pack prompt skill {name} must include string list field: {key}")
+    for key in ("observed_state", "expected_behavior"):
+        value = item.get(key)
+        if value is not None and not isinstance(value, str):
+            warnings.append(f"Protector pack prompt skill {name} field must be string or null: {key}")
+    return tuple(warnings)
+
+
+def _runtime_prompt_skill_names() -> tuple[frozenset[str], str | None]:
+    """Return prompt skill names defined by the current Protector runtime."""
+    try:
+        prompt_skills = importlib.import_module("deepagents.harnesses.protector._prompt_skills")
+    except Exception as exc:  # noqa: BLE001  # report validation failure instead of crashing ecc-status
+        return frozenset(), f"could not load current runtime prompt skills: {exc}"
+    prompt_skill_type = prompt_skills.PromptSkill
+    names = {
+        value.name
+        for value in vars(prompt_skills).values()
+        if isinstance(value, prompt_skill_type) and isinstance(value.name, str)
+    }
+    return frozenset(names), None
+
+
+def _benchmark_required_skill_coverage(root: Path, declarations: tuple[object, ...]) -> dict[str, tuple[str, ...]]:
+    """Return benchmark case coverage keyed by required prompt skill name."""
+    coverage: dict[str, list[str]] = {}
+    for declaration in declarations:
+        path = _declaration_path(root, declaration)
+        if path is None or not path.is_dir():
+            continue
+        for case in sorted((item for item in path.iterdir() if item.is_dir()), key=lambda item: item.name.lower()):
+            for skill in _benchmark_required_skills(case):
+                coverage.setdefault(skill, []).append(case.name)
+    return {skill: tuple(cases) for skill, cases in coverage.items()}
+
+
+def _benchmark_required_skills(case: Path) -> tuple[str, ...]:
+    """Return required skills from a prompt benchmark expected-characteristics file."""
+    expected = case / "expected_characteristics.md"
+    if not expected.is_file():
+        return ()
+    sections = _markdown_sections(expected.read_text(encoding="utf-8"))
+    return _markdown_section_items(sections.get("required skills", ()))
+
+
+def _markdown_sections(text: str) -> dict[str, tuple[str, ...]]:
+    """Parse simple Markdown sections by heading text."""
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            current = line[3:].strip().lower()
+            sections.setdefault(current, [])
+            continue
+        if current is not None:
+            sections[current].append(raw)
+    return {name: tuple(lines) for name, lines in sections.items()}
+
+
+def _markdown_section_items(lines: tuple[str, ...]) -> tuple[str, ...]:
+    """Parse non-empty Markdown section lines as metadata items."""
+    items: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("- "):
+            line = line[2:].strip()
+        items.append(line)
+    return tuple(items)
+
+
+def _declared_prompt_skill_count(path: Path | None) -> int:
+    """Return the number of prompt skills in a metadata file when readable."""
+    if path is None or not path.is_file():
+        return 0
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return 0
+    return len(_prompt_skill_metadata_items(data))
+
+
+def _prompt_skill_metadata_items(data: object) -> tuple[object, ...]:
+    """Return prompt skill entries from metadata."""
+    if not isinstance(data, dict):
+        return ()
+    value = data.get("prompt_skills")
+    return tuple(value) if isinstance(value, list) else ()
+
+
+def _prompt_skill_metadata_declaration(data: object) -> object:
+    """Return the pack prompt-skill metadata declaration."""
+    if not isinstance(data, dict):
+        return None
+    assets = data.get("verification_assets")
+    if not isinstance(assets, dict):
+        return None
+    return assets.get("prompt_skills")
+
+
+def _prompt_skill_metadata_path(root: Path, declaration: object) -> Path | None:
+    """Return a resolved prompt-skill metadata path from a manifest declaration."""
+    if not isinstance(declaration, dict):
+        return None
+    value = declaration.get("path")
+    if not isinstance(value, str) or not value:
+        return None
+    return (root / value).resolve()
 
 
 def _validate_benchmark_declarations(root: Path, declarations: tuple[object, ...]) -> tuple[str, ...]:
@@ -525,6 +769,17 @@ def _is_relevant(text: str) -> bool:
 def _string_items(items: Iterable[object]) -> tuple[str, ...]:
     """Return only string items from a mixed iterable."""
     return tuple(item for item in items if isinstance(item, str))
+
+
+def _unique_strings(items: tuple[str, ...]) -> tuple[str, ...]:
+    """Return unique strings while preserving order."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return tuple(result)
 
 
 def _render_names(names: tuple[str, ...]) -> str:
