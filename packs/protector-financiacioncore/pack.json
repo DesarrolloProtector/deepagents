@@ -1,0 +1,66 @@
+{
+  "schema_version": "ecc-pack-v1",
+  "name": "protector-financiacioncore",
+  "display_name": "Protector FinanciacionCore",
+  "origin": "Protector",
+  "status": "slice_2_static_pack",
+  "description": "ECC-backed Protector specialization pack for FinanciacionCore/Vameco prompt quality, Codex handoff/review discipline, anti-drift rules, and repo knowledge.",
+  "runtime_behavior": {
+    "loaded_by_ph": false,
+    "changes_prompt_output": false,
+    "codex_execution": false,
+    "model_calls": false,
+    "autonomous_loops": false
+  },
+  "ecc_owned_capabilities": [
+    "agents",
+    "skills_registry",
+    "sessions",
+    "memory",
+    "workflows",
+    "hooks",
+    "dashboard",
+    "codex_support",
+    "verification_loops"
+  ],
+  "protector_owned_capabilities": [
+    "prompt_quality_benchmarks",
+    "codex_handoff_specialization",
+    "codex_review_specialization",
+    "anti_drift_rules",
+    "financiacioncore_vameco_method",
+    "repo_operational_knowledge"
+  ],
+  "skills": [
+    {
+      "name": "protector-prompt-quality",
+      "path": "skills/protector-prompt-quality/SKILL.md"
+    },
+    {
+      "name": "protector-codex-handoff",
+      "path": "skills/protector-codex-handoff/SKILL.md"
+    },
+    {
+      "name": "protector-codex-review",
+      "path": "skills/protector-codex-review/SKILL.md"
+    },
+    {
+      "name": "protector-anti-drift",
+      "path": "skills/protector-anti-drift/SKILL.md"
+    },
+    {
+      "name": "financiacioncore-method",
+      "path": "skills/financiacioncore-method/SKILL.md"
+    }
+  ],
+  "knowledge": [
+    {
+      "repo_alias": "FinanciacionCore",
+      "path": "knowledge/FinanciacionCore.md"
+    }
+  ],
+  "quality_gate": {
+    "command": "ph benchmark --benchmarks tests/prompt_benchmarks",
+    "runner_status": "existing_ph_runner"
+  }
+}

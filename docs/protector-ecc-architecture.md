@@ -53,6 +53,19 @@ Current compatibility code must not grow new Protector-owned agent registries,
 skill registries, execution profiles, sandbox policies, reviewer-chain models,
 loop policies, sessions, hooks, dashboards, or autonomous execution.
 
+## Slice 2 Pack Structure
+
+The first repo-local ECC-style Protector pack lives at:
+
+```txt
+packs/protector-financiacioncore/
+```
+
+This path is additive only. It contains a pack manifest, initial Protector
+specialization skills, and copied FinanciacionCore knowledge. Current `ph`
+runtime behavior still comes from the existing Protector harness implementation
+and `.protector-harness/knowledge/`; no routing migration happens in slice 2.
+
 ## Components To Stop Building In Protector
 
 Stop expanding Protector-local versions of:

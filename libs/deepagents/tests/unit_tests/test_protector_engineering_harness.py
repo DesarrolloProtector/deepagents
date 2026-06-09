@@ -78,6 +78,10 @@ def _prompt_benchmarks_dir() -> Path:
     return Path(__file__).resolve().parents[4] / "tests" / "prompt_benchmarks"
 
 
+def _protector_pack_dir() -> Path:
+    return Path(__file__).resolve().parents[4] / "packs" / "protector-financiacioncore"
+
+
 def _write_prompt_benchmark(root: Path, name: str, task: str, expected: str) -> Path:
     case = root / name
     case.mkdir(parents=True, exist_ok=True)
@@ -294,6 +298,37 @@ def test_protector_platform_boundaries_are_explicit() -> None:
     assert cli.DEPRECATED_PLATFORM_COMPATIBILITY_COMMANDS == ("plan",)
     assert any("ECC owns reusable agents" in boundary for boundary in agentic.PLATFORM_COMPATIBILITY_BOUNDARIES)
     assert any("Discovery is read-only" in boundary for boundary in ecc.ECC_DISCOVERY_BOUNDARY)
+
+
+def test_protector_ecc_pack_files_are_discoverable() -> None:
+    pack = _protector_pack_dir()
+    manifest = json.loads((pack / "pack.json").read_text(encoding="utf-8"))
+
+    assert manifest["name"] == "protector-financiacioncore"
+    assert manifest["runtime_behavior"] == {
+        "loaded_by_ph": False,
+        "changes_prompt_output": False,
+        "codex_execution": False,
+        "model_calls": False,
+        "autonomous_loops": False,
+    }
+    assert (pack / "README.md").is_file()
+    assert (pack / "knowledge" / "FinanciacionCore.md").read_text(encoding="utf-8") == (
+        Path(__file__).resolve().parents[4] / ".protector-harness" / "knowledge" / "FinanciacionCore.md"
+    ).read_text(encoding="utf-8")
+
+    skill_paths = tuple(skill["path"] for skill in manifest["skills"])
+    assert skill_paths == (
+        "skills/protector-prompt-quality/SKILL.md",
+        "skills/protector-codex-handoff/SKILL.md",
+        "skills/protector-codex-review/SKILL.md",
+        "skills/protector-anti-drift/SKILL.md",
+        "skills/financiacioncore-method/SKILL.md",
+    )
+    for relative in skill_paths:
+        text = (pack / relative).read_text(encoding="utf-8")
+        assert "origin: Protector ECC pack" in text
+        assert text.startswith("---\n")
 
 
 def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
