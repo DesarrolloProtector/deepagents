@@ -288,6 +288,14 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
     assert "Protector role: ECC-backed specialization layer" in output
 
 
+def test_protector_platform_boundaries_are_explicit() -> None:
+    assert agentic.PLATFORM_COMPATIBILITY_STATUS == "deprecated_compatibility_layer"
+    assert cli.STABLE_ECC_PACK_COMMANDS == ("task", "review", "review-codex", "benchmark", "ecc-status")
+    assert cli.DEPRECATED_PLATFORM_COMPATIBILITY_COMMANDS == ("plan",)
+    assert any("ECC owns reusable agents" in boundary for boundary in agentic.PLATFORM_COMPATIBILITY_BOUNDARIES)
+    assert any("Discovery is read-only" in boundary for boundary in ecc.ECC_DISCOVERY_BOUNDARY)
+
+
 def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
     rendered = engineering.render_controlled_execution_plan(
         task="Fix legacy onboarding path convergence for operator UI views",
@@ -608,6 +616,7 @@ def test_golden_single_bank_account_ui_prompt_quality(tmp_path: Path) -> None:
     assert "Task mode: ui_runtime_bug" in rendered.codex_prompt
     assert "global_pattern_change" in names
     assert "operational_workflow_convergence" in names
+    assert "localization_completion" not in names
     assert "ui_runtime_bug" not in names
     assert "navigation_surface_convergence" not in names
     assert "Original user task:" not in rendered.codex_prompt

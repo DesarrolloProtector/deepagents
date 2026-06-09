@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 _NAVIGATION_STRONG_TERMS = frozenset({"accounting", "dashboard", "index", "legacy", "menu", "menus", "nav", "navigation"})
@@ -23,6 +24,10 @@ _LOCALIZATION_TERMS = frozenset(
         "spanish",
         "traducir",
     }
+)
+_LOCALIZATION_RAW_INTENT_PATTERN = re.compile(
+    r"\b(?:english|i18n|idiomas|language|languages|localizacion|localización|localization|multidioma|multilingual|spanish|traducir|translate)\b",
+    flags=re.IGNORECASE,
 )
 _PROVIDER_BOOTSTRAP_TARGET_TERMS = frozenset({"bootstrap", "configure", "diagnostic", "probe", "smoke", "verify"})
 _PROVIDER_CONFIG_TERMS = frozenset({"config", "config_id", "configid", "set_config"})
@@ -392,8 +397,15 @@ def _skill_applies(skill: PromptSkill, task_mode: str, task_tokens: frozenset[st
     if skill.name == "mvp_surface_completion":
         return skill.applies_to(task_mode, task_tokens) and bool(task_tokens & _MVP_SURFACE_STRONG_TERMS)
     if skill.name == "localization_completion":
-        return skill.applies_to(task_mode, task_tokens) and bool(task_tokens & _LOCALIZATION_TERMS)
+        return skill.applies_to(task_mode, task_tokens) and _has_localization_intent(task_text)
     return skill.applies_to(task_mode, task_tokens)
+
+
+def _has_localization_intent(task_text: str) -> bool:
+    """Return whether task text explicitly targets localization instead of plain Spanish grammar."""
+    if _LOCALIZATION_RAW_INTENT_PATTERN.search(task_text) is not None:
+        return True
+    return re.search(r"\b(?:es\s*/\s*en|en\s*/\s*es|es-en|en-es)\b", task_text, flags=re.IGNORECASE) is not None
 
 
 def _dedupe_skills(skills: list[PromptSkill]) -> list[PromptSkill]:

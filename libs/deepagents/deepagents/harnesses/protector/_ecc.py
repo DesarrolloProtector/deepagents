@@ -1,4 +1,8 @@
-"""Read-only ECC discovery for the Protector harness."""
+"""Read-only ECC discovery for the Protector ECC pack transition.
+
+Protector may discover ECC capabilities, but it must not duplicate ECC-owned
+registries or execute ECC workflows from this adapter.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +17,11 @@ if TYPE_CHECKING:
 
 ECC_REPO_ENV_VAR = "PROTECTOR_HARNESS_ECC_REPO"
 ECC_CONFIG_ENV_VAR = "PROTECTOR_HARNESS_ECC_CONFIG"
+ECC_DISCOVERY_BOUNDARY = (
+    "Discovery is read-only.",
+    "No Codex execution, model calls, shell execution, or autonomous loops happen here.",
+    "Protector uses this adapter only to expose ECC availability while remaining a specialization pack.",
+)
 _PROTECTOR_CONFIG_DIR = ".protector-harness"
 _ECC_CONFIG_FILE = "ecc.json"
 _RELEVANT_TERMS = frozenset(

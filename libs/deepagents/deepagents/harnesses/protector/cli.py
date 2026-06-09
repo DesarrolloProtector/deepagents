@@ -48,6 +48,8 @@ _MIN_POSITIONAL_REPO_TASK_ARGS = 2
 _INTERACTIVE_SENTINEL = "END"
 _GMEM_MOVEABLE = 0x0002
 _CF_UNICODETEXT = 13
+STABLE_ECC_PACK_COMMANDS = ("task", "review", "review-codex", "benchmark", "ecc-status")
+DEPRECATED_PLATFORM_COMPATIBILITY_COMMANDS = ("plan",)
 
 
 @dataclass(frozen=True)
@@ -193,7 +195,10 @@ def _build_parser() -> argparse.ArgumentParser:
     review_codex.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     review_codex.add_argument("task", nargs="*", help="Original task text used to build the reviewer prompt.")
 
-    plan = subparsers.add_parser("plan", help="Generate a controlled multi-agent execution plan without invoking Codex.")
+    plan = subparsers.add_parser(
+        "plan",
+        help="Compatibility-only execution-plan view; ECC owns future planning/orchestration.",
+    )
     plan.add_argument("--repo", default=None, help="Explicit target repository path.")
     plan.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     plan.add_argument("task", nargs="*", help="Task text to turn into a controlled execution plan.")
@@ -548,7 +553,7 @@ def _run_review_codex(args: argparse.Namespace, parser: argparse.ArgumentParser)
 
 
 def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    """Run `ph plan`."""
+    """Run the deprecated `ph plan` compatibility view."""
     repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
     rendered = render_controlled_execution_plan(task=task, repo=repo, repo_alias=repo_alias)
     sys.stdout.write(rendered.text)

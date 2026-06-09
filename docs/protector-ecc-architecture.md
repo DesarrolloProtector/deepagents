@@ -30,6 +30,29 @@ Protector owns only the FinanciacionCore/Vameco specialization:
 - FinanciacionCore/Vameco engineering method and convergence guidance.
 - Compact prompt enrichment that keeps the task-specific request dominant.
 
+## Slice 1 Compatibility Boundary
+
+Protector is currently frozen as an ECC-backed pack transition layer. Existing
+behavior stays stable while the generic platform pieces are retired in later
+slices.
+
+Stable Protector pack commands:
+
+- `ph task`
+- `ph review`
+- `ph review-codex`
+- `ph benchmark`
+- `ph ecc-status`
+
+Deprecated compatibility command:
+
+- `ph plan` remains available only to keep Operator and CLI behavior stable
+  until ECC-backed planning replaces it.
+
+Current compatibility code must not grow new Protector-owned agent registries,
+skill registries, execution profiles, sandbox policies, reviewer-chain models,
+loop policies, sessions, hooks, dashboards, or autonomous execution.
+
 ## Components To Stop Building In Protector
 
 Stop expanding Protector-local versions of:

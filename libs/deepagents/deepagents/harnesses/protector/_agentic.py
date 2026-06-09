@@ -1,4 +1,4 @@
-"""Compatibility-only controlled planning models pending ECC migration.
+"""Deprecated compatibility-only controlled planning models pending ECC migration.
 
 Do not expand these into Protector-owned generic registries. New generic agent,
 skill, profile, sandbox, review-chain, or loop capabilities belong in ECC.
@@ -25,10 +25,17 @@ ExecutionProfileName = Literal["prompt_only", "review_only", "supervised_impleme
 SandboxAccess = Literal["read_only", "supervised_workspace_write"]
 LoopMode = Literal["disabled", "candidate_only"]
 
+PLATFORM_COMPATIBILITY_STATUS = "deprecated_compatibility_layer"
+PLATFORM_COMPATIBILITY_BOUNDARIES = (
+    "ECC owns reusable agents, skills, sessions, workflows, hooks, dashboards, review chains, sandboxes, and loops.",
+    "Protector keeps this module only to preserve current `ph plan` and Operator behavior during the ECC-pack migration.",
+    "Do not add new Protector-local generic registries or autonomous execution behavior here.",
+)
+
 
 @dataclass(frozen=True)
 class AgentDefinition:
-    """Narrow role that may participate in a controlled Protector run."""
+    """Deprecated local role snapshot retained only for `ph plan` compatibility."""
 
     name: str
     purpose: str
@@ -38,7 +45,7 @@ class AgentDefinition:
 
 @dataclass(frozen=True)
 class SkillDefinition:
-    """Registered prompt or orchestration capability with clear triggers."""
+    """Deprecated local skill snapshot retained only for `ph plan` compatibility."""
 
     name: str
     trigger: str
@@ -47,7 +54,7 @@ class SkillDefinition:
 
 @dataclass(frozen=True)
 class SandboxPolicy:
-    """Sandbox boundary for a generated execution plan."""
+    """Deprecated local sandbox snapshot retained only for `ph plan` compatibility."""
 
     name: str
     access: SandboxAccess
@@ -59,7 +66,7 @@ class SandboxPolicy:
 
 @dataclass(frozen=True)
 class ReviewerChain:
-    """Reviewer sequence required before an execution plan can be trusted."""
+    """Deprecated local reviewer-chain snapshot retained only for `ph plan` compatibility."""
 
     name: str
     reviewers: tuple[str, ...]
@@ -68,7 +75,7 @@ class ReviewerChain:
 
 @dataclass(frozen=True)
 class LoopPolicy:
-    """Bounded-loop policy for future automation."""
+    """Deprecated local loop-policy snapshot retained only for `ph plan` compatibility."""
 
     name: str
     mode: LoopMode
@@ -79,7 +86,7 @@ class LoopPolicy:
 
 @dataclass(frozen=True)
 class ExecutionProfile:
-    """Execution profile that selects agents and safety models."""
+    """Deprecated local profile snapshot retained only for `ph plan` compatibility."""
 
     name: ExecutionProfileName
     description: str
@@ -91,7 +98,7 @@ class ExecutionProfile:
 
 @dataclass(frozen=True)
 class ExecutionPlan:
-    """Selected controlled execution plan for one task."""
+    """Deprecated local execution-plan snapshot retained only for compatibility."""
 
     profile: ExecutionProfile
     agents: tuple[AgentDefinition, ...]
@@ -300,7 +307,7 @@ EXECUTION_PROFILE_REGISTRY: dict[str, ExecutionProfile] = {
 
 
 def build_execution_plan(*, task_mode: TaskMode, prompt_skills: tuple[PromptSkill, ...]) -> ExecutionPlan:
-    """Build a controlled execution plan without invoking Codex or shell tools."""
+    """Build the deprecated compatibility plan without invoking Codex or shell tools."""
     profile = _select_execution_profile(task_mode)
     skills = tuple(SKILL_REGISTRY[skill.name] for skill in prompt_skills if skill.name in SKILL_REGISTRY)
     agents = tuple(AGENT_REGISTRY[name] for name in profile.agent_names)
