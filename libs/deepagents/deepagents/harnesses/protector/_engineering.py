@@ -33,6 +33,8 @@ HARNESS_PROFILE = "protector:engineering-harness"
 HARNESS_PROFILE_ENV_VAR = "DEEPAGENTS_ENGINEERING_HARNESS_PROFILE"
 OUTCOME_HISTORY_RELATIVE_PATH = Path(".protector-harness") / "outcome-history.jsonl"
 OUTCOME_HISTORY_SIGNAL_LIMIT = 5
+OUTCOME_LEARNING_SIGNAL_MIN_COUNT = 2
+OUTCOME_LEARNING_PATTERN_LIMIT = 140
 FEATURE_HINTS = frozenset(
     {
         "api",
@@ -698,11 +700,15 @@ def render_controlled_execution_plan(
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
     codex_prompt = _render_codex_prompt(task, selection)
     history_signals = _recent_outcome_signals(repo, prompt_skills) if include_history else ()
+    learning_signals = _outcome_learning_signals(repo, prompt_skills) if include_history else ()
     history_section = (
         f"""
 
 Recent outcome signals:
-{_one_line_list(history_signals)}"""
+{_one_line_list(history_signals)}
+
+Outcome learning signals:
+{_one_line_list(learning_signals)}"""
         if include_history
         else ""
     )
@@ -1369,6 +1375,24 @@ def render_outcome_history(repo: Path, *, limit: int = 10) -> str:
             rows.append(f"  follow-up: {entry.follow_up_prompt}")
         if entry.suggested_benchmark_additions:
             rows.append(f"  benchmark additions: {_inline_or_none(entry.suggested_benchmark_additions)}")
+    return "\n".join(rows)
+
+
+def render_outcome_learning_signals(repo: Path, *, task: str | None = None, limit: int = 50) -> str:
+    """Render deterministic learning signals from repo-scoped supervised outcome history."""
+    prompt_skills: tuple[PromptSkill, ...] = ()
+    if task:
+        task_mode = _classify_task_mode(task)
+        prompt_skills = _selected_prompt_skills(task, task_mode)
+    signals = _outcome_learning_signals(repo, prompt_skills, limit=limit)
+    path = outcome_history_path(repo)
+    scope = "all pack history" if not prompt_skills else f"selected skills: {_inline_or_none(tuple(skill.name for skill in prompt_skills))}"
+    rows = [
+        "ECC Outcome Learning Signals",
+        f"Path: {path}",
+        f"Scope: {scope}",
+    ]
+    rows.extend(f"- {signal}" for signal in signals)
     return "\n".join(rows)
 
 
@@ -2674,6 +2698,147 @@ def _outcome_signal_row(entry: OutcomeSummary, overlap: tuple[str, ...]) -> str:
     if entry.follow_up_prompt:
         parts.append("follow-up=yes")
     return " | ".join(parts)
+
+
+def _outcome_learning_signals(repo: Path | None, prompt_skills: tuple[PromptSkill, ...], *, limit: int = 50) -> tuple[str, ...]:
+    """Derive deterministic planning warnings from repeated supervised outcomes."""
+    if repo is None:
+        return ("History unavailable: repo path was not provided.",)
+    entries = _matching_outcome_history(repo, prompt_skills, limit=limit)
+    if not entries:
+        return ("No outcome history entries match the selected pack/skills.",)
+
+    signals: list[str] = []
+    signals.extend(_recurring_validation_signals(entries))
+    signals.extend(_recurring_changed_file_mismatch_signals(entries))
+    signals.extend(_recurring_benchmark_coverage_signals(entries))
+    signals.extend(_recurring_follow_up_signals(entries))
+    signals.extend(_recurring_drift_deviation_signals(entries))
+    return tuple(signals) or ("No recurring outcome learning signals for selected pack/skills.",)
+
+
+def _matching_outcome_history(repo: Path, prompt_skills: tuple[PromptSkill, ...], *, limit: int) -> tuple[OutcomeSummary, ...]:
+    """Return history entries matching the current pack and selected skills."""
+    pack = discover_protector_pack(include_benchmarks=False)
+    selected_names = {skill.name for skill in prompt_skills}
+    entries: list[OutcomeSummary] = []
+    for entry in load_outcome_history(repo, limit=limit):
+        if entry.selected_pack != pack.name:
+            continue
+        if selected_names:
+            entry_skill_names = {skill.name for skill in entry.selected_skills}
+            if not (selected_names & entry_skill_names):
+                continue
+        entries.append(entry)
+    return tuple(entries)
+
+
+def _recurring_validation_signals(entries: tuple[OutcomeSummary, ...]) -> tuple[str, ...]:
+    """Return recurring failed-validation warnings."""
+    counter: dict[str, int] = {}
+    for entry in entries:
+        for validation in entry.executed_validations:
+            if not _validation_evidence_present(validation):
+                _increment(counter, _learning_pattern(validation))
+        for deviation in entry.deviations:
+            lowered = deviation.lower()
+            if "validation" in lowered or "pass claimed without validation evidence" in lowered:
+                _increment(counter, _learning_pattern(deviation))
+    return tuple(
+        f"Recurring failed validation: {pattern} ({count} outcomes). Recommendation: require concrete build/test/smoke evidence before PASS."
+        for pattern, count in _recurring_items(counter)
+    )
+
+
+def _recurring_changed_file_mismatch_signals(entries: tuple[OutcomeSummary, ...]) -> tuple[str, ...]:
+    """Return recurring changed-file mismatch warnings."""
+    counter: dict[str, int] = {}
+    for entry in entries:
+        for deviation in entry.deviations:
+            if deviation.startswith(("Changed file outside expected plan context:", "Codex output did not report changed files.")):
+                _increment(counter, _learning_pattern(deviation))
+    return tuple(
+        f"Recurring changed-file mismatch: {pattern} ({count} outcomes). Recommendation: make expected files explicit in the next Codex handoff."
+        for pattern, count in _recurring_items(counter)
+    )
+
+
+def _recurring_benchmark_coverage_signals(entries: tuple[OutcomeSummary, ...]) -> tuple[str, ...]:
+    """Return recurring benchmark-coverage warnings."""
+    counter: dict[str, int] = {}
+    for entry in entries:
+        for suggestion in entry.suggested_benchmark_additions:
+            skill = _benchmark_skill_name(suggestion)
+            _increment(counter, skill or _learning_pattern(suggestion))
+        for deviation in entry.deviations:
+            if "missing benchmark coverage" in deviation.lower():
+                _increment(counter, _learning_pattern(deviation))
+    recommendation = "Recommendation: add pack benchmark coverage before relying on this specialization."
+    return tuple(
+        f"Skill repeatedly lacks benchmark coverage: {pattern} ({count} outcomes). {recommendation}"
+        for pattern, count in _recurring_items(counter)
+    )
+
+
+def _recurring_follow_up_signals(entries: tuple[OutcomeSummary, ...]) -> tuple[str, ...]:
+    """Return recurring follow-up prompt warnings."""
+    counter: dict[str, int] = {}
+    for entry in entries:
+        if entry.follow_up_prompt:
+            _increment(counter, _learning_pattern(entry.follow_up_prompt))
+    return tuple(
+        f"Repeated follow-up prompt: {pattern} ({count} outcomes). Recommendation: include this correction in the initial plan."
+        for pattern, count in _recurring_items(counter)
+    )
+
+
+def _recurring_drift_deviation_signals(entries: tuple[OutcomeSummary, ...]) -> tuple[str, ...]:
+    """Return recurring drift/deviation warnings."""
+    counter: dict[str, int] = {}
+    for entry in entries:
+        for deviation in entry.deviations:
+            lowered = deviation.lower()
+            drift_terms = ("mentioned without task scope", "does not mention behavior tied to selected pack skill", "runtime fallback")
+            if any(term in lowered for term in drift_terms):
+                _increment(counter, _learning_pattern(deviation))
+    recommendation = "Recommendation: state the anti-drift constraint explicitly before Codex runs."
+    return tuple(
+        f"Repeated drift/deviation pattern: {pattern} ({count} outcomes). {recommendation}"
+        for pattern, count in _recurring_items(counter)
+    )
+
+
+def _increment(counter: dict[str, int], key: str) -> None:
+    """Increment a string counter."""
+    if not key:
+        return
+    counter[key] = counter.get(key, 0) + 1
+
+
+def _recurring_items(counter: dict[str, int]) -> tuple[tuple[str, int], ...]:
+    """Return recurring counter items sorted by frequency then name."""
+    return tuple(
+        sorted(
+            ((pattern, count) for pattern, count in counter.items() if count >= OUTCOME_LEARNING_SIGNAL_MIN_COUNT),
+            key=lambda item: (-item[1], item[0]),
+        )
+    )
+
+
+def _learning_pattern(text: str) -> str:
+    """Normalize one history value into a concise repeated pattern."""
+    compact = " ".join(text.strip().split())
+    if len(compact) > OUTCOME_LEARNING_PATTERN_LIMIT:
+        return f"{compact[: OUTCOME_LEARNING_PATTERN_LIMIT - 3]}..."
+    return compact
+
+
+def _benchmark_skill_name(text: str) -> str | None:
+    """Extract a skill name from a benchmark suggestion when present."""
+    match = re.search(r"uncovered pack skill:\s*([\w-]+)", text, flags=re.IGNORECASE)
+    if match is not None:
+        return match.group(1)
+    return None
 
 
 def _skill_names(skills: tuple[OutcomeSkillSummary, ...]) -> str:

@@ -26,6 +26,7 @@ from deepagents.harnesses.protector._engineering import (
     render_codex_reviewer_prompt,
     render_controlled_execution_plan,
     render_outcome_history,
+    render_outcome_learning_signals,
     render_output,
     render_prompt_benchmark_report,
     render_review_findings,
@@ -51,7 +52,16 @@ _MIN_POSITIONAL_REPO_TASK_ARGS = 2
 _INTERACTIVE_SENTINEL = "END"
 _GMEM_MOVEABLE = 0x0002
 _CF_UNICODETEXT = 13
-STABLE_ECC_PACK_COMMANDS = ("task", "review", "review-codex", "outcome", "outcome-history", "benchmark", "ecc-status")
+STABLE_ECC_PACK_COMMANDS = (
+    "task",
+    "review",
+    "review-codex",
+    "outcome",
+    "outcome-history",
+    "outcome-learning",
+    "benchmark",
+    "ecc-status",
+)
 DEPRECATED_PLATFORM_COMPATIBILITY_COMMANDS = ("plan",)
 
 
@@ -176,12 +186,29 @@ def _resolve_history_repo(
     return _resolve_positional_repo(positional_repo, parser)
 
 
+def _resolve_history_repo_and_optional_task(
+    *,
+    explicit_repo: str | None,
+    positional: list[str],
+    parser: argparse.ArgumentParser,
+) -> tuple[Path, str | None]:
+    """Resolve a repo plus optional task text for history-learning commands."""
+    if explicit_repo is not None:
+        task = _task_text(positional)
+        return _resolve_explicit_repo(explicit_repo, parser), task or None
+    if not positional:
+        parser.error("repo alias/path is required unless --repo is used")
+    repo = _resolve_positional_repo(positional[0], parser)
+    task = _task_text(positional[1:])
+    return repo, task or None
+
+
 def _task_text(parts: list[str]) -> str:
     """Join task words from argparse into a compact task string."""
     return " ".join(parts).strip()
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit subcommand declarations keep CLI contracts inspectable
     """Build the `ph` argument parser."""
     parser = argparse.ArgumentParser(
         prog="ph",
@@ -223,6 +250,12 @@ def _build_parser() -> argparse.ArgumentParser:
     outcome_history.add_argument("--repo", default=None, help="Explicit target repository path.")
     outcome_history.add_argument("--limit", type=int, default=10, help="Maximum number of recent history entries to show.")
     outcome_history.add_argument("repo_or_alias", nargs="?", help="Repo alias/path when --repo is not used.")
+
+    outcome_learning = subparsers.add_parser("outcome-learning", help="Inspect derived ECC supervised outcome learning signals.")
+    outcome_learning.add_argument("--repo", default=None, help="Explicit target repository path.")
+    outcome_learning.add_argument("--limit", type=int, default=50, help="Maximum number of recent history entries to analyze.")
+    outcome_learning.add_argument("repo_or_task", nargs="?", help="Repo alias/path, or the first task word when --repo is used.")
+    outcome_learning.add_argument("task", nargs="*", help="Optional task text used to filter signals to selected skills.")
 
     plan = subparsers.add_parser(
         "plan",
@@ -613,6 +646,20 @@ def _run_outcome_history(args: argparse.Namespace, parser: argparse.ArgumentPars
     return 0
 
 
+def _run_outcome_learning(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph outcome-learning`."""
+    repo, task = _resolve_history_repo_and_optional_task(
+        explicit_repo=args.repo,
+        positional=[item for item in [args.repo_or_task, *args.task] if item is not None],
+        parser=parser,
+    )
+    if args.limit < 1:
+        parser.error("--limit must be greater than 0")
+    sys.stdout.write(render_outcome_learning_signals(repo, task=task, limit=args.limit))
+    sys.stdout.write("\n")
+    return 0
+
+
 def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run the deprecated `ph plan` compatibility view."""
     repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
@@ -680,7 +727,7 @@ def _run_benchmark(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     return 0 if all(result.passed for result in results) else 1
 
 
-def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901  # explicit argparse dispatch keeps command behavior readable
+def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901, PLR0912  # explicit argparse dispatch keeps command behavior readable
     """Run the `ph` CLI."""
     _configure_utf8_stdio()
     parser = _build_parser()
@@ -695,6 +742,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901  # explicit ar
         result = _run_outcome(args, parser)
     elif args.command == "outcome-history":
         result = _run_outcome_history(args, parser)
+    elif args.command == "outcome-learning":
+        result = _run_outcome_learning(args, parser)
     elif args.command == "plan":
         result = _run_plan(args, parser)
     elif args.command == "run":

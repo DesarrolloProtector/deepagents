@@ -90,6 +90,35 @@ def _write_prompt_benchmark(root: Path, name: str, task: str, expected: str) -> 
     return case
 
 
+def _append_outcome_summary(
+    repo: Path,
+    *,
+    status: str = "needs_review",
+    deviations: tuple[str, ...] = (),
+    validations: tuple[str, ...] = (),
+    follow_up: str | None = None,
+    benchmark_additions: tuple[str, ...] = (),
+) -> Path:
+    summary = engineering.OutcomeSummary(
+        timestamp="2026-06-09T10:00:00Z",
+        task="Fix legacy onboarding path convergence for operator UI views",
+        selected_pack="protector-financiacioncore",
+        selected_skills=(
+            engineering.OutcomeSkillSummary(name="base_prompt_quality", source="runtime_generic"),
+            engineering.OutcomeSkillSummary(name="implementation_fix", source="runtime_generic"),
+            engineering.OutcomeSkillSummary(name="navigation_surface_convergence", source="pack"),
+        ),
+        status=status,
+        changed_files=("Views/Unexpected.cshtml",),
+        executed_validations=validations,
+        deviations=deviations,
+        follow_up_prompt=follow_up,
+        suggested_benchmark_additions=benchmark_additions,
+    )
+    report = engineering.OutcomeReport(text="", status=status, follow_up=follow_up, summary=summary)
+    return engineering.append_outcome_history(repo, report)
+
+
 def _pack_prompt_skill_metadata_item(name: str, cases: list[str]) -> dict[str, object]:
     return {
         "name": name,
@@ -409,7 +438,16 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
 
 def test_protector_platform_boundaries_are_explicit() -> None:
     assert agentic.PLATFORM_COMPATIBILITY_STATUS == "deprecated_compatibility_layer"
-    assert cli.STABLE_ECC_PACK_COMMANDS == ("task", "review", "review-codex", "outcome", "outcome-history", "benchmark", "ecc-status")
+    assert cli.STABLE_ECC_PACK_COMMANDS == (
+        "task",
+        "review",
+        "review-codex",
+        "outcome",
+        "outcome-history",
+        "outcome-learning",
+        "benchmark",
+        "ecc-status",
+    )
     assert cli.DEPRECATED_PLATFORM_COMPATIBILITY_COMMANDS == ("plan",)
     assert any("ECC owns reusable agents" in boundary for boundary in agentic.PLATFORM_COMPATIBILITY_BOUNDARIES)
     assert any("Discovery is read-only" in boundary for boundary in ecc.ECC_DISCOVERY_BOUNDARY)
@@ -866,6 +904,58 @@ PASS
     assert "Recent outcome signals:" in rendered.text
     assert "accepted | skills=base_prompt_quality, implementation_fix, navigation_surface_convergence" in rendered.text
     assert "files=Views/Operator/Index.cshtml" in rendered.text
+
+
+def test_outcome_learning_signals_derive_recurring_patterns(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    for _ in range(2):
+        _append_outcome_summary(
+            repo,
+            validations=("not run",),
+            deviations=(
+                "Changed file outside expected plan context: Views/Unexpected.cshtml",
+                "dashboard mentioned without task scope",
+                "PASS claimed without validation evidence",
+            ),
+            follow_up="Revise or justify the Codex result for: Fix legacy onboarding path convergence.",
+            benchmark_additions=("Add prompt benchmark coverage for uncovered pack skill: localization_completion.",),
+        )
+
+    rendered = engineering.render_outcome_learning_signals(
+        repo,
+        task="Fix legacy onboarding path convergence for operator UI views",
+    )
+
+    assert "ECC Outcome Learning Signals" in rendered
+    assert "Scope: selected skills: base_prompt_quality, navigation_surface_convergence, implementation_fix" in rendered
+    assert "Recurring failed validation: not run (2 outcomes)." in rendered
+    assert "Recurring changed-file mismatch: Changed file outside expected plan context: Views/Unexpected.cshtml (2 outcomes)." in rendered
+    assert "Skill repeatedly lacks benchmark coverage: localization_completion (2 outcomes)." in rendered
+    assert "Repeated follow-up prompt: Revise or justify the Codex result for: Fix legacy onboarding path convergence. (2 outcomes)." in rendered
+    assert "Repeated drift/deviation pattern: dashboard mentioned without task scope (2 outcomes)." in rendered
+
+
+def test_plan_with_history_surfaces_recurring_learning_signals(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    for _ in range(2):
+        _append_outcome_summary(
+            repo,
+            validations=("not run",),
+            deviations=("dashboard mentioned without task scope",),
+            follow_up="Revise or justify the Codex result for: Fix legacy onboarding path convergence.",
+        )
+
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+        include_history=True,
+    )
+
+    assert "Outcome learning signals:" in rendered.text
+    assert "Recurring failed validation: not run (2 outcomes)." in rendered.text
+    assert "Repeated drift/deviation pattern: dashboard mentioned without task scope (2 outcomes)." in rendered.text
+    assert "Recommendation: state the anti-drift constraint explicitly before Codex runs." in rendered.text
 
 
 def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:
@@ -1972,6 +2062,44 @@ PASS
     stdout = capsys.readouterr().out
     assert "Recent outcome signals:" in stdout
     assert "accepted | skills=base_prompt_quality, implementation_fix, navigation_surface_convergence" in stdout
+
+
+def test_cli_outcome_learning_lists_derived_signals(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    for _ in range(2):
+        _append_outcome_summary(
+            repo,
+            validations=("not run",),
+            deviations=("dashboard mentioned without task scope",),
+            follow_up="Revise or justify the Codex result for: Fix legacy onboarding path convergence.",
+        )
+
+    assert (
+        cli.main(
+            [
+                "outcome-learning",
+                "--repo",
+                str(repo),
+                "--limit",
+                "10",
+                "Fix",
+                "legacy",
+                "onboarding",
+                "path",
+                "convergence",
+                "for",
+                "operator",
+                "UI",
+                "views",
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    assert stdout.startswith("ECC Outcome Learning Signals\n")
+    assert "Recurring failed validation: not run (2 outcomes)." in stdout
+    assert "Repeated drift/deviation pattern: dashboard mentioned without task scope (2 outcomes)." in stdout
 
 
 def test_cli_task_unknown_alias_fails(capsys) -> None:
