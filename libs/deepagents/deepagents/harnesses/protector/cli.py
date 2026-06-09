@@ -21,9 +21,11 @@ from deepagents.harnesses.protector._engineering import (
     HARNESS_PROFILE,
     HarnessUsageError,
     RenderedOutput,
+    append_outcome_history,
     build_read_only_agent,
     render_codex_reviewer_prompt,
     render_controlled_execution_plan,
+    render_outcome_history,
     render_output,
     render_prompt_benchmark_report,
     render_review_findings,
@@ -49,7 +51,7 @@ _MIN_POSITIONAL_REPO_TASK_ARGS = 2
 _INTERACTIVE_SENTINEL = "END"
 _GMEM_MOVEABLE = 0x0002
 _CF_UNICODETEXT = 13
-STABLE_ECC_PACK_COMMANDS = ("task", "review", "review-codex", "outcome", "benchmark", "ecc-status")
+STABLE_ECC_PACK_COMMANDS = ("task", "review", "review-codex", "outcome", "outcome-history", "benchmark", "ecc-status")
 DEPRECATED_PLATFORM_COMPATIBILITY_COMMANDS = ("plan",)
 
 
@@ -160,6 +162,20 @@ def _resolve_repo_and_task(
     return resolved.path, resolved.alias, task
 
 
+def _resolve_history_repo(
+    *,
+    explicit_repo: str | None,
+    positional_repo: str | None,
+    parser: argparse.ArgumentParser,
+) -> Path:
+    """Resolve a repo for repo-scoped outcome history commands."""
+    if explicit_repo is not None:
+        return _resolve_explicit_repo(explicit_repo, parser)
+    if positional_repo is None:
+        parser.error("repo alias/path is required unless --repo is used")
+    return _resolve_positional_repo(positional_repo, parser)
+
+
 def _task_text(parts: list[str]) -> str:
     """Join task words from argparse into a compact task string."""
     return " ".join(parts).strip()
@@ -199,14 +215,21 @@ def _build_parser() -> argparse.ArgumentParser:
     outcome = subparsers.add_parser("outcome", help="Compare pasted Codex output against the ECC supervised plan/review contract.")
     outcome.add_argument("--repo", default=None, help="Explicit target repository path.")
     outcome.add_argument("--codex-output", type=Path, required=True, help="Text file containing Codex implementation output to capture.")
+    outcome.add_argument("--save-history", action="store_true", help="Append a structured outcome summary to repo-local ECC history.")
     outcome.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     outcome.add_argument("task", nargs="*", help="Original planned task text used to compare the outcome.")
+
+    outcome_history = subparsers.add_parser("outcome-history", help="List recent repo-local ECC supervised outcome history.")
+    outcome_history.add_argument("--repo", default=None, help="Explicit target repository path.")
+    outcome_history.add_argument("--limit", type=int, default=10, help="Maximum number of recent history entries to show.")
+    outcome_history.add_argument("repo_or_alias", nargs="?", help="Repo alias/path when --repo is not used.")
 
     plan = subparsers.add_parser(
         "plan",
         help="Compatibility-only execution-plan view; ECC owns future planning/orchestration.",
     )
     plan.add_argument("--repo", default=None, help="Explicit target repository path.")
+    plan.add_argument("--with-history", action="store_true", help="Include recent repo-scoped supervised outcome signals.")
     plan.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     plan.add_argument("task", nargs="*", help="Task text to turn into a controlled execution plan.")
 
@@ -572,13 +595,28 @@ def _run_outcome(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
     )
     sys.stdout.write(report.text)
     sys.stdout.write("\n")
+    if args.save_history:
+        if repo is None:
+            parser.error("--save-history requires a resolved repo")
+        path = append_outcome_history(repo, report)
+        sys.stdout.write(f"Outcome history saved: {path}\n")
+    return 0
+
+
+def _run_outcome_history(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph outcome-history`."""
+    repo = _resolve_history_repo(explicit_repo=args.repo, positional_repo=args.repo_or_alias, parser=parser)
+    if args.limit < 1:
+        parser.error("--limit must be greater than 0")
+    sys.stdout.write(render_outcome_history(repo, limit=args.limit))
+    sys.stdout.write("\n")
     return 0
 
 
 def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run the deprecated `ph plan` compatibility view."""
     repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
-    rendered = render_controlled_execution_plan(task=task, repo=repo, repo_alias=repo_alias)
+    rendered = render_controlled_execution_plan(task=task, repo=repo, repo_alias=repo_alias, include_history=args.with_history)
     sys.stdout.write(rendered.text)
     sys.stdout.write("\n")
     return 0
@@ -655,6 +693,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901  # explicit ar
         result = _run_review_codex(args, parser)
     elif args.command == "outcome":
         result = _run_outcome(args, parser)
+    elif args.command == "outcome-history":
+        result = _run_outcome_history(args, parser)
     elif args.command == "plan":
         result = _run_plan(args, parser)
     elif args.command == "run":

@@ -409,7 +409,7 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
 
 def test_protector_platform_boundaries_are_explicit() -> None:
     assert agentic.PLATFORM_COMPATIBILITY_STATUS == "deprecated_compatibility_layer"
-    assert cli.STABLE_ECC_PACK_COMMANDS == ("task", "review", "review-codex", "outcome", "benchmark", "ecc-status")
+    assert cli.STABLE_ECC_PACK_COMMANDS == ("task", "review", "review-codex", "outcome", "outcome-history", "benchmark", "ecc-status")
     assert cli.DEPRECATED_PLATFORM_COMPATIBILITY_COMMANDS == ("plan",)
     assert any("ECC owns reusable agents" in boundary for boundary in agentic.PLATFORM_COMPATIBILITY_BOUNDARIES)
     assert any("Discovery is read-only" in boundary for boundary in ecc.ECC_DISCOVERY_BOUNDARY)
@@ -788,6 +788,84 @@ FAIL
     assert "Status: failed" in report.text
     assert "Codex reported FAIL; outcome cannot be accepted." in report.text
     assert "Follow-up prompt:\n- Revise or justify the Codex result" in report.text
+
+
+def test_outcome_history_persists_structured_summary_without_raw_codex_output(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_output = """Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build verified and UI workflow route smoke test check passed.
+
+PASS
+"""
+    report = engineering.render_supervised_outcome_report(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+        codex_output=codex_output,
+        source="codex-output.txt",
+    )
+
+    path = engineering.append_outcome_history(repo, report)
+    payload = json.loads(path.read_text(encoding="utf-8").strip())
+
+    assert path == repo / ".protector-harness" / "outcome-history.jsonl"
+    assert payload["selected_pack"] == "protector-financiacioncore"
+    assert payload["status"] == "accepted"
+    assert payload["changed_files"] == ["Views/Operator/Index.cshtml"]
+    assert payload["executed_validations"] == ["Build verified and UI workflow route smoke test check passed."]
+    assert payload["deviations"] == []
+    assert payload["follow_up_prompt"] is None
+    assert payload["suggested_benchmark_additions"] == []
+    assert {"name": "navigation_surface_convergence", "source": "pack"} in payload["selected_skills"]
+    assert "codex_output" not in payload
+    assert "Files read" not in path.read_text(encoding="utf-8")
+
+
+def test_plan_can_surface_recent_relevant_outcome_signals(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    report = engineering.render_supervised_outcome_report(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+        codex_output="""Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build verified and UI workflow route smoke test check passed.
+
+PASS
+""",
+        source="codex-output.txt",
+    )
+    engineering.append_outcome_history(repo, report)
+
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+        include_history=True,
+    )
+
+    assert "Recent outcome signals:" in rendered.text
+    assert "accepted | skills=base_prompt_quality, implementation_fix, navigation_surface_convergence" in rendered.text
+    assert "files=Views/Operator/Index.cshtml" in rendered.text
 
 
 def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:
@@ -1777,6 +1855,123 @@ PASS
     assert "Status: accepted" in stdout
     assert "Actual files changed:\n- Views/Operator/Index.cshtml" in stdout
     assert "Supervision boundaries:" in stdout
+
+
+def test_cli_outcome_can_save_and_list_history(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_output = tmp_path / "codex-output.txt"
+    codex_output.write_text(
+        """Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build verified and UI workflow route smoke test check passed.
+
+PASS
+""",
+        encoding="utf-8",
+    )
+
+    def copy_to_clipboard(text: str) -> cli._ClipboardCopyResult:
+        _ = text
+        msg = "clipboard should not be used by ph outcome"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(cli, "_copy_to_clipboard", copy_to_clipboard)
+
+    assert (
+        cli.main(
+            [
+                "outcome",
+                "--repo",
+                str(repo),
+                "--codex-output",
+                str(codex_output),
+                "--save-history",
+                "Fix",
+                "legacy",
+                "onboarding",
+                "path",
+                "convergence",
+                "for",
+                "operator",
+                "UI",
+                "views",
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    assert "Outcome history saved:" in stdout
+    assert (repo / ".protector-harness" / "outcome-history.jsonl").is_file()
+
+    assert cli.main(["outcome-history", "--repo", str(repo), "--limit", "5"]) == 0
+
+    history = capsys.readouterr().out
+    assert history.startswith("ECC Outcome History\n")
+    assert "Entries shown: 1" in history
+    assert "accepted | protector-financiacioncore" in history
+    assert "changed files: Views/Operator/Index.cshtml" in history
+    assert "validations: Build verified and UI workflow route smoke test check passed." in history
+
+
+def test_cli_plan_with_history_surfaces_recent_signals(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    report = engineering.render_supervised_outcome_report(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+        codex_output="""Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build verified and UI workflow route smoke test check passed.
+
+PASS
+""",
+        source="codex-output.txt",
+    )
+    engineering.append_outcome_history(repo, report)
+
+    assert (
+        cli.main(
+            [
+                "plan",
+                "--repo",
+                str(repo),
+                "--with-history",
+                "Fix",
+                "legacy",
+                "onboarding",
+                "path",
+                "convergence",
+                "for",
+                "operator",
+                "UI",
+                "views",
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    assert "Recent outcome signals:" in stdout
+    assert "accepted | skills=base_prompt_quality, implementation_fix, navigation_surface_convergence" in stdout
 
 
 def test_cli_task_unknown_alias_fails(capsys) -> None:

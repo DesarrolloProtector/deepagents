@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
 
 HARNESS_PROFILE = "protector:engineering-harness"
 HARNESS_PROFILE_ENV_VAR = "DEEPAGENTS_ENGINEERING_HARNESS_PROFILE"
+OUTCOME_HISTORY_RELATIVE_PATH = Path(".protector-harness") / "outcome-history.jsonl"
+OUTCOME_HISTORY_SIGNAL_LIMIT = 5
 FEATURE_HINTS = frozenset(
     {
         "api",
@@ -387,12 +391,37 @@ class ReviewFindings:
 
 
 @dataclass(frozen=True)
+class OutcomeSkillSummary:
+    """Selected prompt skill recorded in supervised outcome history."""
+
+    name: str
+    source: str
+
+
+@dataclass(frozen=True)
+class OutcomeSummary:
+    """Structured supervised outcome summary safe for local history."""
+
+    timestamp: str
+    task: str
+    selected_pack: str
+    selected_skills: tuple[OutcomeSkillSummary, ...]
+    status: str
+    changed_files: tuple[str, ...]
+    executed_validations: tuple[str, ...]
+    deviations: tuple[str, ...]
+    follow_up_prompt: str | None
+    suggested_benchmark_additions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class OutcomeReport:
     """Supervised Codex outcome report plus machine-readable status."""
 
     text: str
     status: str
     follow_up: str | None
+    summary: OutcomeSummary
 
 
 @dataclass(frozen=True)
@@ -654,7 +683,13 @@ def render_prompt_benchmark_report(results: tuple[PromptBenchmarkResult, ...]) -
     return "\n".join(rows)
 
 
-def render_controlled_execution_plan(*, task: str, repo: Path | None, repo_alias: str | None = None) -> RenderedExecutionPlan:
+def render_controlled_execution_plan(
+    *,
+    task: str,
+    repo: Path | None,
+    repo_alias: str | None = None,
+    include_history: bool = False,
+) -> RenderedExecutionPlan:
     """Render a controlled multi-agent execution plan without invoking Codex."""
     selection = _select_context(repo, task, repo_alias=repo_alias)
     task_mode = _classify_task_mode(task)
@@ -662,6 +697,15 @@ def render_controlled_execution_plan(*, task: str, repo: Path | None, repo_alias
     plan = build_execution_plan(task_mode=task_mode, prompt_skills=prompt_skills)
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
     codex_prompt = _render_codex_prompt(task, selection)
+    history_signals = _recent_outcome_signals(repo, prompt_skills) if include_history else ()
+    history_section = (
+        f"""
+
+Recent outcome signals:
+{_one_line_list(history_signals)}"""
+        if include_history
+        else ""
+    )
     text = f"""{render_agentic_execution_plan(plan)}
 
 Task mode: {task_mode}
@@ -671,13 +715,16 @@ Selected context paths:
 Knowledge gates:
 {_one_line_list(selection.knowledge)}
 
-{_render_ecc_supervised_automation_pilot(
-    task=task,
-    task_mode=task_mode,
-    selection=selection,
-    prompt_skills=prompt_skills,
-    codex_prompt=codex_prompt,
-)}"""
+{
+        _render_ecc_supervised_automation_pilot(
+            task=task,
+            task_mode=task_mode,
+            selection=selection,
+            prompt_skills=prompt_skills,
+            codex_prompt=codex_prompt,
+        )
+    }
+{history_section}"""
     return RenderedExecutionPlan(
         text=text,
         profile=plan.profile.name,
@@ -742,15 +789,17 @@ Review criteria:
 Blockers or missing coverage:
 {_one_line_list(blockers)}
 
-{_render_ecc_review_contract(
-    task=task,
-    task_mode=task_mode,
-    selection=selection,
-    prompt_skills=prompt_skills,
-    selected_pack_skills=selected_pack_skills,
-    selected_runtime_skills=selected_runtime_skills,
-    coverage=coverage,
-)}"""
+{
+        _render_ecc_review_contract(
+            task=task,
+            task_mode=task_mode,
+            selection=selection,
+            prompt_skills=prompt_skills,
+            selected_pack_skills=selected_pack_skills,
+            selected_runtime_skills=selected_runtime_skills,
+            coverage=coverage,
+        )
+    }"""
 
 
 def _render_skill_source_rows(skills: tuple[PromptSkill, ...], coverage: dict[str, tuple[str, ...]]) -> str:
@@ -833,11 +882,7 @@ def _expected_implementation_areas(skills: tuple[PromptSkill, ...], task_mode: T
 
 def _expected_files_likely_to_change(selected_paths: tuple[str, ...]) -> tuple[str, ...]:
     """Return likely file/change areas from already-selected context without scanning diffs."""
-    candidates = [
-        path
-        for path in selected_paths
-        if not path.endswith(("AGENTS.md", "MEMORY.md")) and "knowledge/" not in path.replace("\\", "/")
-    ]
+    candidates = [path for path in selected_paths if not path.endswith(("AGENTS.md", "MEMORY.md")) and "knowledge/" not in path.replace("\\", "/")]
     if candidates:
         return tuple(candidates[:6])
     return ("Unknown until Codex inspects the selected context; reviewers should reject unrelated file churn.",)
@@ -1203,6 +1248,18 @@ def render_supervised_outcome_report(
     status = _outcome_status(review, deviations=tuple(deviations), validation_gaps=validation_gaps)
     follow_up = _outcome_follow_up_prompt(task, deviations=tuple(deviations), validation_gaps=validation_gaps, status=status)
     benchmark_additions = _suggested_benchmark_additions(selected_pack_skills, coverage, codex_output, deviations)
+    summary = OutcomeSummary(
+        timestamp=_utc_timestamp(),
+        task=_task_objective(task),
+        selected_pack=pack.name,
+        selected_skills=tuple(OutcomeSkillSummary(name=skill.name, source=skill.source) for skill in skills),
+        status=_history_status(status),
+        changed_files=actual_changed_files,
+        executed_validations=actual_validation,
+        deviations=tuple(deviations),
+        follow_up_prompt=follow_up,
+        suggested_benchmark_additions=_meaningful_benchmark_additions(benchmark_additions),
+    )
     text = f"""ECC Supervised Outcome Report
 Status: {status}
 Codex output: {source}
@@ -1252,7 +1309,67 @@ Supervision boundaries:
 - Git diffs were not inspected automatically.
 - No memory/session persistence was written.
 - No autonomous loop was started."""
-    return OutcomeReport(text=text, status=status, follow_up=follow_up)
+    return OutcomeReport(text=text, status=status, follow_up=follow_up, summary=summary)
+
+
+def outcome_history_path(repo: Path) -> Path:
+    """Return the repo-scoped supervised outcome history path."""
+    return repo / OUTCOME_HISTORY_RELATIVE_PATH
+
+
+def append_outcome_history(repo: Path, report: OutcomeReport) -> Path:
+    """Append one structured supervised outcome summary to repo-local JSONL history."""
+    path = outcome_history_path(repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(f"{json.dumps(_outcome_summary_payload(report.summary), sort_keys=True)}\n")
+    return path
+
+
+def load_outcome_history(repo: Path, *, limit: int = 10) -> tuple[OutcomeSummary, ...]:
+    """Load recent repo-scoped supervised outcome summaries."""
+    path = outcome_history_path(repo)
+    if not path.exists():
+        return ()
+    entries: list[OutcomeSummary] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        summary = _outcome_summary_from_payload(payload)
+        if summary is not None:
+            entries.append(summary)
+    if limit <= 0:
+        return ()
+    return tuple(entries[-limit:][::-1])
+
+
+def render_outcome_history(repo: Path, *, limit: int = 10) -> str:
+    """Render recent repo-scoped supervised outcome history."""
+    entries = load_outcome_history(repo, limit=limit)
+    path = outcome_history_path(repo)
+    rows = [
+        "ECC Outcome History",
+        f"Path: {path}",
+        f"Entries shown: {len(entries)}",
+    ]
+    if not entries:
+        rows.append("- (none)")
+        return "\n".join(rows)
+    for entry in entries:
+        rows.append(f"- {entry.timestamp} | {entry.status} | {entry.selected_pack} | {_skill_names(entry.selected_skills)}")
+        rows.append(f"  task: {entry.task}")
+        rows.append(f"  changed files: {_inline_or_none(entry.changed_files)}")
+        rows.append(f"  validations: {_inline_or_none(entry.executed_validations)}")
+        rows.append(f"  deviations: {_inline_or_none(entry.deviations)}")
+        if entry.follow_up_prompt:
+            rows.append(f"  follow-up: {entry.follow_up_prompt}")
+        if entry.suggested_benchmark_additions:
+            rows.append(f"  benchmark additions: {_inline_or_none(entry.suggested_benchmark_additions)}")
+    return "\n".join(rows)
 
 
 def review_codex_output(*, task: str, output: str, source: str) -> ReviewFindings:
@@ -2438,3 +2555,132 @@ def _suggested_benchmark_additions(
     if any("does not mention behavior tied to selected pack skill" in item for item in deviations):
         suggestions.append("No benchmark addition suggested until the real uncovered behavior is clarified.")
     return tuple(suggestions) or ("(none)",)
+
+
+def _utc_timestamp() -> str:
+    """Return a compact UTC timestamp for local operational history."""
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _history_status(status: str) -> str:
+    """Normalize rendered outcome status for structured history."""
+    return status.replace(" ", "_")
+
+
+def _meaningful_benchmark_additions(items: tuple[str, ...]) -> tuple[str, ...]:
+    """Return real benchmark suggestions, excluding display placeholders."""
+    return tuple(item for item in items if item != "(none)")
+
+
+def _outcome_summary_payload(summary: OutcomeSummary) -> dict[str, object]:
+    """Return a JSON-safe outcome summary payload."""
+    return {
+        "timestamp": summary.timestamp,
+        "task": summary.task,
+        "selected_pack": summary.selected_pack,
+        "selected_skills": tuple({"name": skill.name, "source": skill.source} for skill in summary.selected_skills),
+        "status": summary.status,
+        "changed_files": summary.changed_files,
+        "executed_validations": summary.executed_validations,
+        "deviations": summary.deviations,
+        "follow_up_prompt": summary.follow_up_prompt,
+        "suggested_benchmark_additions": summary.suggested_benchmark_additions,
+    }
+
+
+def _outcome_summary_from_payload(payload: object) -> OutcomeSummary | None:
+    """Parse one outcome history JSON object."""
+    if not isinstance(payload, dict):
+        return None
+    selected_skills = _outcome_skill_summaries(payload.get("selected_skills"))
+    return OutcomeSummary(
+        timestamp=_string_field(payload, "timestamp"),
+        task=_string_field(payload, "task"),
+        selected_pack=_string_field(payload, "selected_pack"),
+        selected_skills=selected_skills,
+        status=_string_field(payload, "status"),
+        changed_files=_string_tuple_field(payload, "changed_files"),
+        executed_validations=_string_tuple_field(payload, "executed_validations"),
+        deviations=_string_tuple_field(payload, "deviations"),
+        follow_up_prompt=_optional_string_field(payload, "follow_up_prompt"),
+        suggested_benchmark_additions=_string_tuple_field(payload, "suggested_benchmark_additions"),
+    )
+
+
+def _outcome_skill_summaries(value: object) -> tuple[OutcomeSkillSummary, ...]:
+    """Parse selected skill history rows."""
+    if not isinstance(value, list):
+        return ()
+    rows: list[OutcomeSkillSummary] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        source = item.get("source")
+        if isinstance(name, str) and isinstance(source, str):
+            rows.append(OutcomeSkillSummary(name=name, source=source))
+    return tuple(rows)
+
+
+def _string_field(payload: dict[object, object], key: str) -> str:
+    """Read a string field from a history payload."""
+    value = payload.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _optional_string_field(payload: dict[object, object], key: str) -> str | None:
+    """Read an optional string field from a history payload."""
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _string_tuple_field(payload: dict[object, object], key: str) -> tuple[str, ...]:
+    """Read a string tuple field from a history payload."""
+    value = payload.get(key)
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str))
+
+
+def _recent_outcome_signals(repo: Path | None, prompt_skills: tuple[PromptSkill, ...]) -> tuple[str, ...]:
+    """Return recent relevant outcome history signals for the selected pack/skills."""
+    if repo is None:
+        return ("History unavailable: repo path was not provided.",)
+    pack = discover_protector_pack(include_benchmarks=False)
+    selected_names = {skill.name for skill in prompt_skills}
+    signals: list[str] = []
+    for entry in load_outcome_history(repo, limit=20):
+        if entry.selected_pack != pack.name:
+            continue
+        entry_skill_names = {skill.name for skill in entry.selected_skills}
+        overlap = tuple(sorted(selected_names & entry_skill_names))
+        if not overlap:
+            continue
+        signals.append(_outcome_signal_row(entry, overlap))
+        if len(signals) >= OUTCOME_HISTORY_SIGNAL_LIMIT:
+            break
+    return tuple(signals) or ("No relevant repo-scoped supervised outcome history for selected pack/skills.",)
+
+
+def _outcome_signal_row(entry: OutcomeSummary, overlap: tuple[str, ...]) -> str:
+    """Render one compact outcome signal for a future plan."""
+    parts = [
+        f"{entry.timestamp} {entry.status}",
+        f"skills={', '.join(overlap)}",
+        f"files={_inline_or_none(entry.changed_files)}",
+    ]
+    if entry.deviations:
+        parts.append(f"deviations={_inline_or_none(entry.deviations[:2])}")
+    if entry.follow_up_prompt:
+        parts.append("follow-up=yes")
+    return " | ".join(parts)
+
+
+def _skill_names(skills: tuple[OutcomeSkillSummary, ...]) -> str:
+    """Render skill names with sources."""
+    return _inline_or_none(tuple(f"{skill.name} [{skill.source}]" for skill in skills))
+
+
+def _inline_or_none(items: tuple[str, ...]) -> str:
+    """Render a compact comma-separated list."""
+    return ", ".join(items) if items else "(none)"
