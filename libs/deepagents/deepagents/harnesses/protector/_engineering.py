@@ -167,6 +167,8 @@ LOCALIZATION_TASK_TERMS = frozenset(
         "translate",
     }
 )
+LOCALIZATION_STRONG_TASK_TERMS = LOCALIZATION_TASK_TERMS - frozenset({"en", "es"})
+LOCALIZATION_LANGUAGE_PAIR_PHRASES = ("es/en", "en/es", "spanish/english", "english/spanish")
 DIAGNOSTIC_BOOTSTRAP_TERMS = frozenset(
     {
         "bootstrap",
@@ -1590,6 +1592,7 @@ def _classify_task_mode(task: str) -> TaskMode:
     signals = {
         "review_only": bool(task_tokens & REVIEW_ONLY_TERMS) or "analizar sin implementar" in lowered,
         "planning_only": bool(task_tokens & PLANNING_ONLY_TERMS),
+        "localization_completion": _has_localization_completion_intent(task),
         "diagnostic_bootstrap": _has_diagnostic_bootstrap_intent(task, task_tokens),
         "continuation_followup": _has_continuation_followup_intent(task, task_tokens),
         "ui_runtime_bug": bool(task_tokens & UI_RUNTIME_BUG_TERMS),
@@ -1597,6 +1600,7 @@ def _classify_task_mode(task: str) -> TaskMode:
     }
     ordered_rules: tuple[tuple[bool, TaskMode], ...] = (
         (signals["review_only"] and not implementation_intent, "review_only"),
+        (signals["localization_completion"], "implementation_fix"),
         (signals["planning_only"] and not implementation_intent, "planning_only"),
         (signals["diagnostic_bootstrap"], "diagnostic_bootstrap"),
         (signals["continuation_followup"], "continuation_followup"),
@@ -1623,6 +1627,18 @@ def _has_diagnostic_bootstrap_intent(task: str, task_tokens: frozenset[str]) -> 
     if "set_config" not in lowered:
         return False
     return not any(phrase in lowered for phrase in NEGATIVE_PROVIDER_CONFIG_BOUNDARY_PHRASES)
+
+
+def _has_localization_completion_intent(task: str) -> bool:
+    """Return whether task text targets implementation of localized UI completion."""
+    lowered = task.lower()
+    raw_tokens = _raw_tokens(task)
+    return bool(raw_tokens & LOCALIZATION_STRONG_TASK_TERMS) or any(phrase in lowered for phrase in LOCALIZATION_LANGUAGE_PAIR_PHRASES)
+
+
+def _raw_tokens(text: str) -> frozenset[str]:
+    """Return deterministic lowercase task tokens without alias expansion."""
+    return frozenset(token for token in re.findall(r"\w+", text.lower(), flags=re.UNICODE) if len(token) > 1)
 
 
 def _has_continuation_followup_intent(task: str, task_tokens: frozenset[str]) -> bool:

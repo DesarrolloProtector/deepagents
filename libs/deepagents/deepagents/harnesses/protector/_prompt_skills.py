@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,24 @@ _NAVIGATION_STRONG_TERMS = frozenset({"accounting", "dashboard", "index", "legac
 _MVP_SURFACE_STRONG_TERMS = frozenset({"complete", "mvp", "useful"})
 _PROVIDER_BOOTSTRAP_TARGET_TERMS = frozenset({"bootstrap", "configure", "diagnostic", "probe", "smoke", "verify"})
 _PROVIDER_CONFIG_TERMS = frozenset({"config", "config_id", "configid", "set_config"})
+_LOCALIZATION_STRONG_TERMS = frozenset(
+    {
+        "english",
+        "i18n",
+        "idiomas",
+        "language",
+        "languages",
+        "localizacion",
+        "localización",
+        "localization",
+        "multidioma",
+        "multilingual",
+        "spanish",
+        "traducir",
+        "translate",
+    }
+)
+_LOCALIZATION_LANGUAGE_PAIR_PHRASES = ("es/en", "en/es", "spanish/english", "english/spanish")
 _NEGATIVE_PROVIDER_CONFIG_PHRASES = (
     "do not modify config",
     "do not modify configid",
@@ -34,6 +53,7 @@ _PACK_OWNED_PROMPT_SKILL_NAMES = frozenset(
         "provider_api_bug",
         "operational_workflow_convergence",
         "global_pattern_change",
+        "localization_completion",
         "mvp_surface_completion",
         "spanish_implementation_task_preservation",
     }
@@ -181,7 +201,9 @@ BASE_PROMPT_QUALITY_SKILL = PromptSkill(
 
 IMPLEMENTATION_FIX_SKILL = PromptSkill(
     name="implementation_fix",
-    trigger_keywords=frozenset({"fix", "bug", "change", "modify", "remove", "eliminar", "quitar", "reparar"}),
+    trigger_keywords=frozenset(
+        {"fix", "bug", "change", "complete", "completion", "modify", "remove", "eliminar", "quitar", "reparar"}
+    ),
     task_modes=frozenset({"implementation_fix", "ui_runtime_bug", "provider_api_bug", "continuation_followup"}),
     scope_rules=("Scoped edits are allowed only where needed for the requested behavior change.",),
     restriction_rules=("Do not turn the task into an audit-only response.",),
@@ -247,6 +269,8 @@ MVP_SURFACE_COMPLETION_SKILL = _load_pack_prompt_skill("mvp_surface_completion")
 
 GLOBAL_PATTERN_CHANGE_SKILL = _load_pack_prompt_skill("global_pattern_change")
 
+LOCALIZATION_COMPLETION_SKILL = _load_pack_prompt_skill("localization_completion")
+
 SPANISH_TASK_PRESERVATION_SKILL = _load_pack_prompt_skill("spanish_implementation_task_preservation")
 
 _PACK_SPECIALIZATION_SKILLS = (
@@ -257,6 +281,7 @@ _PACK_SPECIALIZATION_SKILLS = (
     MVP_SURFACE_COMPLETION_SKILL,
     OPERATIONAL_WORKFLOW_CONVERGENCE_SKILL,
     PROVIDER_API_BUG_SKILL,
+    LOCALIZATION_COMPLETION_SKILL,
 )
 _RUNTIME_GENERIC_FALLBACK_SKILLS = (
     UI_RUNTIME_BUG_SKILL,
@@ -303,7 +328,17 @@ def _skill_applies(skill: PromptSkill, task_mode: str, task_tokens: frozenset[st
         return skill.applies_to(task_mode, task_tokens) and bool(task_tokens & _NAVIGATION_STRONG_TERMS)
     if skill.name == "mvp_surface_completion":
         return skill.applies_to(task_mode, task_tokens) and bool(task_tokens & _MVP_SURFACE_STRONG_TERMS)
+    if skill.name == "localization_completion":
+        lowered = task_text.lower()
+        has_language_pair = any(phrase in lowered for phrase in _LOCALIZATION_LANGUAGE_PAIR_PHRASES)
+        raw_tokens = _raw_task_tokens(task_text)
+        return skill.applies_to(task_mode, task_tokens) and (bool(raw_tokens & _LOCALIZATION_STRONG_TERMS) or has_language_pair)
     return skill.applies_to(task_mode, task_tokens)
+
+
+def _raw_task_tokens(text: str) -> frozenset[str]:
+    """Return lowercase task tokens without alias expansion."""
+    return frozenset(token for token in re.findall(r"\w+", text.lower(), flags=re.UNICODE) if len(token) > 1)
 
 
 def _dedupe_skills(skills: list[PromptSkill]) -> list[PromptSkill]:

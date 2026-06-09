@@ -277,10 +277,10 @@ def test_pack_knowledge_warns_when_legacy_duplicate_differs(tmp_path: Path, monk
             skills_count=5,
             knowledge_count=1,
             validation_status="valid",
-            prompt_skills_count=8,
+            prompt_skills_count=9,
             prompt_skills_validation_status="valid",
             benchmark_sets_count=1,
-            benchmark_cases_count=7,
+            benchmark_cases_count=8,
             benchmark_runnable=True,
             benchmark_validation_status="not_checked",
             warnings=(),
@@ -379,13 +379,13 @@ def test_cli_ecc_status_reports_discovery_counts(tmp_path: Path, monkeypatch, ca
     assert "- Validation: valid" in output
     assert "Protector pack benchmarks:" in output
     assert "Protector pack prompt skills:" in output
-    assert "- Declared: 8" in output
+    assert "- Declared: 9" in output
     assert "- Validation: valid" in output
     assert "Protector prompt selection sources:" in output
-    assert "- Pack-owned specialization: 8" in output
+    assert "- Pack-owned specialization: 9" in output
     assert "- Runtime generic fallback: 5" in output
     assert "- Declared sets: 1" in output
-    assert "- Cases: 7" in output
+    assert "- Cases: 8" in output
     assert "- Runnable: yes" in output
     assert "- Validation: passing" in output
 
@@ -436,6 +436,7 @@ def test_protector_ecc_pack_files_are_discoverable() -> None:
         "provider_api_bug",
         "operational_workflow_convergence",
         "global_pattern_change",
+        "localization_completion",
         "mvp_surface_completion",
         "spanish_implementation_task_preservation",
     )
@@ -453,10 +454,10 @@ def test_protector_pack_discovery_validates_static_pack() -> None:
     assert discovery.skills_count == 5
     assert discovery.knowledge_count == 1
     assert discovery.validation_status == "valid"
-    assert discovery.prompt_skills_count == 8
+    assert discovery.prompt_skills_count == 9
     assert discovery.prompt_skills_validation_status == "valid"
     assert discovery.benchmark_sets_count == 1
-    assert discovery.benchmark_cases_count == 7
+    assert discovery.benchmark_cases_count == 8
     assert discovery.benchmark_runnable
     assert discovery.benchmark_validation_status == "not_checked"
     assert discovery.warnings == ()
@@ -469,7 +470,7 @@ def test_protector_pack_discovery_runs_declared_benchmarks() -> None:
 
     assert discovery.validation_status == "valid"
     assert discovery.benchmark_sets_count == 1
-    assert discovery.benchmark_cases_count == 7
+    assert discovery.benchmark_cases_count == 8
     assert discovery.benchmark_runnable
     assert discovery.benchmark_validation_status == "passing"
     assert discovery.benchmark_warnings == ()
@@ -865,6 +866,21 @@ def test_prompt_skill_selection_includes_spanish_preservation_skill() -> None:
     assert "spanish_implementation_task_preservation" in names
 
 
+def test_prompt_skill_selection_includes_pack_owned_localization_skill() -> None:
+    task = "Administration multilingual completion"
+
+    task_mode = engineering._classify_task_mode(task)
+    skills = engineering._selected_prompt_skills(task, task_mode)
+
+    names = tuple(skill.name for skill in skills)
+    sources = {skill.name: skill.source for skill in skills}
+    assert task_mode == "implementation_fix"
+    assert "localization_completion" in names
+    assert "implementation_fix" in names
+    assert sources["localization_completion"] == "pack"
+    assert sources["implementation_fix"] == "runtime_generic"
+
+
 def test_golden_single_bank_account_ui_prompt_quality(tmp_path: Path) -> None:
     task = (
         "Eliminemos la opción de añadir más de una cuenta en todos lados para cualquier entidad. "
@@ -990,6 +1006,7 @@ def test_prompt_benchmark_fixtures_pass(tmp_path: Path) -> None:
 
     assert {result.name for result in results} == {
         "email-password-autofill",
+        "administration-multilingual-completion",
         "legacy-onboarding-path-convergence",
         "navigation-convergence",
         "single-bank-account-everywhere",
@@ -1309,8 +1326,9 @@ def test_cli_benchmark_runs_prompt_benchmarks(tmp_path: Path, capsys) -> None:
     stdout = capsys.readouterr().out
     assert "Prompt Benchmark Results" in stdout
     assert "PASS email-password-autofill" in stdout
+    assert "PASS administration-multilingual-completion" in stdout
     assert "PASS spinner-after-provider-dispatch" in stdout
-    assert "Summary: 7 passed, 0 failed" in stdout
+    assert "Summary: 8 passed, 0 failed" in stdout
 
 
 def test_cli_benchmark_returns_nonzero_for_failed_characteristics(tmp_path: Path, capsys) -> None:

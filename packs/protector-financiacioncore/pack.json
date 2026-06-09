@@ -65,7 +65,7 @@
         "name": "protector-prompt-benchmarks",
         "runner": "ph_benchmark",
         "path": "../../tests/prompt_benchmarks",
-        "expected_cases": 7
+        "expected_cases": 8
       }
     ],
     "prompt_skills": {

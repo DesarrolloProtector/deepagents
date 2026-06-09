@@ -235,6 +235,54 @@
       ]
     },
     {
+      "name": "localization_completion",
+      "trigger_keywords": [
+        "en",
+        "english",
+        "es",
+        "i18n",
+        "idiomas",
+        "language",
+        "languages",
+        "localizacion",
+        "localización",
+        "localization",
+        "multidioma",
+        "multilingual",
+        "spanish",
+        "traducir",
+        "translate"
+      ],
+      "task_modes": [
+        "implementation_fix",
+        "ui_runtime_bug"
+      ],
+      "observed_state": "The selected UI area has incomplete ES/EN localization or is missing the promoted language selector.",
+      "expected_behavior": "The selected area should complete visible user-facing ES/EN text through existing i18n/localizer infrastructure.",
+      "scope_rules": [
+        "Use the existing i18n/localizer/resource pattern; add ES/EN resources where needed instead of relocalizing from scratch.",
+        "Inspect only the normal UI-reachable area and preserve the current page/context where practical.",
+        "Add a visible language selector to promoted pages when missing."
+      ],
+      "restriction_rules": [
+        "Do not change routes, forms, handlers, permissions, submitted values, business logic, persistence, or workflows.",
+        "Do not redesign the selected area or relocalize unrelated pages from scratch."
+      ],
+      "validation_expectations": [
+        "Verify the selected area renders localized titles, buttons, labels, headers, empty states, validation/errors, confirmations, navigation, and language selector behavior."
+      ],
+      "forbidden_generic_wording": [
+        "contract-first onboarding",
+        "Legacy direct routes",
+        "Contabilidad",
+        "telemetry",
+        "resilience"
+      ],
+      "benchmark_cases": [
+        "administration-multilingual-completion"
+      ]
+    },
+    {
       "name": "mvp_surface_completion",
       "trigger_keywords": [
         "complete",
