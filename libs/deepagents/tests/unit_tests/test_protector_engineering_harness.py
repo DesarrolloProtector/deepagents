@@ -67,11 +67,18 @@ def _pass_executor_reliability(monkeypatch) -> None:
         _ = executable
         return cli._CodexRuntimeEnvironment(
             executable_path=Path("fake-codex.exe"),
+            configured_executable_path=Path("fake-codex.exe"),
             env={},
             npm_package_location="test",
             sandbox_helper_path="test",
+            sandbox_command_runner_path="test",
             runtime_path_prefix="test",
             sandbox_helper_check=cli._ExecutorReliabilityCheck(name="codex_sandbox_helper_available", passed=True, detail="test"),
+            sandbox_command_runner_check=cli._ExecutorReliabilityCheck(
+                name="codex_sandbox_command_runner_available",
+                passed=True,
+                detail="test",
+            ),
         )
 
     monkeypatch.setattr(cli, "_resolve_executor_executable", fake_resolve_executable)
@@ -101,7 +108,27 @@ def _write_fake_sandbox_helper(tmp_path: Path) -> Path:
     helper = tmp_path / "codex-resources" / cli._CODEX_WINDOWS_SANDBOX_HELPER
     helper.parent.mkdir(parents=True, exist_ok=True)
     helper.write_text("helper", encoding="utf-8")
+    (helper.parent / cli._CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER).write_text("runner", encoding="utf-8")
     return helper
+
+
+def _write_fake_codex_npm_install(tmp_path: Path) -> tuple[Path, Path, Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    wrapper = tmp_path / "codex.cmd"
+    wrapper.write_text("@echo off\n", encoding="utf-8")
+    package = tmp_path / "node_modules" / "@openai" / "codex"
+    package.mkdir(parents=True)
+    (package / "package.json").write_text("{}", encoding="utf-8")
+    platform = tmp_path / "node_modules" / "@openai" / "codex-win32-x64"
+    native = platform / "vendor" / "x86_64-pc-windows-msvc" / "bin" / "codex.exe"
+    resources = platform / "vendor" / "x86_64-pc-windows-msvc" / "codex-resources"
+    native.parent.mkdir(parents=True)
+    resources.mkdir(parents=True)
+    native.write_text("native", encoding="utf-8")
+    helper = resources / cli._CODEX_WINDOWS_SANDBOX_HELPER
+    helper.write_text("helper", encoding="utf-8")
+    (resources / cli._CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER).write_text("runner", encoding="utf-8")
+    return wrapper, native, helper
 
 
 def _missing_which(executable: str) -> str | None:
@@ -872,6 +899,55 @@ def test_task_refinement_normalizes_rough_ui_task_for_candidate_generation(tmp_p
     assert "Preserve routes, handlers, forms, table data, delete behavior, and all non-delete UI." not in candidate["proposed_codex_prompt"]
     assert "Do not change delete behavior." in candidate["proposed_codex_prompt"]
     assert "Unknown until code inspection" in candidate["review_contract"]["expected_files_likely_to_change"]
+
+
+def test_visual_microfix_candidate_stays_compact_for_newclient_delete_icon(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    target = repo / "Components" / "Pages" / "Clients" / "NewClient.razor"
+    target.parent.mkdir(parents=True)
+    target.write_text('<button class="btn btn-danger">Delete</button>\n', encoding="utf-8")
+    task = "Change the delete action icon on Clients/NewClient receipts table to match the Tailwind trash icon used elsewhere."
+
+    rendered = engineering.render_controlled_execution_plan(task=task, repo=repo)
+    candidate = rendered.automation_candidate
+    prompt = candidate["proposed_codex_prompt"]
+    review_contract = candidate["review_contract"]
+
+    assert candidate["task"]["mode"] == "ui_visual_microfix"
+    assert candidate["selected_context_paths"] == ("Components/Pages/Clients/NewClient.razor",)
+    assert candidate["selected_knowledge"]["paths"] == ()
+    assert candidate["selected_knowledge"]["facts"] == ()
+    assert candidate["selected_skills"] == ({"name": "base_prompt_quality", "source": "runtime_generic"},)
+    assert review_contract["expected_files_likely_to_change"] == ("Components/Pages/Clients/NewClient.razor",)
+    assert review_contract["expected_validation_scope"] == (
+        "verify the diff/static markup for the targeted visual element; build only if Razor syntax risk exists",
+    )
+
+    assert "Task mode: ui_visual_microfix" in prompt
+    assert "Target file/surface:\n- Components/Pages/Clients/NewClient.razor" in prompt
+    assert "Exact visual change:" in prompt
+    assert "Update only the delete action icon/button styling" in prompt
+    assert "Preserve handlers, forms, routes, data binding" in prompt
+    assert "Review the diff/static markup for the targeted visual element." in prompt
+    assert "Run a build only if the Razor markup or syntax risk is non-trivial." in prompt
+    assert "candidate.json, candidate.codex-output.txt, .protector-harness, bin, obj" in prompt
+    assert "Do not search prompt/log artifacts" in prompt
+    assert prompt.count("Mandatory output:") == 1
+    assert len(prompt.splitlines()) <= 28
+
+    forbidden = (
+        "navigation",
+        "workflow",
+        "action eligibility",
+        "feature-contract",
+        "onboarding",
+        "MEMORY",
+        "Docs/flows",
+        "broad repo priorities",
+        "audit-evidence",
+    )
+    for term in forbidden:
+        assert term.lower() not in prompt.lower()
 
 
 def test_task_refinement_ambiguous_task_needs_clarification(tmp_path: Path) -> None:
@@ -3411,7 +3487,7 @@ def test_cli_candidate_execute_invokes_fake_codex_once_and_writes_explicit_outpu
     stdout = capsys.readouterr().out
     assert len(calls) == 1
     process = calls[0]["process"]
-    assert calls[0]["command"] == ("fake-codex",)
+    assert calls[0]["command"] == ("fake-codex.exe",)
     assert calls[0]["kwargs"]["stdin"] == cli.subprocess.PIPE
     assert calls[0]["kwargs"]["stdout"] == cli.subprocess.PIPE
     assert process.stdin.text.startswith("Codex Prompt:\n")
@@ -3733,7 +3809,7 @@ def test_cli_candidate_execute_passes_no_timeout_when_omitted(tmp_path: Path, mo
         **kwargs: object,
     ) -> cli._CodexExecutionResult:
         _ = kwargs
-        assert command == ("fake-codex",)
+        assert command == ("fake-codex.exe",)
         assert prompt.startswith("Codex Prompt:\n")
         received.append(timeout)
         return cli._CodexExecutionResult(returncode=0, output="ok\n")
@@ -3771,6 +3847,7 @@ def test_codex_cli_executor_preflight_success_uses_deterministic_workspace_check
     assert [check.name for check in report.checks] == [
         "codex_cli_available",
         "codex_sandbox_helper_available",
+        "codex_sandbox_command_runner_available",
         "version",
         "codex_home",
         "ph_local_workspace_check",
@@ -3781,6 +3858,52 @@ def test_codex_cli_executor_preflight_success_uses_deterministic_workspace_check
     assert report.sandbox_helper_path.endswith(cli._CODEX_WINDOWS_SANDBOX_HELPER)
     assert "not checked by deterministic preflight" in report.checks[-1].detail
     assert not proof.exists()
+
+
+def test_codex_cli_executor_uses_npm_native_binary_for_status_and_execution(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    wrapper, native, helper = _write_fake_codex_npm_install(tmp_path / "npm")
+    version_commands: list[tuple[str, ...]] = []
+    execute_commands: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(cli.shutil, "which", lambda executable: str(wrapper) if executable == "codex" else None)
+
+    def fake_run(*args: object, **kwargs: object) -> _FakeCompleted:
+        _ = kwargs
+        command = args[0]
+        assert isinstance(command, tuple)
+        version_commands.append(command)
+        return _FakeCompleted(stdout="codex-cli 0.139.0\n")
+
+    def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
+        _ = prompt, kwargs
+        execute_commands.append(command)
+        return cli._CodexExecutionResult(returncode=0, output="ok\n")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
+
+    executor = cli._CodexCliExecutor(command=("codex", "exec", "-"), repo=repo)
+    report = executor.check_reliability()
+    result = executor.execute("prompt", timeout=None)
+
+    assert report.ok
+    assert report.executable_path == str(native.resolve())
+    assert report.configured_executable_path == str(wrapper.resolve())
+    assert report.sandbox_helper_path == str(helper.resolve())
+    assert report.sandbox_command_runner_path == str((helper.parent / cli._CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER).resolve())
+    assert report.runtime_path_prefix == str(helper.parent.resolve())
+    assert str(native.resolve()) in report.command_line
+    assert version_commands == [(str(native.resolve()), "--version")]
+    assert execute_commands == [(str(native.resolve()), "exec", "-")]
+    assert result.returncode == 0
 
 
 def test_codex_cli_executor_preflight_reports_missing_executable(tmp_path: Path, monkeypatch) -> None:
@@ -3881,6 +4004,26 @@ def test_codex_cli_executor_preflight_reports_sandbox_helper_failure(tmp_path: P
     assert "codex_sandbox_helper_available" in [check.name for check in report.failing_checks]
     sandbox_check = next(check for check in report.failing_checks if check.name == "codex_sandbox_helper_available")
     assert "codex-windows-sandbox-setup.exe" in sandbox_check.detail
+
+
+def test_codex_cli_executor_preflight_reports_sandbox_command_runner_failure(tmp_path: Path, monkeypatch) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    helper = tmp_path / "codex-resources" / cli._CODEX_WINDOWS_SANDBOX_HELPER
+    helper.parent.mkdir(parents=True)
+    helper.write_text("helper", encoding="utf-8")
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
+    monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
+
+    report = cli._CodexCliExecutor(command=("fake-codex",), repo=repo).check_reliability()
+
+    assert not report.ok
+    assert "codex_sandbox_command_runner_available" in [check.name for check in report.failing_checks]
+    runner_check = next(check for check in report.failing_checks if check.name == "codex_sandbox_command_runner_available")
+    assert "codex-command-runner.exe" in runner_check.detail
 
 
 def test_candidate_execute_no_longer_blocks_on_model_preflight_markers(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -4271,6 +4414,88 @@ def test_cli_candidate_execute_no_assistant_failure_prints_diagnostics_and_save_
     assert "stderr: no assistant turn" in stdout
     assert "raw_output_saved: (not requested)" in stdout
     assert f"rerun_to_save_raw_output: add --output {candidate.with_suffix('.codex-output.txt').resolve()}" in stdout
+
+
+def test_cli_candidate_execute_windows_sandbox_error_prints_launch_diagnostics(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+    report = cli._ExecutorReliabilityReport(
+        executor="codex_cli",
+        repo=repo,
+        executable_path="C:/npm/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+        version="codex-cli 0.139.0",
+        codex_home="C:/Users/test/.codex (env)",
+        checks=(cli._ExecutorReliabilityCheck(name="ph_local_workspace_check", passed=True, detail="ok"),),
+        command_line="C:/npm/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe exec -",
+        sandbox_helper_path="C:/npm/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe",
+        sandbox_command_runner_path="C:/npm/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-command-runner.exe",
+    )
+    raw_output = "assistant\nexecution error: windows sandbox: CreateProcessWithLogonW failed: 2\nLOCAL_EXECUTOR_UNAVAILABLE\n"
+
+    def pass_reliability(
+        self: cli._CodexCliExecutor,
+        progress=None,
+    ) -> cli._ExecutorReliabilityReport:
+        _ = self, progress
+        return report
+
+    def fail_execute(
+        self: cli._CodexCliExecutor,
+        prompt: str,
+        *,
+        timeout: float | None,
+    ) -> cli._CodexExecutionResult:
+        _ = self, prompt, timeout
+        return cli._CodexExecutionResult(
+            returncode=1,
+            output=raw_output,
+            failed=True,
+            failure_message="LOCAL_EXECUTOR_UNAVAILABLE",
+            failure_kind="codex_exited_nonzero",
+            root_exit_code=1,
+            stdout_tail=raw_output,
+        )
+
+    monkeypatch.setattr(cli._CodexCliExecutor, "check_reliability", pass_reliability)
+    monkeypatch.setattr(cli._CodexCliExecutor, "execute", fail_execute)
+
+    assert (
+        cli.main(
+            [
+                "candidate-execute",
+                "--codex-cmd",
+                "fake-codex",
+                "--approve-sha",
+                approval_sha,
+                "--repo",
+                str(repo),
+                str(candidate),
+            ]
+        )
+        == 1
+    )
+
+    stdout = capsys.readouterr().out
+    assert "- executable_path: C:/npm/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe" in stdout
+    assert "- command_line: C:/npm/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe exec -" in stdout
+    assert f"- working_directory: {repo}" in stdout
+    assert "- sandbox_helper_path: C:/npm/node_modules/@openai/codex-win32-x64" in stdout
+    assert "codex-resources/codex-windows-sandbox-setup.exe" in stdout
+    assert "- sandbox_command_runner_path: C:/npm/node_modules/@openai/codex-win32-x64" in stdout
+    assert "codex-resources/codex-command-runner.exe" in stdout
+    assert "- win32_error_code: 2" in stdout
+    assert "- win32_error_name: ERROR_FILE_NOT_FOUND" in stdout
 
 
 def test_local_executor_interface_keeps_candidate_prompt_semantics(tmp_path: Path) -> None:

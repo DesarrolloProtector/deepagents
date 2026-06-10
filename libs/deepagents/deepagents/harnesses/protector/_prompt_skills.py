@@ -304,6 +304,8 @@ def available_prompt_skills() -> tuple[PromptSkill, ...]:
 def select_prompt_skills(*, task_mode: str, task_tokens: frozenset[str], has_spanish_text: bool, task_text: str = "") -> tuple[PromptSkill, ...]:
     """Select pack-owned specialization skills first, then runtime generic fallback skills."""
     selected: list[PromptSkill] = [BASE_PROMPT_QUALITY_SKILL]
+    if task_mode == "ui_visual_microfix":
+        return tuple(selected)
     pack_specific = [skill for skill in _PACK_SPECIALIZATION_SKILLS if _skill_applies(skill, task_mode, task_tokens, task_text)]
     runtime_fallback = [skill for skill in _RUNTIME_GENERIC_FALLBACK_SKILLS if _skill_applies(skill, task_mode, task_tokens, task_text)]
     specific = [*pack_specific, *runtime_fallback]

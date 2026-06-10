@@ -349,6 +349,7 @@ TaskMode = Literal[
     "diagnostic_bootstrap",
     "continuation_followup",
     "ui_runtime_bug",
+    "ui_visual_microfix",
     "provider_api_bug",
 ]
 TASK_MODE_VALUES: tuple[str, ...] = (
@@ -358,6 +359,7 @@ TASK_MODE_VALUES: tuple[str, ...] = (
     "diagnostic_bootstrap",
     "continuation_followup",
     "ui_runtime_bug",
+    "ui_visual_microfix",
     "provider_api_bug",
 )
 SCOPE_BOUNDARY_BY_MODE: dict[TaskMode, tuple[str, ...]] = {
@@ -386,6 +388,11 @@ SCOPE_BOUNDARY_BY_MODE: dict[TaskMode, tuple[str, ...]] = {
         "Scoped edits are allowed when needed to fix the requested UI/runtime issue.",
         "Preserve observed UI state and expected UI state; prove the exact hide/render condition.",
     ),
+    "ui_visual_microfix": (
+        "Inspect only the named UI file or nearest matching UI surface.",
+        "Change only the requested visual markup/classes/icon styling.",
+        "Preserve handlers, forms, routes, data binding, authorization, and delete semantics.",
+    ),
     "provider_api_bug": (
         "Inspect only enough code to locate the faulty condition, then fix surgically.",
         "Scoped edits are allowed only for the targeted provider/API issue.",
@@ -398,6 +405,12 @@ SCOPE_BOUNDARY_BY_MODE: dict[TaskMode, tuple[str, ...]] = {
     ),
 }
 MODE_REQUIREMENTS_BY_MODE: dict[TaskMode, tuple[str, ...]] = {
+    "ui_visual_microfix": (
+        "Keep the change local to the named visual element or surface.",
+        "Do not inspect navigation, workflow, feature-contract, onboarding, provider, memory, or audit context unless explicitly named by the task.",
+        "Do not search candidate.json, candidate.codex-output.txt, .protector-harness, bin, obj, generated Connected Services, migrations, or Docs.",
+        "When searching, exclude prompt/log artifacts so the task text cannot match itself.",
+    ),
     "ui_runtime_bug": (
         "Preserve observed UI state and expected UI state from the task details.",
         "Prove the exact condition that hides or renders the button/modal/spinner/view before changing it.",
@@ -1078,8 +1091,8 @@ def render_controlled_execution_plan(
         else None
     )
     effective_task = _effective_task_for_plan(task, task_refinement)
-    selection = _select_context(repo, effective_task, repo_alias=repo_alias)
     task_mode = _classify_task_mode(effective_task)
+    selection = _select_context(repo, effective_task, repo_alias=repo_alias, task_mode=task_mode)
     prompt_skills = _selected_prompt_skills(effective_task, task_mode)
     plan = build_execution_plan(task_mode=task_mode, prompt_skills=prompt_skills)
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
@@ -2700,6 +2713,8 @@ def _route_knowledge_supports_path(path: str, task_tokens: frozenset[str]) -> bo
 
 def _expected_review_validation_scope(task: str, task_mode: TaskMode, skills: tuple[PromptSkill, ...]) -> tuple[str, ...]:
     """Return expected validation scope for the review contract."""
+    if task_mode == "ui_visual_microfix":
+        return ("verify the diff/static markup for the targeted visual element; build only if Razor syntax risk exists",)
     rows = list(_validation_expectations(task, task_mode))
     for skill in skills:
         rows.extend(skill.validation_expectations)
@@ -3397,7 +3412,7 @@ def _feature_contract_applies(task_tokens: frozenset[str]) -> bool:
     return bool(task_tokens & FEATURE_HINTS)
 
 
-def _select_context(repo: Path | None, task: str, *, repo_alias: str | None = None) -> _ContextSelection:
+def _select_context(repo: Path | None, task: str, *, repo_alias: str | None = None, task_mode: TaskMode | None = None) -> _ContextSelection:
     """Select bounded context rows for the handoff."""
     if repo is None:
         return _ContextSelection(
@@ -3406,6 +3421,9 @@ def _select_context(repo: Path | None, task: str, *, repo_alias: str | None = No
         )
 
     context = _inspect_repo_context(repo)
+    if task_mode == "ui_visual_microfix":
+        return _select_visual_microfix_context(context, task)
+
     task_tokens = _tokens(task)
     selected_skills = _select_skills(context, task_tokens)
     selected_flows = _select_flows(context, task_tokens)
@@ -3438,6 +3456,57 @@ def _select_context(repo: Path | None, task: str, *, repo_alias: str | None = No
         not_selected=tuple(not_selected),
         knowledge=knowledge.summary if knowledge is not None else (),
     )
+
+
+def _select_visual_microfix_context(context: _RepoContext, task: str) -> _ContextSelection:
+    """Select only a likely target file for a local visual microfix."""
+    target_paths = _visual_microfix_target_paths(context.root, task)
+    not_selected = (
+        "AGENTS.md (visual microfix clamp: no global instructions needed)",
+        "MEMORY.md (visual microfix clamp: no memory read needed)",
+        ".codex/skills/*/SKILL.md (visual microfix clamp: no prompt skill routing needed)",
+        "Docs/flows/*.md (visual microfix clamp: workflow/navigation context not needed)",
+        ".codex/agent-workflow/feature-contract-template.md (visual microfix clamp: no feature contract change)",
+    )
+    return _ContextSelection(selected=target_paths or ("target file not resolved; use named surface from task",), not_selected=not_selected)
+
+
+def _visual_microfix_target_paths(repo: Path, task: str) -> tuple[str, ...]:
+    """Return likely target files for a visual microfix without broad repository search."""
+    candidates = _visual_microfix_candidate_paths(repo, task)
+    return tuple(_relative_path(repo, path) for path in candidates if path.is_file())[:3]
+
+
+def _visual_microfix_candidate_paths(repo: Path, task: str) -> tuple[Path, ...]:
+    """Return deterministic candidate paths derived from explicit route/surface text."""
+    surfaces = _visual_microfix_surface_candidates(task)
+    suffixes = (".razor", ".cshtml", ".razor.css", ".css")
+    roots = (
+        repo,
+        repo / "Components" / "Pages",
+        repo / "Pages",
+        repo / "Views",
+        repo / "Features",
+        repo / "Areas",
+        repo / "src",
+    )
+    candidates: list[Path] = []
+    for surface in surfaces:
+        normalized = surface.replace("\\", "/").strip("/")
+        compact = normalized.replace(" ", "")
+        pieces = tuple(piece for piece in compact.split("/") if piece)
+        variants = tuple(_unique_preserve_order([normalized, compact, "/".join(pieces), "/".join(piece.replace(" ", "") for piece in pieces)]))
+        for root in roots:
+            for variant in variants:
+                candidates.extend(root / f"{variant}{suffix}" for suffix in suffixes)
+    return tuple(dict.fromkeys(candidates))
+
+
+def _visual_microfix_surface_candidates(task: str) -> tuple[str, ...]:
+    """Extract route-like UI surface references from visual microfix task text."""
+    matches = [match.group(0).replace(" ", "") for match in re.finditer(r"\b[A-Z][A-Za-z0-9]+/[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)?\b", task)]
+    references = [reference for reference in _literal_references(task) if "/" in reference]
+    return tuple(_unique_preserve_order([*matches, *references]))
 
 
 def _render_context_route(selection: _ContextSelection) -> str:
@@ -3734,6 +3803,8 @@ def _section_heading(line: str, headings: dict[str, str]) -> tuple[str | None, s
 
 def _task_details(task: str, task_mode: TaskMode) -> str:
     """Render an operational task brief for Codex."""
+    if task_mode == "ui_visual_microfix":
+        return _visual_microfix_task_details(task)
     if _should_render_operational_brief(task, task_mode):
         return _operational_task_brief(task, task_mode, _selected_prompt_skills(task, task_mode))
     if task_mode == "review_only":
@@ -3745,6 +3816,8 @@ def _task_details(task: str, task_mode: TaskMode) -> str:
 
 def _should_render_operational_brief(task: str, task_mode: TaskMode) -> bool:
     """Return whether task details should be expanded into operational sections."""
+    if task_mode == "ui_visual_microfix":
+        return False
     if _parse_task_sections(task):
         return True
     if _needs_english_summary(task) or _has_concrete_ui_or_identifier_details(task):
@@ -3757,6 +3830,13 @@ def _should_render_operational_brief(task: str, task_mode: TaskMode) -> bool:
 
 def _selected_prompt_skills(task: str, task_mode: TaskMode) -> tuple[PromptSkill, ...]:
     """Return prompt skills that shape Codex prompt rendering."""
+    if task_mode == "ui_visual_microfix":
+        return select_prompt_skills(
+            task_mode=task_mode,
+            task_tokens=frozenset(),
+            has_spanish_text=False,
+            task_text=task,
+        )
     return select_prompt_skills(
         task_mode=task_mode,
         task_tokens=_tokens(task),
@@ -3916,6 +3996,8 @@ def _unique_preserve_order(items: list[str]) -> tuple[str, ...]:
 def _validation_expectations(task: str, task_mode: TaskMode) -> tuple[str, ...]:
     """Return deterministic validation expectations scaled to task wording."""
     task_tokens = _tokens(task)
+    if task_mode == "ui_visual_microfix":
+        return ("verify the diff/static markup for the targeted visual element; build only if Razor syntax risk exists",)
     expectations = [_mode_validation_expectation(task_mode)]
     if task_tokens & {"review", "drift", "scope"}:
         expectations.append("verify scope drift and missing-file risks before recommending changes")
@@ -3930,6 +4012,8 @@ def _validation_expectations(task: str, task_mode: TaskMode) -> tuple[str, ...]:
 
 def _mode_validation_expectation(task_mode: TaskMode) -> str:
     """Return the first validation expectation for a task mode."""
+    if task_mode == "ui_visual_microfix":
+        return "verify the diff/static markup for the targeted visual element; build only if Razor syntax risk exists"
     if task_mode in {"implementation_fix", "continuation_followup", "ui_runtime_bug", "provider_api_bug"}:
         return "inspect only enough code to locate the faulty condition, then fix surgically"
     if task_mode == "planning_only":
@@ -3955,6 +4039,7 @@ def _classify_task_mode(task: str) -> TaskMode:
         "localization_completion": _has_localization_completion_intent(task),
         "diagnostic_bootstrap": _has_diagnostic_bootstrap_intent(task, task_tokens),
         "continuation_followup": _has_continuation_followup_intent(task, task_tokens),
+        "ui_visual_microfix": _has_ui_visual_microfix_intent(task, task_tokens),
         "ui_runtime_bug": bool(task_tokens & UI_RUNTIME_BUG_TERMS),
         "provider_api_bug": bool(task_tokens & PROVIDER_API_BUG_TERMS) or "start_signature" in lowered or "set_config" in lowered,
     }
@@ -3965,9 +4050,11 @@ def _classify_task_mode(task: str) -> TaskMode:
         (signals["diagnostic_bootstrap"], "diagnostic_bootstrap"),
         (signals["continuation_followup"], "continuation_followup"),
         (signals["provider_api_bug"] and implementation_intent, "provider_api_bug"),
+        (signals["ui_visual_microfix"] and implementation_intent, "ui_visual_microfix"),
         (signals["ui_runtime_bug"] and implementation_intent, "ui_runtime_bug"),
         (implementation_intent, "implementation_fix"),
         (signals["provider_api_bug"], "provider_api_bug"),
+        (signals["ui_visual_microfix"], "ui_visual_microfix"),
         (signals["ui_runtime_bug"], "ui_runtime_bug"),
         (signals["planning_only"], "planning_only"),
     )
@@ -3975,6 +4062,43 @@ def _classify_task_mode(task: str) -> TaskMode:
         if matches:
             return task_mode
     return "review_only"
+
+
+def _has_ui_visual_microfix_intent(task: str, task_tokens: frozenset[str]) -> bool:
+    """Return whether task text asks for a local visual-only UI edit."""
+    _ = task_tokens
+    lowered = task.lower()
+    positive_text = _visual_microfix_positive_text(task)
+    positive_tokens = _tokens(positive_text)
+    visual_terms = {"visual", "style", "styling", "css", "class", "classes", "icon", "tailwind", "taildwind", "color", "rounded"}
+    ui_terms = {"ui", "view", "vista", "razor", "button", "boton", "botón", "icon", "table", "clients", "client", "receipts"}
+    behavior_terms = {"workflow", "route", "routes", "navigation", "runtime", "handler", "form", "forms", "eligibility", "state"}
+    provider_terms = PROVIDER_API_BUG_TERMS | {"provider", "signature", "firma", "set_config", "start_signature"}
+    if positive_tokens & (behavior_terms | provider_terms | LOCALIZATION_TASK_TERMS):
+        return False
+    if any(phrase in lowered for phrase in ("visual-only", "visual only", "styling only", "style only", "icon only")):
+        return True
+    if positive_tokens & visual_terms and positive_tokens & ui_terms:
+        return True
+    return bool(
+        positive_tokens & {"delete", "trash"}
+        and positive_tokens & {"icon", "button"}
+        and positive_tokens & {"tailwind", "taildwind", "style", "styling"}
+    )
+
+
+def _visual_microfix_positive_text(task: str) -> str:
+    """Return task text excluding preservation/non-goal clauses."""
+    kept: list[str] = []
+    for line in task.splitlines():
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if lowered.startswith(("- do not ", "do not ", "- preserve ", "preserve ", "non-goals:", "preserved behavior:")):
+            continue
+        if "must remain unchanged" in lowered or "must keep working" in lowered:
+            continue
+        kept.append(stripped)
+    return " ".join(kept) or task
 
 
 def _has_diagnostic_bootstrap_intent(task: str, task_tokens: frozenset[str]) -> bool:
@@ -4155,6 +4279,8 @@ def _render_codex_prompt(task: str, selection: _ContextSelection) -> str:
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
     objective = _task_objective(task)
     task_mode = _classify_task_mode(task)
+    if task_mode == "ui_visual_microfix":
+        return _render_visual_microfix_codex_prompt(task, selected_paths)
     task_details_text = _task_details(task, task_mode)
     mode_requirements = _mode_requirements(task, task_mode)
     mode_requirements_text = _render_bullets(mode_requirements) if mode_requirements else "- (none)"
@@ -4187,6 +4313,57 @@ Validation expectations:
 {_one_line_list(_validation_expectations(task, task_mode))}
 Mandatory output:
 {_render_bullets(_output_requirements(task, task_mode))}"""
+
+
+def _render_visual_microfix_codex_prompt(task: str, selected_paths: tuple[str, ...]) -> str:
+    """Render the intentionally small prompt for visual-only UI fixes."""
+    target = _visual_microfix_target_text(task, selected_paths)
+    change = _visual_microfix_change_text(task)
+    return f"""Codex Prompt:
+Title: {_title_from_task(task)}
+Task mode: ui_visual_microfix
+Target file/surface:
+- {target}
+Exact visual change:
+- {change}
+Preserve:
+- Preserve handlers, forms, routes, data binding, authorization, submitted actions, and delete semantics.
+- Do not change persistence, providers, runtime behavior, or non-target UI.
+Exploration clamp:
+- Inspect only the target file/surface and the nearest existing visual pattern if needed.
+- Exclude candidate.json, candidate.codex-output.txt, .protector-harness, bin, obj, generated Connected Services, migrations, and Docs from searches.
+- Do not search prompt/log artifacts; avoid matching this task text or Codex output.
+Validation:
+- Review the diff/static markup for the targeted visual element.
+- Run a build only if the Razor markup or syntax risk is non-trivial.
+Mandatory output:
+- Summary
+- Validation
+- PASS/FAIL"""
+
+
+def _visual_microfix_target_text(task: str, selected_paths: tuple[str, ...]) -> str:
+    """Return the target file or surface for a visual microfix prompt."""
+    concrete_paths = tuple(path for path in selected_paths if path != "target file not resolved; use named surface from task")
+    if concrete_paths:
+        return ", ".join(concrete_paths[:3])
+    surfaces = _visual_microfix_surface_candidates(task)
+    if surfaces:
+        return ", ".join(surfaces[:3])
+    return "Named UI surface from the task"
+
+
+def _visual_microfix_change_text(task: str) -> str:
+    """Return a compact visual-only change statement."""
+    refinement = refine_operator_task(task)
+    if refinement.requested_change:
+        return refinement.requested_change
+    return _task_objective(task)
+
+
+def _visual_microfix_task_details(task: str) -> str:
+    """Render only target/change details for visual microfix metadata."""
+    return f"Target: {_visual_microfix_target_text(task, ())}\nChange: {_visual_microfix_change_text(task)}"
 
 
 def _contains_section(text: str, section: str) -> bool:

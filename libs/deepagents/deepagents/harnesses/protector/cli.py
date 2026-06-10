@@ -70,6 +70,7 @@ _CLI_SPINNER_INTERVAL_SECONDS = 0.1
 _CLI_SPINNER_FRAMES = ("|", "/", "-", "\\")
 _CODEX_TERMINATION_WAIT_SECONDS = 5.0
 _CODEX_WINDOWS_SANDBOX_HELPER = "codex-windows-sandbox-setup.exe"
+_CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER = "codex-command-runner.exe"
 _CODEX_DIAGNOSTIC_TAIL_CHARS = 2000
 _CODEX_TERMINAL_EXECUTOR_FAILURE_PATTERNS = (
     "LOCAL_EXECUTOR_UNAVAILABLE",
@@ -135,7 +136,9 @@ class _ExecutorReliabilityReport:
     command_line: str = "(unknown)"
     npm_package_location: str = "(unknown)"
     sandbox_helper_path: str = "(unknown)"
+    sandbox_command_runner_path: str = "(unknown)"
     runtime_path_prefix: str = "(unknown)"
+    configured_executable_path: str = "(unknown)"
 
     @property
     def ok(self) -> bool:
@@ -153,11 +156,14 @@ class _CodexRuntimeEnvironment:
     """Resolved Codex process environment shared by status and execution."""
 
     executable_path: Path
+    configured_executable_path: Path
     env: dict[str, str]
     npm_package_location: str
     sandbox_helper_path: str
+    sandbox_command_runner_path: str
     runtime_path_prefix: str
     sandbox_helper_check: _ExecutorReliabilityCheck
+    sandbox_command_runner_check: _ExecutorReliabilityCheck
 
 
 class _LocalWorkspaceExecutor(Protocol):
@@ -1055,7 +1061,15 @@ def _run_candidate_execute(args: argparse.Namespace, parser: argparse.ArgumentPa
 
     _write_candidate_execution_output(args, parser, result)
     if result.termination_report is not None or result.failed:
-        sys.stdout.write(_render_candidate_execute_termination(args.candidate_json, output=args.output, repo=args.repo, result=result))
+        sys.stdout.write(
+            _render_candidate_execute_termination(
+                args.candidate_json,
+                output=args.output,
+                repo=args.repo,
+                result=result,
+                reliability=reliability,
+            )
+        )
         return _candidate_execute_termination_returncode(result)
     sys.stdout.write("\nNext review command:\n")
     sys.stdout.write(_candidate_outcome_next_command(args.candidate_json, output=args.output, repo=args.repo))
@@ -1134,12 +1148,13 @@ class _CodexCliExecutor:
             _ExecutorReliabilityCheck(
                 name="codex_cli_available",
                 passed=True,
-                detail=str(executable),
+                detail=str(runtime.executable_path),
             )
         )
         checks.append(runtime.sandbox_helper_check)
+        checks.append(runtime.sandbox_command_runner_check)
         _notify_progress(progress, "checking version")
-        version, version_check = _check_executor_version(executable, env=runtime.env)
+        version, version_check = _check_executor_version(runtime.executable_path, env=runtime.env)
         checks.append(version_check)
         _notify_progress(progress, "checking CODEX_HOME")
         codex_home = _codex_home_path()
@@ -1152,23 +1167,25 @@ class _CodexCliExecutor:
         return _ExecutorReliabilityReport(
             executor=self.name,
             repo=self.repo,
-            executable_path=str(executable),
+            executable_path=str(runtime.executable_path),
             version=version,
             codex_home=_format_codex_home(codex_home),
             checks=tuple(checks),
             sandbox_mode=_codex_sandbox_mode(self.command),
             execution_strategy=_codex_execution_strategy(self.repo),
-            command_line=_powershell_command(self.command),
+            command_line=_powershell_command(_effective_codex_command(self.command, runtime)),
             npm_package_location=runtime.npm_package_location,
             sandbox_helper_path=runtime.sandbox_helper_path,
+            sandbox_command_runner_path=runtime.sandbox_command_runner_path,
             runtime_path_prefix=runtime.runtime_path_prefix,
+            configured_executable_path=str(runtime.configured_executable_path),
         )
 
     def execute(self, prompt: str, *, timeout: float | None) -> _CodexExecutionResult:
         """Run one candidate prompt with connector fallback explicitly disallowed."""
         runtime = _resolve_codex_runtime_environment(self._resolved_executable())
         return _run_codex_once(
-            self.command,
+            _effective_codex_command(self.command, runtime),
             _local_executor_candidate_prompt(prompt),
             timeout=timeout,
             cwd=self.repo,
@@ -1318,20 +1335,30 @@ def _resolve_executor_executable(command: tuple[str, ...]) -> Path | None:
 def _resolve_codex_runtime_environment(executable: Path) -> _CodexRuntimeEnvironment:
     """Resolve the effective Codex process environment used by status and execution."""
     npm_package = _resolve_codex_npm_package_location(executable)
-    helper = _resolve_codex_sandbox_helper(executable, npm_package=npm_package)
+    effective_executable = _resolve_codex_native_executable(executable, npm_package=npm_package)
+    helper = _resolve_codex_sandbox_helper(effective_executable, npm_package=npm_package)
+    command_runner = _resolve_codex_sandbox_command_runner(
+        effective_executable,
+        npm_package=npm_package,
+        helper=helper,
+    )
     env = dict(os.environ)
     path_prefix = "(none)"
     if helper is not None:
         path_prefix = str(helper.parent)
         env["PATH"] = f"{path_prefix}{os.pathsep}{env.get('PATH', '')}"
     helper_check = _codex_sandbox_helper_check(helper)
+    command_runner_check = _codex_sandbox_command_runner_check(command_runner)
     return _CodexRuntimeEnvironment(
-        executable_path=executable,
+        executable_path=effective_executable,
+        configured_executable_path=executable,
         env=env,
         npm_package_location=str(npm_package) if npm_package is not None else "(not found)",
         sandbox_helper_path=str(helper) if helper is not None else "(not found)",
+        sandbox_command_runner_path=str(command_runner) if command_runner is not None else "(not found)",
         runtime_path_prefix=path_prefix,
         sandbox_helper_check=helper_check,
+        sandbox_command_runner_check=command_runner_check,
     )
 
 
@@ -1345,6 +1372,26 @@ def _resolve_codex_npm_package_location(executable: Path) -> Path | None:
         if (candidate / "package.json").is_file():
             return candidate.resolve()
     return None
+
+
+def _resolve_codex_native_executable(executable: Path, *, npm_package: Path | None) -> Path:
+    """Resolve the npm platform-package native Codex binary when an npm shim was configured."""
+    if npm_package is None:
+        return executable
+    vendor = Path("vendor") / "x86_64-pc-windows-msvc" / "bin" / "codex.exe"
+    candidates = (
+        npm_package.parent / "codex-win32-x64" / vendor,
+        npm_package / "node_modules" / "@openai" / "codex-win32-x64" / vendor,
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return executable
+
+
+def _effective_codex_command(command: tuple[str, ...], runtime: _CodexRuntimeEnvironment) -> tuple[str, ...]:
+    """Return the exact command used for Codex execution."""
+    return (str(runtime.executable_path), *command[1:])
 
 
 def _resolve_codex_sandbox_helper(executable: Path, *, npm_package: Path | None) -> Path | None:
@@ -1375,6 +1422,41 @@ def _resolve_codex_sandbox_helper(executable: Path, *, npm_package: Path | None)
     return None
 
 
+def _resolve_codex_sandbox_command_runner(
+    executable: Path,
+    *,
+    npm_package: Path | None,
+    helper: Path | None,
+) -> Path | None:
+    """Resolve the Windows sandbox command runner for the active Codex installation."""
+    if sys.platform != "win32":
+        return None
+    candidates: list[Path] = []
+    if helper is not None:
+        candidates.append(helper.parent / _CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER)
+    if npm_package is not None:
+        vendor = Path("vendor") / "x86_64-pc-windows-msvc" / "codex-resources" / _CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER
+        candidates.extend(
+            (
+                npm_package.parent / "codex-win32-x64" / vendor,
+                npm_package / "node_modules" / "@openai" / "codex-win32-x64" / vendor,
+            )
+        )
+    candidates.extend(
+        (
+            executable.parent / "codex-resources" / _CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER,
+            executable.parent.parent / "codex-resources" / _CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER,
+        )
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    path_match = shutil.which(_CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER)
+    if path_match is not None and Path(path_match).is_file():
+        return Path(path_match).resolve()
+    return None
+
+
 def _codex_sandbox_helper_check(helper: Path | None) -> _ExecutorReliabilityCheck:
     """Return a preflight check for the Codex Windows sandbox helper."""
     if sys.platform != "win32":
@@ -1394,6 +1476,31 @@ def _codex_sandbox_helper_check(helper: Path | None) -> _ExecutorReliabilityChec
         passed=False,
         detail=f"{_CODEX_WINDOWS_SANDBOX_HELPER} could not be resolved for the active Codex executable.",
         suggested_fix="Use the Codex install whose platform package includes codex-resources, or reinstall/update the active Codex CLI.",
+    )
+
+
+def _codex_sandbox_command_runner_check(command_runner: Path | None) -> _ExecutorReliabilityCheck:
+    """Return a preflight check for the Codex Windows sandbox command runner."""
+    if sys.platform != "win32":
+        return _ExecutorReliabilityCheck(
+            name="codex_sandbox_command_runner_available",
+            passed=True,
+            detail="Windows sandbox command runner is not required on this platform.",
+        )
+    if command_runner is not None:
+        return _ExecutorReliabilityCheck(
+            name="codex_sandbox_command_runner_available",
+            passed=True,
+            detail=str(command_runner),
+        )
+    return _ExecutorReliabilityCheck(
+        name="codex_sandbox_command_runner_available",
+        passed=False,
+        detail=f"{_CODEX_WINDOWS_SANDBOX_COMMAND_RUNNER} could not be resolved for the active Codex executable.",
+        suggested_fix=(
+            "Use the Codex npm platform binary whose codex-resources directory includes "
+            "codex-command-runner.exe, or reinstall/update the active Codex CLI."
+        ),
     )
 
 
@@ -1581,11 +1688,13 @@ def _render_executor_reliability_report(report: _ExecutorReliabilityReport, *, c
 executor: {report.executor}
 repo: {report.repo}
 active_executable_path: {report.executable_path}
+configured_executable_path: {report.configured_executable_path}
 effective_command: {report.command_line}
 sandbox_mode: {report.sandbox_mode}
 execution_strategy: {report.execution_strategy}
 npm_package_location: {report.npm_package_location}
 sandbox_helper_path: {report.sandbox_helper_path}
+sandbox_command_runner_path: {report.sandbox_command_runner_path}
 runtime_PATH_prefix: {report.runtime_path_prefix}
 version: {report.version}
 CODEX_HOME: {report.codex_home}
@@ -2468,6 +2577,7 @@ def _render_candidate_execute_termination(
     output: Path | None,
     repo: str | None,
     result: _CodexExecutionResult,
+    reliability: _ExecutorReliabilityReport | None = None,
 ) -> str:
     """Render deterministic termination status for `candidate-execute`."""
     report = result.termination_report
@@ -2486,7 +2596,7 @@ def _render_candidate_execute_termination(
         save_hint = f"rerun_to_save_raw_output: add --output {save_hint_path}\n"
     diagnostics = _render_process_termination_report(report)
     failure = f"Failure: {result.failure_message}\n" if result.failure_message else ""
-    failure_details = _render_candidate_execute_failure_diagnostics(result)
+    failure_details = _render_candidate_execute_failure_diagnostics(result, reliability=reliability)
     next_command = ""
     if output is not None:
         next_command = f"\nNext recommended command:\n{_candidate_outcome_next_command(candidate, output=output, repo=repo)}\n"
@@ -2499,21 +2609,73 @@ Process tree status: {termination}
 {next_command}"""
 
 
-def _render_candidate_execute_failure_diagnostics(result: _CodexExecutionResult) -> str:
+def _render_candidate_execute_failure_diagnostics(
+    result: _CodexExecutionResult,
+    *,
+    reliability: _ExecutorReliabilityReport | None = None,
+) -> str:
     """Render Codex launcher/stream diagnostics for failed candidate execution."""
     if not result.failed and not result.timed_out and not result.interrupted:
         return ""
+    win32_error = _windows_sandbox_create_process_error(result.output)
     rows = [
         "Candidate execution diagnostics:",
         f"- failure_kind: {result.failure_kind or '(unknown)'}",
         f"- root_exit_code: {result.root_exit_code if result.root_exit_code is not None else '(unknown)'}",
         f"- no_assistant_result: {_yes_no(value=_codex_transcript_without_assistant_result(result.output))}",
-        "- stdout_tail:",
-        _indent_block(result.stdout_tail or _tail_text(result.output)),
-        "- stderr_tail:",
-        _indent_block(result.stderr_tail or "(none)"),
     ]
+    if reliability is not None:
+        rows.extend(
+            [
+                f"- executable_path: {reliability.executable_path}",
+                f"- command_line: {reliability.command_line}",
+                f"- working_directory: {reliability.repo}",
+                f"- sandbox_helper_path: {reliability.sandbox_helper_path}",
+                f"- sandbox_command_runner_path: {reliability.sandbox_command_runner_path}",
+            ]
+        )
+    if win32_error is not None:
+        rows.extend(
+            [
+                f"- win32_error_code: {win32_error}",
+                f"- win32_error_name: {_win32_error_name(win32_error)}",
+            ]
+        )
+    rows.extend(
+        [
+            "- stdout_tail:",
+            _indent_block(result.stdout_tail or _tail_text(result.output)),
+            "- stderr_tail:",
+            _indent_block(result.stderr_tail or "(none)"),
+        ]
+    )
     return "\n".join(rows) + "\n"
+
+
+def _windows_sandbox_create_process_error(output: str) -> int | None:
+    """Return the Win32 code from a Windows sandbox CreateProcessWithLogonW failure."""
+    marker = "CreateProcessWithLogonW failed:"
+    for line in output.splitlines():
+        if marker not in line:
+            continue
+        suffix = line.split(marker, maxsplit=1)[1].strip()
+        code = suffix.split(maxsplit=1)[0].strip("`'\".,)")
+        try:
+            return int(code)
+        except ValueError:
+            return None
+    return None
+
+
+def _win32_error_name(code: int) -> str:
+    """Return a symbolic Win32 error name for common executor failures."""
+    names = {
+        2: "ERROR_FILE_NOT_FOUND",
+        3: "ERROR_PATH_NOT_FOUND",
+        5: "ERROR_ACCESS_DENIED",
+        740: "ERROR_ELEVATION_REQUIRED",
+    }
+    return names.get(code, "(unknown)")
 
 
 def _yes_no(*, value: bool) -> str:

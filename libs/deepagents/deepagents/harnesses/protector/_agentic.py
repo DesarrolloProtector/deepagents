@@ -19,6 +19,7 @@ TaskMode = Literal[
     "diagnostic_bootstrap",
     "continuation_followup",
     "ui_runtime_bug",
+    "ui_visual_microfix",
     "provider_api_bug",
 ]
 ExecutionProfileName = Literal["prompt_only", "review_only", "supervised_implementation", "bounded_loop_candidate"]
