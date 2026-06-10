@@ -6,12 +6,15 @@ import argparse
 import ctypes
 import json
 import os
+import queue
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -59,6 +62,10 @@ _INTERACTIVE_SENTINEL = "END"
 _GMEM_MOVEABLE = 0x0002
 _CF_UNICODETEXT = 13
 _DEFAULT_CODEX_COMMAND = "codex exec -"
+_CODEX_EXECUTION_HEARTBEAT_SECONDS = 10.0
+_CODEX_PROCESS_POLL_SECONDS = 0.1
+_CODEX_READER_JOIN_SECONDS = 1.0
+_CODEX_TERMINATION_WAIT_SECONDS = 5.0
 STABLE_ECC_PACK_COMMANDS = (
     "task",
     "review",
@@ -314,7 +321,12 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     candidate_execute.add_argument("--output", type=Path, default=None, help="Optional file path for persisting raw Codex output.")
     candidate_execute.add_argument("--overwrite", action="store_true", help="Allow --output to replace an existing file.")
     candidate_execute.add_argument("--repo", default=None, help="Optional repository path or alias shown in the next candidate-outcome command.")
-    candidate_execute.add_argument("--timeout", type=float, default=None, help="Optional timeout in seconds for the foreground Codex execution.")
+    candidate_execute.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Optional timeout in seconds for the foreground Codex execution.",
+    )
     candidate_execute.add_argument("candidate_json", type=Path, help="Automation-ready candidate JSON to execute once.")
 
     run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
@@ -898,13 +910,14 @@ def _run_candidate_execute(args: argparse.Namespace, parser: argparse.ArgumentPa
         return 1
     if args.timeout is not None and args.timeout <= 0:
         parser.error("--timeout must be greater than 0")
+    timeout = args.timeout
 
     prompt = automation_candidate_codex_prompt(payload)
     if not prompt:
         parser.error("candidate proposed_codex_prompt is missing")
     command = _parse_codex_command(args.codex_cmd, parser)
     try:
-        result = _run_codex_once(command, prompt, timeout=args.timeout)
+        result = _run_codex_once(command, prompt, timeout=timeout)
     except OSError as exc:
         parser.error(f"Codex command failed to start: {exc}")
 
@@ -966,14 +979,45 @@ class _ProcessTerminationReport:
     diagnostics_error: str | None = None
 
 
-def _run_codex_once(command: tuple[str, ...], prompt: str, *, timeout: float | None = None) -> _CodexExecutionResult:
+@dataclass
+class _OwnedCodexProcess:
+    """Foreground process plus platform ownership handle."""
+
+    process: subprocess.Popen[str]
+    windows_job_handle: int | None = None
+    ownership_error: str | None = None
+
+
+def _run_codex_once(
+    command: tuple[str, ...],
+    prompt: str,
+    *,
+    timeout: float | None = None,
+    heartbeat_interval: float = _CODEX_EXECUTION_HEARTBEAT_SECONDS,
+    poll_interval: float = _CODEX_PROCESS_POLL_SECONDS,
+) -> _CodexExecutionResult:
     """Invoke one foreground Codex command with the prompt on stdin."""
+    process = _launch_codex_process(command)
+    if process.stdin is None or process.stdout is None:
+        return _CodexExecutionResult(returncode=1, output="")
+    owned = _own_codex_process(process)
+    return _run_owned_codex_process(
+        owned,
+        prompt,
+        timeout=timeout,
+        heartbeat_interval=heartbeat_interval,
+        poll_interval=poll_interval,
+    )
+
+
+def _launch_codex_process(command: tuple[str, ...]) -> subprocess.Popen[str]:
+    """Launch the foreground Codex process."""
     kwargs: dict[str, object] = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         kwargs["start_new_session"] = True
-    process = subprocess.Popen(  # noqa: S603  # Operator-supplied command is the explicit execution boundary for this pilot.
+    return subprocess.Popen(  # noqa: S603  # Operator-supplied command is the explicit execution boundary for this pilot.
         command,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -983,89 +1027,280 @@ def _run_codex_once(command: tuple[str, ...], prompt: str, *, timeout: float | N
         errors="replace",
         **kwargs,
     )
-    if process.stdin is None or process.stdout is None:
-        return _CodexExecutionResult(returncode=1, output="")
-    if timeout is None:
-        return _run_codex_streaming(process, prompt)
-    return _run_codex_with_timeout(process, prompt, timeout=timeout)
 
 
-def _run_codex_streaming(process: subprocess.Popen[str], prompt: str) -> _CodexExecutionResult:
-    """Stream Codex output for the default foreground execution path."""
-    process.stdin.write(prompt)
-    process.stdin.close()
-    chunks: list[str] = []
+def _run_owned_codex_process(
+    owned: _OwnedCodexProcess,
+    prompt: str,
+    *,
+    timeout: float | None,
+    heartbeat_interval: float,
+    poll_interval: float,
+) -> _CodexExecutionResult:
+    """Run an owned Codex process while the main thread keeps cancellation control."""
+    process = owned.process
+    output = _ProcessOutputBuffer()
+    errors: queue.SimpleQueue[str] = queue.SimpleQueue()
+    reader = threading.Thread(
+        target=_read_process_stdout,
+        args=(process.stdout, output, errors),
+        name="candidate-execute-stdout",
+        daemon=True,
+    )
+    reader.start()
     try:
-        for chunk in process.stdout:
+        process.stdin.write(prompt)
+        process.stdin.close()
+    except KeyboardInterrupt:
+        report = _terminate_process_tree(owned, method="keyboard_interrupt")
+        _join_reader(reader)
+        return _CodexExecutionResult(
+            returncode=130,
+            output=output.text(),
+            interrupted=True,
+            termination_report=report,
+        )
+    except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
+        report = _terminate_process_tree(owned, method="failure")
+        _join_reader(reader)
+        return _CodexExecutionResult(
+            returncode=1,
+            output=output.text(),
+            failed=True,
+            failure_message=str(exc),
+            termination_report=report,
+        )
+
+    started = time.monotonic()
+    next_heartbeat = started + heartbeat_interval
+    try:
+        while True:
+            returncode = _wait_for_process(process, timeout=poll_interval)
+            if returncode is not None:
+                _join_reader(reader)
+                _close_owned_process(owned)
+                return _completed_codex_result(returncode, output=output, errors=errors)
+
+            now = time.monotonic()
+            if timeout is not None and now - started >= timeout:
+                report = _terminate_process_tree(owned, method="timeout")
+                _join_reader(reader)
+                return _CodexExecutionResult(
+                    returncode=124,
+                    output=output.text(),
+                    timed_out=True,
+                    termination_report=report,
+                )
+            if heartbeat_interval > 0 and now >= next_heartbeat:
+                _write_candidate_execute_heartbeat(process, elapsed_seconds=now - started)
+                next_heartbeat = now + heartbeat_interval
+    except KeyboardInterrupt:
+        report = _terminate_process_tree(owned, method="keyboard_interrupt")
+        _join_reader(reader)
+        return _CodexExecutionResult(
+            returncode=130,
+            output=output.text(),
+            interrupted=True,
+            termination_report=report,
+        )
+    except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
+        report = _terminate_process_tree(owned, method="failure")
+        _join_reader(reader)
+        return _CodexExecutionResult(
+            returncode=1,
+            output=output.text(),
+            failed=True,
+            failure_message=str(exc),
+            termination_report=report,
+        )
+
+
+def _completed_codex_result(
+    returncode: int,
+    *,
+    output: _ProcessOutputBuffer,
+    errors: queue.SimpleQueue[str],
+) -> _CodexExecutionResult:
+    """Build the result for a normally exited Codex process."""
+    reader_error = _first_queue_item(errors)
+    if reader_error is not None:
+        return _CodexExecutionResult(returncode=1, output=output.text(), failed=True, failure_message=reader_error)
+    return _CodexExecutionResult(returncode=returncode, output=output.text())
+
+
+class _ProcessOutputBuffer:
+    """Thread-safe process output accumulator."""
+
+    def __init__(self) -> None:
+        self._chunks: list[str] = []
+        self._lock = threading.Lock()
+
+    def append(self, text: str) -> None:
+        """Append one output chunk."""
+        with self._lock:
+            self._chunks.append(text)
+
+    def text(self) -> str:
+        """Return accumulated output."""
+        with self._lock:
+            return "".join(self._chunks)
+
+
+def _read_process_stdout(stream: object, output: _ProcessOutputBuffer, errors: queue.SimpleQueue[str]) -> None:
+    """Read process output without blocking the watchdog loop."""
+    try:
+        for chunk in stream:
             sys.stdout.write(chunk)
-            chunks.append(chunk)
-    except KeyboardInterrupt:
-        report = _terminate_process_tree(process, method="keyboard_interrupt")
-        return _CodexExecutionResult(
-            returncode=130,
-            output="".join(chunks),
-            interrupted=True,
-            termination_report=report,
-        )
-    except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
-        report = _terminate_process_tree(process, method="failure")
-        return _CodexExecutionResult(
-            returncode=1,
-            output="".join(chunks),
-            failed=True,
-            failure_message=str(exc),
-            termination_report=report,
-        )
-    return _CodexExecutionResult(returncode=process.wait(), output="".join(chunks))
+            sys.stdout.flush()
+            output.append(chunk)
+    except Exception as exc:  # noqa: BLE001  # Reader failures must not stop timeout/interruption cleanup.
+        errors.put(str(exc) or type(exc).__name__)
 
 
-def _run_codex_with_timeout(process: subprocess.Popen[str], prompt: str, *, timeout: float) -> _CodexExecutionResult:
-    """Run Codex with an explicit timeout."""
+def _wait_for_process(process: subprocess.Popen[str], *, timeout: float) -> int | None:
+    """Wait briefly for process exit and return `None` while still running."""
     try:
-        output, _ = process.communicate(prompt, timeout=timeout)
-    except KeyboardInterrupt:
-        report = _terminate_process_tree(process, method="keyboard_interrupt")
-        return _CodexExecutionResult(
-            returncode=130,
-            output="",
-            interrupted=True,
-            termination_report=report,
-        )
-    except subprocess.TimeoutExpired as exc:
-        output = _timeout_output(exc)
-        if output:
-            sys.stdout.write(output)
-        report = _terminate_process_tree(process, method="timeout")
-        return _CodexExecutionResult(
-            returncode=124,
-            output=output,
-            timed_out=True,
-            termination_report=report,
-        )
-    except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
-        report = _terminate_process_tree(process, method="failure")
-        return _CodexExecutionResult(
-            returncode=1,
-            output="",
-            failed=True,
-            failure_message=str(exc),
-            termination_report=report,
-        )
-    output = output or ""
-    sys.stdout.write(output)
-    return _CodexExecutionResult(returncode=process.returncode if process.returncode is not None else process.wait(), output=output)
+        return process.wait(timeout=timeout)
+    except TypeError:
+        return process.wait()
+    except subprocess.TimeoutExpired:
+        return None
 
 
-def _timeout_output(exc: subprocess.TimeoutExpired) -> str:
-    """Return partial timeout output as text."""
-    output = exc.output or ""
-    if isinstance(output, bytes):
-        return output.decode("utf-8", errors="replace")
-    return output
+def _join_reader(reader: threading.Thread) -> None:
+    """Join the output reader briefly without letting it block cancellation."""
+    reader.join(timeout=_CODEX_READER_JOIN_SECONDS)
 
 
-def _terminate_process_tree(process: subprocess.Popen[str], *, method: str) -> _ProcessTerminationReport:
+def _close_owned_process(owned: _OwnedCodexProcess) -> None:
+    """Release process ownership after normal exit."""
+    if sys.platform == "win32":
+        _close_windows_job_handle(owned)
+
+
+def _first_queue_item(items: queue.SimpleQueue[str]) -> str | None:
+    """Return one queued item if present."""
+    try:
+        return items.get_nowait()
+    except queue.Empty:
+        return None
+
+
+def _write_candidate_execute_heartbeat(process: object, *, elapsed_seconds: float) -> None:
+    """Render a visible liveness heartbeat for long candidate executions."""
+    pid = getattr(process, "pid", None)
+    pid_text = str(pid) if isinstance(pid, int) and pid > 0 else "(unknown)"
+    sys.stdout.write(f"\n[candidate-execute heartbeat] elapsed={elapsed_seconds:.0f}s root_process_id={pid_text}\n")
+    sys.stdout.flush()
+
+
+def _own_codex_process(process: subprocess.Popen[str]) -> _OwnedCodexProcess:
+    """Attach platform ownership to a launched Codex process."""
+    if sys.platform != "win32":
+        return _OwnedCodexProcess(process=process)
+    try:
+        return _OwnedCodexProcess(process=process, windows_job_handle=_create_windows_kill_on_close_job(process))
+    except Exception as exc:  # noqa: BLE001  # Job ownership diagnostics must not prevent fallback cleanup.
+        return _OwnedCodexProcess(process=process, ownership_error=str(exc) or type(exc).__name__)
+
+
+def _create_windows_kill_on_close_job(process: subprocess.Popen[str]) -> int:
+    """Create a Windows Job Object that kills the process tree when closed."""
+    handle = _create_windows_job_handle()
+    try:
+        _configure_windows_job_kill_on_close(handle)
+        _assign_process_to_windows_job(handle, process)
+    except Exception:
+        ctypes.windll.kernel32.CloseHandle(handle)
+        raise
+    return handle
+
+
+def _create_windows_job_handle() -> int:
+    """Create a Windows Job Object handle."""
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+    kernel32.CreateJobObjectW.restype = ctypes.c_void_p
+    handle = kernel32.CreateJobObjectW(None, None)
+    if not handle:
+        msg = "CreateJobObjectW failed"
+        raise OSError(msg)
+    return int(handle)
+
+
+def _configure_windows_job_kill_on_close(handle: int) -> None:
+    """Set `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` on a Windows Job Object."""
+    job_object_extended_limit_information = 9
+    job_object_limit_kill_on_job_close = 0x00002000
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+    class JobObjectBasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", ctypes.c_ulong),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", ctypes.c_ulong),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", ctypes.c_ulong),
+            ("SchedulingClass", ctypes.c_ulong),
+        ]
+
+    class JobObjectExtendedLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", JobObjectBasicLimitInformation),
+            ("IoInfo", IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    info = JobObjectExtendedLimitInformation()
+    info.BasicLimitInformation.LimitFlags = job_object_limit_kill_on_job_close
+    kernel32 = ctypes.windll.kernel32
+    kernel32.SetInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong]
+    kernel32.SetInformationJobObject.restype = ctypes.c_int
+    ok = kernel32.SetInformationJobObject(
+        handle,
+        job_object_extended_limit_information,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    )
+    if not ok:
+        msg = "SetInformationJobObject failed"
+        raise OSError(msg)
+
+
+def _assign_process_to_windows_job(handle: int, process: subprocess.Popen[str]) -> None:
+    """Assign a process to a Windows Job Object."""
+    process_handle = getattr(process, "_handle", None)
+    if process_handle is None:
+        msg = "process handle unavailable for Job Object assignment"
+        raise OSError(msg)
+    kernel32 = ctypes.windll.kernel32
+    kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    kernel32.AssignProcessToJobObject.restype = ctypes.c_int
+    ok = kernel32.AssignProcessToJobObject(handle, int(process_handle))
+    if not ok:
+        msg = "AssignProcessToJobObject failed"
+        raise OSError(msg)
+
+
+def _terminate_process_tree(target: subprocess.Popen[str] | _OwnedCodexProcess, *, method: str) -> _ProcessTerminationReport:
     """Terminate the foreground Codex process tree where the platform allows it."""
+    owned = target if isinstance(target, _OwnedCodexProcess) else _OwnedCodexProcess(process=target)
+    process = owned.process
     pid = getattr(process, "pid", None)
     if not isinstance(pid, int) or pid <= 0:
         terminated = _terminate_direct_process(process)
@@ -1075,6 +1310,7 @@ def _terminate_process_tree(process: subprocess.Popen[str], *, method: str) -> _
             method=method,
             terminated_pids=() if not terminated else (0,),
             resisted_pids=(0,) if not terminated else (),
+            diagnostics_error=owned.ownership_error,
         )
     diagnostics_error: str | None = None
     descendants: tuple[int, ...] = ()
@@ -1082,8 +1318,11 @@ def _terminate_process_tree(process: subprocess.Popen[str], *, method: str) -> _
         descendants = _collect_descendant_pids(pid)
     except Exception as exc:  # noqa: BLE001  # Diagnostics must not block cleanup.
         diagnostics_error = str(exc)
+    diagnostics_error = _join_diagnostics(diagnostics_error, owned.ownership_error)
     tracked = _ordered_unique_pids((pid, *descendants))
-    if sys.platform == "win32":
+    if sys.platform == "win32" and owned.windows_job_handle is not None:
+        _close_windows_job_handle(owned)
+    elif sys.platform == "win32":
         try:
             subprocess.run(  # noqa: S603  # Fixed Windows process-tree termination command.
                 ("taskkill", "/PID", str(pid), "/T", "/F"),
@@ -1101,7 +1340,7 @@ def _terminate_process_tree(process: subprocess.Popen[str], *, method: str) -> _
         except OSError:
             _terminate_direct_process(process)
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=_CODEX_TERMINATION_WAIT_SECONDS)
     except (OSError, subprocess.TimeoutExpired):
         _terminate_direct_process(process)
     resisted = _running_pids(tracked)
@@ -1114,6 +1353,25 @@ def _terminate_process_tree(process: subprocess.Popen[str], *, method: str) -> _
         resisted_pids=resisted,
         diagnostics_error=diagnostics_error,
     )
+
+
+def _close_windows_job_handle(owned: _OwnedCodexProcess) -> None:
+    """Close a Windows Job Object handle, triggering kill-on-close."""
+    handle = owned.windows_job_handle
+    if handle is None:
+        return
+    try:
+        ctypes.windll.kernel32.CloseHandle(handle)
+    finally:
+        owned.windows_job_handle = None
+
+
+def _join_diagnostics(left: str | None, right: str | None) -> str | None:
+    """Join optional diagnostics without raising."""
+    parts = tuple(part for part in (left, right) if part)
+    if not parts:
+        return None
+    return "; ".join(parts)
 
 
 def _collect_descendant_pids(root_pid: int) -> tuple[int, ...]:
