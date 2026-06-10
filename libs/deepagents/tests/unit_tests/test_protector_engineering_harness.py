@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -3078,6 +3079,153 @@ def test_cli_candidate_execute_does_not_persist_raw_output_without_output_option
     assert "transient output only" in stdout
     assert "--codex-output <codex-output>" in stdout
     assert not (tmp_path / "codex-output.txt").exists()
+
+
+def test_cli_candidate_execute_interrupt_terminates_child_and_preserves_output(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    output = tmp_path / "codex-output.txt"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+    terminated: list[object] = []
+
+    class FakeStdin:
+        def write(self, text: str) -> None:
+            assert text.startswith("Codex Prompt:\n")
+
+        def close(self) -> None:
+            return None
+
+    class InterruptingStdout:
+        def __init__(self) -> None:
+            self.index = 0
+
+        def __iter__(self) -> "InterruptingStdout":
+            return self
+
+        def __next__(self) -> str:
+            self.index += 1
+            if self.index == 1:
+                return "partial codex output\n"
+            raise KeyboardInterrupt
+
+    class FakeProcess:
+        pid = 12345
+
+        def __init__(self, command: object, **kwargs: object) -> None:
+            _ = command, kwargs
+            self.stdin = FakeStdin()
+            self.stdout = InterruptingStdout()
+
+        def wait(self) -> int:
+            msg = "wait should not be reached after KeyboardInterrupt"
+            raise AssertionError(msg)
+
+    def fake_terminate(process: object) -> bool:
+        terminated.append(process)
+        return True
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(cli, "_terminate_process_tree", fake_terminate)
+
+    assert (
+        cli.main(
+            [
+                "candidate-execute",
+                "--codex-cmd",
+                "fake-codex",
+                "--approve-sha",
+                approval_sha,
+                "--output",
+                str(output),
+                "--repo",
+                str(repo),
+                str(candidate),
+            ]
+        )
+        == 130
+    )
+
+    stdout = capsys.readouterr().out
+    assert len(terminated) == 1
+    assert "partial codex output" in stdout
+    assert output.read_text(encoding="utf-8") == "partial codex output\n"
+    assert "interrupted_by_operator" in stdout
+    assert "child_process_terminated" in stdout
+    assert "Next recommended command:" in stdout
+    assert f"ph candidate-outcome {candidate.resolve()} --codex-output {output.resolve()} --repo {repo} --save-history" in stdout
+
+
+def test_cli_candidate_execute_interrupt_reports_termination_failure(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+
+    class FakeStdin:
+        def write(self, text: str) -> None:
+            assert text.startswith("Codex Prompt:\n")
+
+        def close(self) -> None:
+            return None
+
+    class InterruptingStdout:
+        def __iter__(self) -> "InterruptingStdout":
+            return self
+
+        def __next__(self) -> str:
+            raise KeyboardInterrupt
+
+    class FakeProcess:
+        stdin = FakeStdin()
+        stdout = InterruptingStdout()
+
+        def __init__(self, command: object, **kwargs: object) -> None:
+            _ = command, kwargs
+
+    def fake_terminate_failure(process: object) -> bool:
+        _ = process
+        return False
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(cli, "_terminate_process_tree", fake_terminate_failure)
+
+    assert cli.main(["candidate-execute", "--codex-cmd", "fake-codex", "--approve-sha", approval_sha, str(candidate)]) == 130
+
+    stdout = capsys.readouterr().out
+    assert "interrupted_by_operator" in stdout
+    assert "termination_failed" in stdout
+    assert "Next recommended command:" not in stdout
+
+
+def test_run_codex_once_replaces_invalid_utf8_output(capsys) -> None:
+    result = cli._run_codex_once(
+        (
+            sys.executable,
+            "-c",
+            "import sys; sys.stdin.read(); sys.stdout.buffer.write(b'valid\\xff\\n')",
+        ),
+        "prompt",
+    )
+
+    stdout = capsys.readouterr().out
+    assert result.returncode == 0
+    assert result.output == "valid\ufffd\n"
+    assert stdout == "valid\ufffd\n"
 
 
 def test_cli_outcome_learning_lists_derived_signals(tmp_path: Path, capsys) -> None:

@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -904,15 +905,28 @@ def _run_candidate_execute(args: argparse.Namespace, parser: argparse.ArgumentPa
     except OSError as exc:
         parser.error(f"Codex command failed to start: {exc}")
 
-    if args.output is not None:
-        try:
-            _write_text_output(args.output, result.output, overwrite=args.overwrite)
-        except HarnessUsageError as exc:
-            parser.error(str(exc))
+    _write_candidate_execution_output(args, parser, result)
+    if result.interrupted:
+        sys.stdout.write(_render_candidate_execute_interruption(args.candidate_json, output=args.output, repo=args.repo, result=result))
+        return 130
     sys.stdout.write("\nNext review command:\n")
     sys.stdout.write(_candidate_outcome_next_command(args.candidate_json, output=args.output, repo=args.repo))
     sys.stdout.write("\n")
     return result.returncode
+
+
+def _write_candidate_execution_output(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    result: _CodexExecutionResult,
+) -> None:
+    """Persist raw candidate execution output only when explicitly requested."""
+    if args.output is None:
+        return
+    try:
+        _write_text_output(args.output, result.output, overwrite=args.overwrite)
+    except HarnessUsageError as exc:
+        parser.error(str(exc))
 
 
 @dataclass(frozen=True)
@@ -921,16 +935,26 @@ class _CodexExecutionResult:
 
     returncode: int
     output: str
+    interrupted: bool = False
+    child_process_terminated: bool | None = None
 
 
 def _run_codex_once(command: tuple[str, ...], prompt: str) -> _CodexExecutionResult:
     """Invoke one foreground Codex command with the prompt on stdin."""
+    kwargs: dict[str, object] = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        kwargs["start_new_session"] = True
     process = subprocess.Popen(  # noqa: S603  # Operator-supplied command is the explicit execution boundary for this pilot.
         command,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        **kwargs,
     )
     if process.stdin is None or process.stdout is None:
         return _CodexExecutionResult(returncode=1, output="")
@@ -938,10 +962,60 @@ def _run_codex_once(command: tuple[str, ...], prompt: str) -> _CodexExecutionRes
     process.stdin.close()
 
     chunks: list[str] = []
-    for chunk in process.stdout:
-        sys.stdout.write(chunk)
-        chunks.append(chunk)
-    return _CodexExecutionResult(returncode=process.wait(), output="".join(chunks))
+    try:
+        for chunk in process.stdout:
+            sys.stdout.write(chunk)
+            chunks.append(chunk)
+        return _CodexExecutionResult(returncode=process.wait(), output="".join(chunks))
+    except KeyboardInterrupt:
+        terminated = _terminate_process_tree(process)
+        return _CodexExecutionResult(
+            returncode=130,
+            output="".join(chunks),
+            interrupted=True,
+            child_process_terminated=terminated,
+        )
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> bool:
+    """Terminate the foreground Codex process tree where the platform allows it."""
+    pid = getattr(process, "pid", None)
+    if not isinstance(pid, int) or pid <= 0:
+        return _terminate_direct_process(process)
+    if sys.platform == "win32":
+        try:
+            completed = subprocess.run(  # noqa: S603  # Fixed Windows process-tree termination command.
+                ("taskkill", "/PID", str(pid), "/T", "/F"),
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError:
+            return _terminate_direct_process(process)
+        if completed.returncode == 0:
+            return True
+        return _terminate_direct_process(process)
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except OSError:
+        return _terminate_direct_process(process)
+    return True
+
+
+def _terminate_direct_process(process: object) -> bool:
+    """Best-effort direct-process termination fallback."""
+    for method_name in ("terminate", "kill"):
+        method = getattr(process, method_name, None)
+        if method is None:
+            continue
+        try:
+            method()
+        except OSError:
+            continue
+        return True
+    return False
 
 
 def _parse_codex_command(command: str, parser: argparse.ArgumentParser) -> tuple[str, ...]:
@@ -961,6 +1035,26 @@ def _render_candidate_execute_refusal(expected_sha: str, reason: str) -> str:
 Candidate approval SHA: {expected_sha}
 Re-run with: --approve-sha {expected_sha}
 """
+
+
+def _render_candidate_execute_interruption(
+    candidate: Path,
+    *,
+    output: Path | None,
+    repo: str | None,
+    result: _CodexExecutionResult,
+) -> str:
+    """Render deterministic interruption status for `candidate-execute`."""
+    termination = "child_process_terminated" if result.child_process_terminated else "termination_failed"
+    output_row = f"raw_output_saved: {output.resolve()}" if output is not None else "raw_output_saved: (not requested)"
+    next_command = ""
+    if output is not None:
+        next_command = f"\nNext recommended command:\n{_candidate_outcome_next_command(candidate, output=output, repo=repo)}\n"
+    return f"""
+Candidate execution status: interrupted_by_operator
+Child process status: {termination}
+{output_row}
+{next_command}"""
 
 
 def _candidate_outcome_next_command(candidate: Path, *, output: Path | None, repo: str | None) -> str:
