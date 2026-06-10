@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import json
 import os
@@ -17,7 +18,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from deepagents._version import __version__
 from deepagents.harnesses.protector._ecc import render_ecc_status
@@ -63,9 +64,21 @@ _GMEM_MOVEABLE = 0x0002
 _CF_UNICODETEXT = 13
 _DEFAULT_CODEX_COMMAND = "codex exec -"
 _CODEX_EXECUTION_HEARTBEAT_SECONDS = 10.0
+_CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS = 60.0
 _CODEX_PROCESS_POLL_SECONDS = 0.1
 _CODEX_READER_JOIN_SECONDS = 1.0
 _CODEX_TERMINATION_WAIT_SECONDS = 5.0
+_EXECUTOR_PREFLIGHT_BEGIN = "PROTECTOR_EXECUTOR_PREFLIGHT_BEGIN"
+_EXECUTOR_PREFLIGHT_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_OK"
+_EXECUTOR_PREFLIGHT_WRITE_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_WRITE_OK"
+_EXECUTOR_PREFLIGHT_DELETE_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_DELETE_OK"
+_EXECUTOR_PREFLIGHT_READ_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_READ_OK"
+_EXECUTOR_SANDBOX_FAILURE_PATTERNS = (
+    "codex-windows-sandbox-setup.exe program not found",
+    "sandbox helper",
+    "sandbox setup",
+    "helper unavailable",
+)
 STABLE_ECC_PACK_COMMANDS = (
     "task",
     "review",
@@ -76,6 +89,7 @@ STABLE_ECC_PACK_COMMANDS = (
     "candidate-dry-run",
     "candidate-outcome",
     "candidate-execute",
+    "executor-status",
     "benchmark",
     "ecc-status",
 )
@@ -96,6 +110,51 @@ class _ResolvedRepo:
 
     path: Path
     alias: str | None = None
+
+
+@dataclass(frozen=True)
+class _ExecutorReliabilityCheck:
+    """One local executor reliability check."""
+
+    name: str
+    passed: bool
+    detail: str
+    suggested_fix: str | None = None
+
+
+@dataclass(frozen=True)
+class _ExecutorReliabilityReport:
+    """Local workspace executor reliability status."""
+
+    executor: str
+    repo: Path
+    executable_path: str
+    version: str
+    codex_home: str
+    checks: tuple[_ExecutorReliabilityCheck, ...]
+
+    @property
+    def ok(self) -> bool:
+        """Return whether every reliability check passed."""
+        return all(check.passed for check in self.checks)
+
+    @property
+    def failing_checks(self) -> tuple[_ExecutorReliabilityCheck, ...]:
+        """Return checks that block local candidate execution."""
+        return tuple(check for check in self.checks if not check.passed)
+
+
+class _LocalWorkspaceExecutor(Protocol):
+    """Adapter boundary for local candidate execution providers."""
+
+    name: str
+    repo: Path
+
+    def check_reliability(self) -> _ExecutorReliabilityReport:
+        """Verify the executor can read and mutate the local workspace."""
+
+    def execute(self, prompt: str, *, timeout: float | None) -> _CodexExecutionResult:
+        """Run one approved candidate prompt through the local executor."""
 
 
 def _repos_config_path() -> Path:
@@ -220,6 +279,13 @@ def _resolve_history_repo_and_optional_task(
     return repo, task or None
 
 
+def _resolve_candidate_execution_repo(repo: str | None, parser: argparse.ArgumentParser) -> Path:
+    """Resolve the workspace where local candidate execution must succeed."""
+    if repo is not None:
+        return _resolve_positional_repo(repo, parser)
+    return Path.cwd().resolve()
+
+
 def _task_text(parts: list[str]) -> str:
     """Join task words from argparse into a compact task string."""
     return " ".join(parts).strip()
@@ -314,6 +380,12 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     )
     candidate_execute.add_argument("--approve-sha", default=None, help="Required canonical SHA-256 approval token for the candidate JSON.")
     candidate_execute.add_argument(
+        "--executor",
+        choices=("codex_cli",),
+        default="codex_cli",
+        help="Local workspace executor adapter to use. Default: codex_cli.",
+    )
+    candidate_execute.add_argument(
         "--codex-cmd",
         default=_DEFAULT_CODEX_COMMAND,
         help=f"Codex command to invoke once. Default: {_DEFAULT_CODEX_COMMAND!r}.",
@@ -328,6 +400,23 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
         help="Optional timeout in seconds for the foreground Codex execution.",
     )
     candidate_execute.add_argument("candidate_json", type=Path, help="Automation-ready candidate JSON to execute once.")
+
+    executor_status = subparsers.add_parser(
+        "executor-status",
+        help="Check whether the local candidate executor can read and mutate a workspace.",
+    )
+    executor_status.add_argument("--repo", required=True, help="Repository path or alias to verify.")
+    executor_status.add_argument(
+        "--executor",
+        choices=("codex_cli",),
+        default="codex_cli",
+        help="Local workspace executor adapter to check. Default: codex_cli.",
+    )
+    executor_status.add_argument(
+        "--codex-cmd",
+        default=_DEFAULT_CODEX_COMMAND,
+        help=f"Codex command used by the codex_cli adapter. Default: {_DEFAULT_CODEX_COMMAND!r}.",
+    )
 
     run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
     run.add_argument("repo", help="Repo alias/path to target.")
@@ -908,16 +997,20 @@ def _run_candidate_execute(args: argparse.Namespace, parser: argparse.ArgumentPa
         reason = "approval SHA is missing" if args.approve_sha is None else "approval SHA does not match"
         sys.stdout.write(_render_candidate_execute_refusal(expected_sha, reason))
         return 1
-    if args.timeout is not None and args.timeout <= 0:
-        parser.error("--timeout must be greater than 0")
-    timeout = args.timeout
+    timeout = _candidate_execute_timeout(args.timeout, parser)
 
     prompt = automation_candidate_codex_prompt(payload)
     if not prompt:
         parser.error("candidate proposed_codex_prompt is missing")
     command = _parse_codex_command(args.codex_cmd, parser)
+    repo = _resolve_candidate_execution_repo(args.repo, parser)
+    executor = _build_local_executor(args.executor, command=command, repo=repo, parser=parser)
+    reliability = executor.check_reliability()
+    if not reliability.ok:
+        sys.stdout.write(_render_executor_reliability_report(reliability, candidate_blocked=True))
+        return 1
     try:
-        result = _run_codex_once(command, prompt, timeout=timeout)
+        result = executor.execute(prompt, timeout=timeout)
     except OSError as exc:
         parser.error(f"Codex command failed to start: {exc}")
 
@@ -940,6 +1033,13 @@ def _candidate_execute_termination_returncode(result: _CodexExecutionResult) -> 
     return 130
 
 
+def _candidate_execute_timeout(timeout: float | None, parser: argparse.ArgumentParser) -> float | None:
+    """Validate the optional candidate execution timeout."""
+    if timeout is not None and timeout <= 0:
+        parser.error("--timeout must be greater than 0")
+    return timeout
+
+
 def _write_candidate_execution_output(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
@@ -952,6 +1052,386 @@ def _write_candidate_execution_output(
         _write_text_output(args.output, result.output, overwrite=args.overwrite)
     except HarnessUsageError as exc:
         parser.error(str(exc))
+
+
+@dataclass(frozen=True)
+class _CodexCliExecutor:
+    """Codex CLI local workspace executor adapter."""
+
+    command: tuple[str, ...]
+    repo: Path
+    name: str = "codex_cli"
+
+    def check_reliability(self) -> _ExecutorReliabilityReport:
+        """Verify the Codex CLI can execute local workspace commands."""
+        checks: list[_ExecutorReliabilityCheck] = []
+        executable = _resolve_executor_executable(self.command)
+        if executable is None:
+            return _ExecutorReliabilityReport(
+                executor=self.name,
+                repo=self.repo,
+                executable_path="(not found)",
+                version="(unknown)",
+                codex_home=_format_codex_home(_codex_home_path()),
+                checks=(
+                    _ExecutorReliabilityCheck(
+                        name="active_executable",
+                        passed=False,
+                        detail=f"Unable to resolve executable from command: {self.command[0]}",
+                        suggested_fix="Install Codex CLI or pass --codex-cmd with the intended Codex executable on PATH.",
+                    ),
+                ),
+            )
+
+        checks.append(
+            _ExecutorReliabilityCheck(
+                name="active_executable",
+                passed=True,
+                detail=str(executable),
+            )
+        )
+        version, version_check = _check_executor_version(executable)
+        checks.append(version_check)
+        codex_home = _codex_home_path()
+        checks.append(_check_codex_home(codex_home))
+
+        if all(check.passed for check in checks):
+            checks.extend(_run_codex_workspace_preflight(self.command, self.repo))
+
+        return _ExecutorReliabilityReport(
+            executor=self.name,
+            repo=self.repo,
+            executable_path=str(executable),
+            version=version,
+            codex_home=_format_codex_home(codex_home),
+            checks=tuple(checks),
+        )
+
+    def execute(self, prompt: str, *, timeout: float | None) -> _CodexExecutionResult:
+        """Run one candidate prompt with connector fallback explicitly disallowed."""
+        return _run_codex_once(
+            self.command,
+            _local_executor_candidate_prompt(prompt),
+            timeout=timeout,
+            cwd=self.repo,
+        )
+
+
+def _build_local_executor(
+    executor: str,
+    *,
+    command: tuple[str, ...],
+    repo: Path,
+    parser: argparse.ArgumentParser,
+) -> _LocalWorkspaceExecutor:
+    """Build the requested local workspace executor adapter."""
+    if executor == "codex_cli":
+        return _CodexCliExecutor(command=command, repo=repo)
+    parser.error(f"unknown executor: {executor}")
+    msg = "unreachable"
+    raise AssertionError(msg)
+
+
+def _run_executor_status(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph executor-status`."""
+    command = _parse_codex_command(args.codex_cmd, parser)
+    repo = _resolve_candidate_execution_repo(args.repo, parser)
+    executor = _build_local_executor(args.executor, command=command, repo=repo, parser=parser)
+    report = executor.check_reliability()
+    sys.stdout.write(_render_executor_reliability_report(report, candidate_blocked=False))
+    return 0 if report.ok else 1
+
+
+def _resolve_executor_executable(command: tuple[str, ...]) -> Path | None:
+    """Resolve the active executable path for an executor command."""
+    executable = Path(command[0]).expanduser()
+    if executable.is_file():
+        return executable.resolve()
+    resolved = shutil.which(command[0])
+    if resolved is None:
+        return None
+    return Path(resolved).resolve()
+
+
+def _check_executor_version(executable: Path) -> tuple[str, _ExecutorReliabilityCheck]:
+    """Run the executor version command."""
+    try:
+        completed = subprocess.run(  # noqa: S603  # The resolved executor path is the inspected local execution boundary.
+            (str(executable), "--version"),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001  # Status diagnostics must not crash when tooling is broken.
+        detail = str(exc) or type(exc).__name__
+        return (
+            "(unknown)",
+            _ExecutorReliabilityCheck(
+                name="version",
+                passed=False,
+                detail=detail,
+                suggested_fix="Repair or reinstall the active Codex CLI executable so it can report its version.",
+            ),
+        )
+
+    version = (completed.stdout or completed.stderr).strip() or "(empty version output)"
+    if completed.returncode != 0:
+        return (
+            version,
+            _ExecutorReliabilityCheck(
+                name="version",
+                passed=False,
+                detail=f"Version command exited {completed.returncode}: {version}",
+                suggested_fix="Repair or reinstall the active Codex CLI executable before running local candidates.",
+            ),
+        )
+    return version, _ExecutorReliabilityCheck(name="version", passed=True, detail=version)
+
+
+def _codex_home_path() -> Path:
+    """Return the active Codex home path from environment or the default."""
+    configured = os.environ.get("CODEX_HOME")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path.home() / ".codex").resolve()
+
+
+def _format_codex_home(path: Path) -> str:
+    """Render CODEX_HOME with enough context for diagnostics."""
+    configured = os.environ.get("CODEX_HOME")
+    source = "env" if configured else "default"
+    return f"{path} ({source})"
+
+
+def _check_codex_home(path: Path) -> _ExecutorReliabilityCheck:
+    """Verify the active Codex home path is usable."""
+    if path.exists() and path.is_dir():
+        return _ExecutorReliabilityCheck(name="codex_home", passed=True, detail=str(path))
+    return _ExecutorReliabilityCheck(
+        name="codex_home",
+        passed=False,
+        detail=f"Codex home does not exist or is not a directory: {path}",
+        suggested_fix="Set CODEX_HOME to an existing Codex home with auth/config, or unset CODEX_HOME to use the default.",
+    )
+
+
+def _run_codex_workspace_preflight(command: tuple[str, ...], repo: Path) -> tuple[_ExecutorReliabilityCheck, ...]:
+    """Run the Codex CLI workspace reliability preflight."""
+    proof = repo / ".protector-harness" / "executor-preflight.tmp"
+    token = f"protector-executor-preflight-{os.getpid()}-{time.monotonic_ns()}"
+    try:
+        result = _run_codex_once(
+            command,
+            _codex_workspace_preflight_prompt(token=token),
+            timeout=_CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS,
+            heartbeat_interval=0,
+            cwd=repo,
+            output_mode="capture",
+        )
+        proof_text = _read_preflight_proof(proof)
+        delete_result = _run_codex_once(
+            command,
+            _codex_workspace_delete_preflight_prompt(),
+            timeout=_CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS,
+            heartbeat_interval=0,
+            cwd=repo,
+            output_mode="capture",
+        )
+    except OSError as exc:
+        if proof.exists():
+            with contextlib.suppress(OSError):
+                proof.unlink()
+        return (
+            _ExecutorReliabilityCheck(
+                name="workspace_command",
+                passed=False,
+                detail=str(exc),
+                suggested_fix="Fix the Codex CLI installation or PATH before launching candidate execution.",
+            ),
+        )
+    checks = _codex_workspace_preflight_checks(
+        result,
+        delete_result=delete_result,
+        proof=proof,
+        proof_text=proof_text,
+        token=token,
+    )
+    if proof.exists():
+        with contextlib.suppress(OSError):
+            proof.unlink()
+    return checks
+
+
+def _codex_workspace_preflight_checks(
+    result: _CodexExecutionResult,
+    *,
+    delete_result: _CodexExecutionResult,
+    proof: Path,
+    proof_text: str | None,
+    token: str,
+) -> tuple[_ExecutorReliabilityCheck, ...]:
+    """Classify the Codex CLI workspace preflight result."""
+    output = result.output
+    delete_output = delete_result.output
+    normalized = output.lower()
+    delete_normalized = delete_output.lower()
+    sandbox_failure = any(pattern in normalized or pattern in delete_normalized for pattern in _EXECUTOR_SANDBOX_FAILURE_PATTERNS)
+    write_proved = _EXECUTOR_PREFLIGHT_WRITE_OK in output and proof_text == token
+    delete_proved = _EXECUTOR_PREFLIGHT_DELETE_OK in delete_output and not proof.exists()
+    checks = [
+        _ExecutorReliabilityCheck(
+            name="sandbox_helper",
+            passed=not sandbox_failure,
+            detail=(
+                "No sandbox/helper failure was reported." if not sandbox_failure else _first_matching_pattern(f"{normalized}\n{delete_normalized}")
+            ),
+            suggested_fix=None
+            if not sandbox_failure
+            else (
+                "Reinstall or update Codex CLI so codex-windows-sandbox-setup.exe is installed with the active executable, "
+                "or fix PATH so candidate-execute uses the intended Codex binary."
+            ),
+        ),
+        _ExecutorReliabilityCheck(
+            name="workspace_command",
+            passed=result.returncode == 0 and _EXECUTOR_PREFLIGHT_BEGIN in output and _EXECUTOR_PREFLIGHT_OK in output,
+            detail=_workspace_preflight_detail(result, _EXECUTOR_PREFLIGHT_OK),
+            suggested_fix=None
+            if result.returncode == 0 and _EXECUTOR_PREFLIGHT_BEGIN in output and _EXECUTOR_PREFLIGHT_OK in output
+            else "Fix local Codex workspace command execution before running candidate automation.",
+        ),
+        _ExecutorReliabilityCheck(
+            name="workspace_read",
+            passed=_EXECUTOR_PREFLIGHT_READ_OK in output,
+            detail=(
+                "Codex read AGENTS.md in the target repo." if _EXECUTOR_PREFLIGHT_READ_OK in output else "Codex did not prove target repo file read."
+            ),
+            suggested_fix=(
+                None if _EXECUTOR_PREFLIGHT_READ_OK in output else "Ensure Codex can run local shell commands and read files in the target repo."
+            ),
+        ),
+        _ExecutorReliabilityCheck(
+            name="workspace_write_delete",
+            passed=write_proved and delete_proved,
+            detail=(
+                "Codex wrote .protector-harness/executor-preflight.tmp with the expected token and deleted it."
+                if write_proved and delete_proved
+                else "Codex did not prove temporary workspace write/delete with a verifiable token."
+            ),
+            suggested_fix=None
+            if write_proved and delete_proved
+            else "Ensure Codex can write and delete files under .protector-harness in the target repo.",
+        ),
+    ]
+    termination_report = result.termination_report or delete_result.termination_report
+    if termination_report is not None:
+        checks.append(
+            _ExecutorReliabilityCheck(
+                name="workspace_process_cleanup",
+                passed=False,
+                detail=_render_process_termination_report(termination_report).strip(),
+                suggested_fix="Fix the local executor so the preflight can complete without interruption or timeout.",
+            )
+        )
+    return tuple(checks)
+
+
+def _read_preflight_proof(proof: Path) -> str | None:
+    """Read the preflight proof file without letting diagnostics crash."""
+    try:
+        return proof.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _first_matching_pattern(output: str) -> str:
+    """Return the first known sandbox failure found in preflight output."""
+    for pattern in _EXECUTOR_SANDBOX_FAILURE_PATTERNS:
+        if pattern in output:
+            return pattern
+    return "sandbox/helper failure"
+
+
+def _workspace_preflight_detail(result: _CodexExecutionResult, marker: str) -> str:
+    """Render concise workspace preflight detail."""
+    if result.returncode != 0:
+        return f"Preflight Codex command exited {result.returncode}."
+    if marker not in result.output:
+        return f"Preflight output did not include marker {marker}."
+    return "Codex local workspace command completed with expected markers."
+
+
+def _codex_workspace_preflight_prompt(*, token: str) -> str:
+    """Return the local workspace reliability prompt for Codex CLI."""
+    return f"""Local executor reliability preflight.
+
+You must use local workspace shell execution only. Do not inspect GitHub, connectors, remote repositories, or browser resources.
+If local shell execution is unavailable, stop immediately and report LOCAL_EXECUTOR_UNAVAILABLE.
+
+Run one local PowerShell command in the current workspace that performs these exact checks:
+1. Print {_EXECUTOR_PREFLIGHT_BEGIN}.
+2. Print the current working directory.
+3. Read AGENTS.md from the current workspace and print {_EXECUTOR_PREFLIGHT_READ_OK}.
+4. Create .protector-harness if needed.
+5. Write .protector-harness/executor-preflight.tmp with exactly this text: {token}
+6. Read the file back.
+7. Print {_EXECUTOR_PREFLIGHT_WRITE_OK}.
+8. Print {_EXECUTOR_PREFLIGHT_OK}.
+
+Do not edit any other file. Do not continue if a local workspace command fails.
+"""
+
+
+def _codex_workspace_delete_preflight_prompt() -> str:
+    """Return the local workspace delete proof prompt for Codex CLI."""
+    return f"""Local executor delete preflight.
+
+You must use local workspace shell execution only. Do not inspect GitHub, connectors, remote repositories, or browser resources.
+Delete .protector-harness/executor-preflight.tmp in the current workspace.
+Verify the file no longer exists and print {_EXECUTOR_PREFLIGHT_DELETE_OK}.
+Do not edit any other file. Do not continue if a local workspace command fails.
+"""
+
+
+def _local_executor_candidate_prompt(prompt: str) -> str:
+    """Add local-executor policy without changing the approved task body."""
+    return f"""{prompt}
+
+Local executor policy:
+- Use only local workspace shell/file execution for repository inspection and edits.
+- Connector-only or remote repository fallback is explicitly disallowed for candidate-execute.
+- If local workspace execution becomes unavailable, stop immediately and report LOCAL_EXECUTOR_UNAVAILABLE.
+"""
+
+
+def _render_executor_reliability_report(report: _ExecutorReliabilityReport, *, candidate_blocked: bool) -> str:
+    """Render local executor reliability diagnostics."""
+    status = "PASS" if report.ok else "FAIL"
+    heading = "Candidate execution refused: local executor reliability preflight failed.\n" if candidate_blocked and not report.ok else ""
+    failing = "\n".join(f"- {check.name}: {check.detail}" for check in report.failing_checks) or "- (none)"
+    fixes = "\n".join(f"- {check.name}: {check.suggested_fix}" for check in report.failing_checks if check.suggested_fix is not None)
+    if not fixes:
+        fixes = "- (none)"
+    checks = "\n".join(f"- {check.name}: {'PASS' if check.passed else 'FAIL'} - {check.detail}" for check in report.checks)
+    return f"""{heading}Local Executor Status: {status}
+executor: {report.executor}
+repo: {report.repo}
+active_executable_path: {report.executable_path}
+version: {report.version}
+CODEX_HOME: {report.codex_home}
+
+Checks:
+{checks}
+
+Failing checks:
+{failing}
+
+Suggested fix:
+{fixes}
+"""
 
 
 @dataclass(frozen=True)
@@ -995,9 +1475,11 @@ def _run_codex_once(
     timeout: float | None = None,
     heartbeat_interval: float = _CODEX_EXECUTION_HEARTBEAT_SECONDS,
     poll_interval: float = _CODEX_PROCESS_POLL_SECONDS,
+    cwd: Path | None = None,
+    output_mode: str = "echo",
 ) -> _CodexExecutionResult:
     """Invoke one foreground Codex command with the prompt on stdin."""
-    process = _launch_codex_process(command)
+    process = _launch_codex_process(command, cwd=cwd)
     if process.stdin is None or process.stdout is None:
         return _CodexExecutionResult(returncode=1, output="")
     owned = _own_codex_process(process)
@@ -1007,16 +1489,19 @@ def _run_codex_once(
         timeout=timeout,
         heartbeat_interval=heartbeat_interval,
         poll_interval=poll_interval,
+        output_mode=output_mode,
     )
 
 
-def _launch_codex_process(command: tuple[str, ...]) -> subprocess.Popen[str]:
+def _launch_codex_process(command: tuple[str, ...], *, cwd: Path | None = None) -> subprocess.Popen[str]:
     """Launch the foreground Codex process."""
     kwargs: dict[str, object] = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         kwargs["start_new_session"] = True
+    if cwd is not None:
+        kwargs["cwd"] = str(cwd)
     return subprocess.Popen(  # noqa: S603  # Operator-supplied command is the explicit execution boundary for this pilot.
         command,
         stdin=subprocess.PIPE,
@@ -1036,6 +1521,7 @@ def _run_owned_codex_process(
     timeout: float | None,
     heartbeat_interval: float,
     poll_interval: float,
+    output_mode: str,
 ) -> _CodexExecutionResult:
     """Run an owned Codex process while the main thread keeps cancellation control."""
     process = owned.process
@@ -1043,7 +1529,7 @@ def _run_owned_codex_process(
     errors: queue.SimpleQueue[str] = queue.SimpleQueue()
     reader = threading.Thread(
         target=_read_process_stdout,
-        args=(process.stdout, output, errors),
+        args=(process.stdout, output, errors, output_mode),
         name="candidate-execute-stdout",
         daemon=True,
     )
@@ -1146,12 +1632,18 @@ class _ProcessOutputBuffer:
             return "".join(self._chunks)
 
 
-def _read_process_stdout(stream: object, output: _ProcessOutputBuffer, errors: queue.SimpleQueue[str]) -> None:
+def _read_process_stdout(
+    stream: object,
+    output: _ProcessOutputBuffer,
+    errors: queue.SimpleQueue[str],
+    output_mode: str,
+) -> None:
     """Read process output without blocking the watchdog loop."""
     try:
         for chunk in stream:
-            sys.stdout.write(chunk)
-            sys.stdout.flush()
+            if output_mode == "echo":
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
             output.append(chunk)
     except Exception as exc:  # noqa: BLE001  # Reader failures must not stop timeout/interruption cleanup.
         errors.put(str(exc) or type(exc).__name__)
@@ -1723,6 +2215,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901, PLR0912  # ex
         result = _run_candidate_outcome(args, parser)
     elif args.command == "candidate-execute":
         result = _run_candidate_execute(args, parser)
+    elif args.command == "executor-status":
+        result = _run_executor_status(args, parser)
     elif args.command == "run":
         result = _run_interactive(args, parser)
     elif args.command == "status":
