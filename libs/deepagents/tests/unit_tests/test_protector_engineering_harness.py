@@ -922,6 +922,42 @@ def test_automation_readiness_marks_verified_covered_plan_ready(tmp_path: Path) 
     assert "proceed supervised; the task is ready for a future automation pilot gate" in rendered.text
 
 
+def test_execution_plan_exposes_structured_automation_candidate(tmp_path: Path) -> None:
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+        include_history=True,
+    )
+    candidate = rendered.automation_candidate
+
+    assert candidate["schema_version"] == "ecc-automation-candidate-v1"
+    assert candidate["selected_pack"]["name"] == "protector-financiacioncore"
+    assert candidate["selected_pack"]["validation_status"] == "valid"
+    assert candidate["task"] == {
+        "summary": "Fix legacy onboarding path convergence for operator UI views",
+        "mode": "ui_runtime_bug",
+    }
+    assert "contract-first company and financer onboarding" in " ".join(candidate["selected_knowledge"]["facts"])
+    assert {"name": "navigation_surface_convergence", "source": "pack"} in candidate["selected_skills"]
+    assert candidate["benchmark_coverage"]["navigation_surface_convergence"] == (
+        "legacy-onboarding-path-convergence",
+        "navigation-convergence",
+    )
+    review_contract = candidate["review_contract"]
+    assert "Route, menu, index, dashboard, or promoted operator-view entry points." in review_contract["expected_implementation_areas"]
+    assert "Verify the affected navigation entries land on the intended operational view." in review_contract["expected_validation_scope"]
+    assert candidate["automation_readiness"]["classification"] == "automation_ready"
+    assert "Selected pack skills have benchmark coverage." in candidate["automation_readiness"]["reasons"]
+    assert candidate["proposed_codex_prompt"].startswith("Codex Prompt:")
+    assert candidate["execution_boundaries"] == {
+        "codex_execution": False,
+        "model_calls": False,
+        "autonomous_loops": False,
+        "workflow_engine": False,
+    }
+
+
 def test_outcome_learning_signals_derive_recurring_patterns(tmp_path: Path) -> None:
     repo = _build_repo(tmp_path / "repo")
     for _ in range(2):
@@ -2136,6 +2172,45 @@ PASS
     stdout = capsys.readouterr().out
     assert "Recent outcome signals:" in stdout
     assert "accepted | skills=base_prompt_quality, implementation_fix, navigation_surface_convergence" in stdout
+
+
+def test_cli_plan_can_export_automation_candidate_json(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    output = tmp_path / "candidate.json"
+
+    assert (
+        cli.main(
+            [
+                "plan",
+                "--repo",
+                str(repo),
+                "--candidate-json",
+                str(output),
+                "Fix",
+                "legacy",
+                "onboarding",
+                "path",
+                "convergence",
+                "for",
+                "operator",
+                "UI",
+                "views",
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert stdout.startswith("Execution Plan:")
+    assert "Automation Readiness:" in stdout
+    assert "ecc-automation-candidate-v1" not in stdout
+    assert payload["schema_version"] == "ecc-automation-candidate-v1"
+    assert payload["selected_pack"]["benchmark_validation_status"] == "passing"
+    assert payload["task"]["mode"] == "ui_runtime_bug"
+    assert payload["automation_readiness"]["classification"] == "supervised_only"
+    assert payload["review_contract"]["pass_fail_criteria"]
+    assert payload["proposed_codex_prompt"].startswith("Codex Prompt:")
 
 
 def test_cli_outcome_learning_lists_derived_signals(tmp_path: Path, capsys) -> None:

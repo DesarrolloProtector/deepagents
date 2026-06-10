@@ -449,6 +449,7 @@ class RenderedExecutionPlan:
     """Controlled execution-plan output for Operator UI and CLI."""
 
     text: str
+    automation_candidate: dict[str, object]
     profile: str
     agents: tuple[str, ...]
     skills: tuple[str, ...]
@@ -716,7 +717,7 @@ def render_controlled_execution_plan(
         learning_signals=learning_signals,
     )
     history_signals = _recent_outcome_signals(repo, prompt_skills) if include_history else ()
-    planning_adaptations = _adaptive_planning_adjustments(learning_signals) if include_history else ()
+    planning_adaptations = _adaptive_planning_adjustments(learning_signals)
     history_section = (
         f"""
 
@@ -730,6 +731,17 @@ Adaptive planning adjustments:
 {_one_line_list(planning_adaptations)}"""
         if include_history
         else ""
+    )
+    automation_candidate = _automation_candidate_payload(
+        task=task,
+        task_mode=task_mode,
+        selection=selection,
+        prompt_skills=prompt_skills,
+        selected_paths=selected_paths,
+        codex_prompt=codex_prompt,
+        learning_signals=learning_signals,
+        planning_adaptations=planning_adaptations,
+        readiness=readiness,
     )
     text = f"""{render_agentic_execution_plan(plan)}
 
@@ -754,6 +766,7 @@ Knowledge gates:
 {history_section}"""
     return RenderedExecutionPlan(
         text=text,
+        automation_candidate=automation_candidate,
         profile=plan.profile.name,
         agents=tuple(agent.name for agent in plan.agents),
         skills=tuple(skill.name for skill in plan.skills),
@@ -896,6 +909,69 @@ Automation boundaries:
 - Codex execution remains disabled.
 - Autonomous loops remain disabled.
 - No model calls, workflow engine, or dashboard are introduced."""
+
+
+def _automation_candidate_payload(
+    *,
+    task: str,
+    task_mode: TaskMode,
+    selection: _ContextSelection,
+    prompt_skills: tuple[PromptSkill, ...],
+    selected_paths: tuple[str, ...],
+    codex_prompt: str,
+    learning_signals: tuple[str, ...],
+    planning_adaptations: tuple[str, ...],
+    readiness: AutomationReadinessDecision,
+) -> dict[str, object]:
+    """Build a deterministic JSON-ready automation candidate payload."""
+    pack = discover_protector_pack(include_benchmarks=True)
+    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    selected_pack_skills = tuple(skill for skill in prompt_skills if skill.source == "pack")
+    selected_runtime_skills = tuple(skill for skill in prompt_skills if skill.source != "pack")
+    return {
+        "schema_version": "ecc-automation-candidate-v1",
+        "selected_pack": {
+            "name": pack.name,
+            "path": str(pack.path) if pack.path is not None else None,
+            "validation_status": pack.validation_status,
+            "prompt_skills_validation_status": pack.prompt_skills_validation_status,
+            "capabilities_validation_status": pack.capabilities_validation_status,
+            "benchmark_validation_status": pack.benchmark_validation_status,
+        },
+        "task": {
+            "summary": _task_objective(task),
+            "mode": task_mode,
+        },
+        "selected_knowledge": {
+            "paths": _selected_knowledge_paths(selection),
+            "facts": selection.knowledge,
+        },
+        "selected_skills": tuple({"name": skill.name, "source": skill.source} for skill in prompt_skills),
+        "benchmark_coverage": {skill.name: coverage.get(skill.name, ()) for skill in selected_pack_skills},
+        "review_contract": {
+            "expected_implementation_areas": _expected_implementation_areas(prompt_skills, task_mode),
+            "expected_files_likely_to_change": _expected_files_likely_to_change(selected_paths),
+            "expected_validation_scope": _expected_review_validation_scope(task, task_mode, prompt_skills),
+            "benchmark_relevance": _benchmark_relevance_rows(selected_pack_skills, coverage),
+            "review_risks": _review_risk_rows(task_mode, selected_pack_skills, selected_runtime_skills),
+            "anti_drift_checks": _anti_drift_checks(selection, selected_pack_skills),
+            "pass_fail_criteria": _review_pass_fail_criteria(task_mode, selected_pack_skills),
+        },
+        "learning_signals": learning_signals,
+        "adaptive_adjustments": planning_adaptations,
+        "automation_readiness": {
+            "classification": readiness.classification,
+            "reasons": readiness.reasons,
+            "recommended_next_step": readiness.recommendation,
+        },
+        "proposed_codex_prompt": codex_prompt,
+        "execution_boundaries": {
+            "codex_execution": False,
+            "model_calls": False,
+            "autonomous_loops": False,
+            "workflow_engine": False,
+        },
+    }
 
 
 def _automation_readiness_decision(

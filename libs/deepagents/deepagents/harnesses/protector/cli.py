@@ -263,6 +263,8 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     )
     plan.add_argument("--repo", default=None, help="Explicit target repository path.")
     plan.add_argument("--with-history", action="store_true", help="Include recent repo-scoped supervised outcome signals.")
+    plan.add_argument("--candidate-json", type=Path, default=None, help="Optional path for writing a structured automation candidate JSON.")
+    plan.add_argument("--overwrite", action="store_true", help="Allow --candidate-json to replace an existing file.")
     plan.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     plan.add_argument("task", nargs="*", help="Task text to turn into a controlled execution plan.")
 
@@ -664,9 +666,24 @@ def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run the deprecated `ph plan` compatibility view."""
     repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
     rendered = render_controlled_execution_plan(task=task, repo=repo, repo_alias=repo_alias, include_history=args.with_history)
+    if args.candidate_json is not None:
+        try:
+            _write_json_output(args.candidate_json, rendered.automation_candidate, overwrite=args.overwrite)
+        except HarnessUsageError as exc:
+            parser.error(str(exc))
     sys.stdout.write(rendered.text)
     sys.stdout.write("\n")
     return 0
+
+
+def _write_json_output(path: Path, payload: dict[str, object], *, overwrite: bool) -> None:
+    """Write a deterministic JSON payload with explicit overwrite protection."""
+    target = path.resolve()
+    if target.exists() and not overwrite:
+        msg = f"output file already exists: {target}; pass --overwrite to replace it"
+        raise HarnessUsageError(msg)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"{json.dumps(payload, indent=2, sort_keys=True)}\n", encoding="utf-8")
 
 
 def _run_status() -> int:
