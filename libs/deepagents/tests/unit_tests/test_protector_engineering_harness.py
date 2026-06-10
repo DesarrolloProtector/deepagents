@@ -958,6 +958,42 @@ def test_plan_with_history_surfaces_recurring_learning_signals(tmp_path: Path) -
     assert "Recommendation: state the anti-drift constraint explicitly before Codex runs." in rendered.text
 
 
+def test_plan_with_history_applies_explainable_adaptive_adjustments(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    for _ in range(2):
+        _append_outcome_summary(
+            repo,
+            validations=("not run",),
+            deviations=(
+                "Changed file outside expected plan context: Views/Unexpected.cshtml",
+                "dashboard mentioned without task scope",
+                "PASS claimed without validation evidence",
+            ),
+            follow_up="Revise or justify the Codex result for: Fix legacy onboarding path convergence.",
+            benchmark_additions=("Add prompt benchmark coverage for uncovered pack skill: localization_completion.",),
+        )
+
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+        include_history=True,
+    )
+
+    assert "Adaptive planning adjustments:" in rendered.text
+    assert "Strengthen validation expectations: require explicit build/test/smoke evidence" in rendered.text
+    assert "Increase benchmark emphasis: call out benchmark coverage risk" in rendered.text
+    assert "Increase anti-drift guidance: restate the exact task boundary" in rendered.text
+    assert "Surface likely changed-file area: Views/Unexpected.cshtml." in rendered.text
+    assert "Pre-apply repeated follow-up: include the recurring correction" in rendered.text
+    assert "Triggered by learning signal: Recurring failed validation: not run (2 outcomes)." in rendered.text
+    assert "Triggered by learning signal: Skill repeatedly lacks benchmark coverage: localization_completion (2 outcomes)." in rendered.text
+    assert (
+        "Triggered by learning signal: Recurring changed-file mismatch: Changed file outside expected plan context: "
+        "Views/Unexpected.cshtml (2 outcomes)." in rendered.text
+    )
+
+
 def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:
     rendered = _render(
         _build_repo(tmp_path),

@@ -701,6 +701,7 @@ def render_controlled_execution_plan(
     codex_prompt = _render_codex_prompt(task, selection)
     history_signals = _recent_outcome_signals(repo, prompt_skills) if include_history else ()
     learning_signals = _outcome_learning_signals(repo, prompt_skills) if include_history else ()
+    planning_adaptations = _adaptive_planning_adjustments(learning_signals) if include_history else ()
     history_section = (
         f"""
 
@@ -708,7 +709,10 @@ Recent outcome signals:
 {_one_line_list(history_signals)}
 
 Outcome learning signals:
-{_one_line_list(learning_signals)}"""
+{_one_line_list(learning_signals)}
+
+Adaptive planning adjustments:
+{_one_line_list(planning_adaptations)}"""
         if include_history
         else ""
     )
@@ -2717,6 +2721,57 @@ def _outcome_learning_signals(repo: Path | None, prompt_skills: tuple[PromptSkil
     return tuple(signals) or ("No recurring outcome learning signals for selected pack/skills.",)
 
 
+def _adaptive_planning_adjustments(learning_signals: tuple[str, ...]) -> tuple[str, ...]:
+    """Map deterministic learning signals to explainable planning adaptations."""
+    adjustments: list[str] = []
+    for signal in learning_signals:
+        adjustment = _adaptive_planning_adjustment(signal)
+        if adjustment is not None:
+            adjustments.append(adjustment)
+    return tuple(adjustments) or ("No adaptive planning adjustments applied.",)
+
+
+def _adaptive_planning_adjustment(signal: str) -> str | None:
+    """Return one planning adaptation triggered by one learning signal."""
+    if signal.startswith("Recurring failed validation:"):
+        return (
+            "Strengthen validation expectations: require explicit build/test/smoke evidence in the Codex handoff and review contract. "
+            f"Triggered by learning signal: {signal}"
+        )
+    if signal.startswith("Skill repeatedly lacks benchmark coverage:"):
+        return (
+            "Increase benchmark emphasis: call out benchmark coverage risk before relying on the affected pack skill. "
+            f"Triggered by learning signal: {signal}"
+        )
+    if signal.startswith("Repeated drift/deviation pattern:"):
+        return (
+            "Increase anti-drift guidance: restate the exact task boundary and reject unrelated platform/dashboard/session/workflow expansion. "
+            f"Triggered by learning signal: {signal}"
+        )
+    if signal.startswith("Recurring changed-file mismatch:"):
+        file_hint = _changed_file_hint_from_signal(signal)
+        return (
+            f"Surface likely changed-file area: {file_hint}. Require Codex to either inspect this area or justify why it is out of scope. "
+            f"Triggered by learning signal: {signal}"
+        )
+    if signal.startswith("Repeated follow-up prompt:"):
+        return (
+            "Pre-apply repeated follow-up: include the recurring correction in the initial supervised handoff. "
+            f"Triggered by learning signal: {signal}"
+        )
+    return None
+
+
+def _changed_file_hint_from_signal(signal: str) -> str:
+    """Extract a file hint from a changed-file mismatch signal."""
+    match = re.search(r"context:\s*(.+?)\s*\(\d+\s+outcomes\)", signal)
+    if match is not None:
+        return match.group(1).strip()
+    if "did not report changed files" in signal:
+        return "changed files were omitted from prior Codex summaries"
+    return "the recurring mismatch path from outcome history"
+
+
 def _matching_outcome_history(repo: Path, prompt_skills: tuple[PromptSkill, ...], *, limit: int) -> tuple[OutcomeSummary, ...]:
     """Return history entries matching the current pack and selected skills."""
     pack = discover_protector_pack(include_benchmarks=False)
@@ -2775,8 +2830,7 @@ def _recurring_benchmark_coverage_signals(entries: tuple[OutcomeSummary, ...]) -
                 _increment(counter, _learning_pattern(deviation))
     recommendation = "Recommendation: add pack benchmark coverage before relying on this specialization."
     return tuple(
-        f"Skill repeatedly lacks benchmark coverage: {pattern} ({count} outcomes). {recommendation}"
-        for pattern, count in _recurring_items(counter)
+        f"Skill repeatedly lacks benchmark coverage: {pattern} ({count} outcomes). {recommendation}" for pattern, count in _recurring_items(counter)
     )
 
 
@@ -2802,10 +2856,7 @@ def _recurring_drift_deviation_signals(entries: tuple[OutcomeSummary, ...]) -> t
             if any(term in lowered for term in drift_terms):
                 _increment(counter, _learning_pattern(deviation))
     recommendation = "Recommendation: state the anti-drift constraint explicitly before Codex runs."
-    return tuple(
-        f"Repeated drift/deviation pattern: {pattern} ({count} outcomes). {recommendation}"
-        for pattern, count in _recurring_items(counter)
-    )
+    return tuple(f"Repeated drift/deviation pattern: {pattern} ({count} outcomes). {recommendation}" for pattern, count in _recurring_items(counter))
 
 
 def _increment(counter: dict[str, int], key: str) -> None:
