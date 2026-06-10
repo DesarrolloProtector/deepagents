@@ -120,10 +120,7 @@ VALIDATION_NEGATION_TERMS = (
     "wasn't run",
     "were not run",
 )
-GLOBAL_VALIDATION_LAW = (
-    "Choose the cheapest credible falsifier first; escalate validation only when uncertainty remains "
-    "and record why."
-)
+GLOBAL_VALIDATION_LAW = "Choose the cheapest credible falsifier first; escalate validation only when uncertainty remains and record why."
 VDR_REQUIRED_FIELDS = ("uncertainty", "cheapest_falsifier", "escalation_reason")
 VALIDATION_ESCALATION_TERMS = (
     "container",
@@ -869,8 +866,7 @@ def _task_intake_requested_change(task: str, tokens: frozenset[str]) -> str:
         change = "Update only the delete action icon/button styling."
         if ("taildwind" in lowered or "tailwind" in lowered) and "trash" in lowered:
             change = (
-                "Update only the delete action icon/button styling to match the existing Tailwind trash/delete action "
-                "used by other promoted views."
+                "Update only the delete action icon/button styling to match the existing Tailwind trash/delete action used by other promoted views."
             )
         elif "taildwind" in lowered or "tailwind" in lowered:
             change = "Update only the delete action icon/button styling to match the existing Tailwind-style delete actions."
@@ -984,9 +980,7 @@ def _task_intake_normalized_task(
         note_text = f" Operator evidence notes are available: {_inline_or_none(evidence_notes)}."
     evidence_text = note_text
     if evidence_paths:
-        evidence_text = (
-            f"{evidence_text} Evidence references are available but not analyzed: {_inline_or_none(evidence_paths)}."
-        ).strip()
+        evidence_text = (f"{evidence_text} Evidence references are available but not analyzed: {_inline_or_none(evidence_paths)}.").strip()
         evidence_text = f" {evidence_text}"
     return f"{change} Target surface: {target}. {non_goal_text} Preserve: {preserved_text}{evidence_text}"
 
@@ -1409,9 +1403,7 @@ def render_automation_candidate_dry_run(candidate: object, *, source: str) -> Re
     selected_pack_skills = tuple(skill for skill in selected_skills if skill.source == "pack")
     learning_signals = _candidate_string_sequence(_candidate_field(payload, "learning_signals"))
     selected_knowledge = _candidate_dict_field(payload, "selected_knowledge")
-    has_knowledge = bool(
-        _candidate_string_sequence(selected_knowledge.get("paths")) or _candidate_string_sequence(selected_knowledge.get("facts"))
-    )
+    has_knowledge = bool(_candidate_string_sequence(selected_knowledge.get("paths")) or _candidate_string_sequence(selected_knowledge.get("facts")))
     missing_coverage = tuple(skill.name for skill in selected_pack_skills if not coverage.get(skill.name))
     candidate_readiness = _candidate_dict_field(payload, "automation_readiness")
     candidate_classification = _candidate_string_field(candidate_readiness, "classification")
@@ -1489,11 +1481,27 @@ def render_candidate_outcome_report(
     expected_files = _candidate_string_sequence(contract.get("expected_files_likely_to_change"))
     evidence_paths = _candidate_evidence_paths(payload)
     evidence_notes = _candidate_evidence_notes(payload)
-    actual_changed_files = _output_section_items(codex_output, "Files changed")
     expected_validation = _candidate_string_sequence(contract.get("expected_validation_scope"))
-    actual_validation = _output_section_items(codex_output, "Validation")
-    review = _review_codex_output(task, codex_output)
-    selected_skill_deviations = _selected_skill_behavior_deviations(codex_output, selected_pack_skills, selected_runtime_skills)
+    if _candidate_executor_failed(codex_output):
+        return _render_candidate_executor_failed_outcome(
+            payload=payload,
+            task=task,
+            candidate_source=candidate_source,
+            codex_output_source=codex_output_source,
+            skills=skills,
+            coverage=coverage,
+            pack=pack,
+            evidence_paths=evidence_paths,
+            evidence_notes=evidence_notes,
+            expected_files=expected_files,
+            expected_validation=expected_validation,
+        )
+
+    review_text = _codex_output_after_prompt_contract(codex_output)
+    actual_changed_files = _output_section_items(review_text, "Files changed")
+    actual_validation = _output_section_items(review_text, "Validation")
+    review = _review_codex_output(task, review_text)
+    selected_skill_deviations = _selected_skill_behavior_deviations(review_text, selected_pack_skills, selected_runtime_skills)
     blocker_deviations = _outcome_blocker_deviations(pack, selected_pack_skills, coverage)
     readiness_deviations = _candidate_outcome_readiness_deviations(payload)
     file_deviations = _changed_file_deviations(expected_files, actual_changed_files)
@@ -1501,11 +1509,11 @@ def render_candidate_outcome_report(
     preliminary_deviations = _unique_preserve_order(
         [*file_deviations, *selected_skill_deviations, *blocker_deviations, *readiness_deviations, *review.drift_warnings]
     )
-    pass_fail_gaps = _pass_fail_consistency_gaps(codex_output, review, deviations=tuple(preliminary_deviations), validation_gaps=validation_gaps)
+    pass_fail_gaps = _pass_fail_consistency_gaps(review_text, review, deviations=tuple(preliminary_deviations), validation_gaps=validation_gaps)
     deviations = _unique_preserve_order([*preliminary_deviations, *pass_fail_gaps])
     status = _outcome_status(review, deviations=tuple(deviations), validation_gaps=validation_gaps)
     follow_up = _outcome_follow_up_prompt(task, deviations=tuple(deviations), validation_gaps=validation_gaps, status=status)
-    benchmark_additions = _suggested_benchmark_additions(selected_pack_skills, coverage, codex_output, deviations)
+    benchmark_additions = _suggested_benchmark_additions(selected_pack_skills, coverage, review_text, deviations)
     summary = OutcomeSummary(
         timestamp=_utc_timestamp(),
         task=_task_objective(task),
@@ -1583,6 +1591,101 @@ Supervision boundaries:
     return OutcomeReport(text=text, status=status, follow_up=follow_up, summary=summary)
 
 
+def _render_candidate_executor_failed_outcome(
+    *,
+    payload: dict[object, object],
+    task: str,
+    candidate_source: str,
+    codex_output_source: str,
+    skills: tuple[PromptSkill, ...],
+    coverage: dict[str, tuple[str, ...]],
+    pack: object,
+    evidence_paths: tuple[str, ...],
+    evidence_notes: tuple[str, ...],
+    expected_files: tuple[str, ...],
+    expected_validation: tuple[str, ...],
+) -> OutcomeReport:
+    """Render a candidate outcome for launcher/local-executor failure."""
+    status = "executor_failed"
+    validation_gaps = ("executor unavailable / no validation run",)
+    follow_up = f"Repair the local candidate executor before rerunning candidate execution for: {_task_objective(task)}."
+    summary = OutcomeSummary(
+        timestamp=_utc_timestamp(),
+        task=_task_objective(task),
+        selected_pack=pack.name,
+        selected_skills=tuple(OutcomeSkillSummary(name=skill.name, source=skill.source) for skill in skills),
+        status=status,
+        changed_files=(),
+        executed_validations=(),
+        deviations=(),
+        follow_up_prompt=follow_up,
+        suggested_benchmark_additions=(),
+    )
+    text = f"""ECC Supervised Outcome Report
+Status: {status}
+Codex output: {codex_output_source}
+Original planned task:
+- {_task_objective(task)}
+
+Selected pack:
+- Name: {pack.name}
+- Validation: {pack.validation_status}
+- Benchmark validation: {pack.benchmark_validation_status}
+
+Candidate source:
+- {candidate_source}
+
+Automation readiness:
+- Classification: {_candidate_readiness_classification(payload)}
+- Recommended next step: {_candidate_readiness_next_step(payload)}
+
+Selected skills:
+{_render_skill_source_rows(skills, coverage)}
+
+Knowledge used:
+{_one_line_list(_candidate_knowledge_used_rows(payload))}
+
+Evidence references:
+{_one_line_list(evidence_paths)}
+
+Operator evidence notes:
+{_one_line_list(evidence_notes)}
+
+Expected files likely to change:
+{_one_line_list(expected_files)}
+
+Actual files changed:
+{_one_line_list(())}
+
+Deviations from plan:
+{_one_line_list(())}
+
+Expected validation scope:
+{_one_line_list(expected_validation)}
+
+Executed validation:
+{_one_line_list(())}
+
+Validation gaps:
+{_one_line_list(validation_gaps)}
+
+PASS/FAIL consistency:
+{_one_line_list(())}
+
+Suggested benchmark additions:
+{_one_line_list(("(none)",))}
+
+Follow-up prompt:
+- {follow_up}
+
+Supervision boundaries:
+- Codex execution failed before implementation review.
+- Git diffs were not inspected automatically.
+- No memory/session persistence was written.
+- No autonomous loop was started."""
+    return OutcomeReport(text=text, status=status, follow_up=follow_up, summary=summary)
+
+
 def automation_candidate_approval_sha(candidate: object) -> str:
     """Return the canonical SHA-256 approval token for a candidate."""
     payload = json.dumps(candidate, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -1609,8 +1712,7 @@ def _automation_candidate_schema_errors(candidate: object) -> tuple[str, ...]:
     errors = [f"Candidate missing required field: {field}" for field in AUTOMATION_CANDIDATE_REQUIRED_FIELDS if field not in candidate]
     if candidate.get("schema_version") != AUTOMATION_CANDIDATE_SCHEMA_VERSION:
         errors.append(
-            f"Unsupported schema_version: {_candidate_display_value(candidate.get('schema_version'))}; "
-            f"expected {AUTOMATION_CANDIDATE_SCHEMA_VERSION}"
+            f"Unsupported schema_version: {_candidate_display_value(candidate.get('schema_version'))}; expected {AUTOMATION_CANDIDATE_SCHEMA_VERSION}"
         )
     object_fields = (
         "selected_pack",
@@ -1622,9 +1724,7 @@ def _automation_candidate_schema_errors(candidate: object) -> tuple[str, ...]:
         "execution_boundaries",
     )
     errors.extend(
-        f"Candidate field must be an object: {field}"
-        for field in object_fields
-        if field in candidate and not isinstance(candidate.get(field), dict)
+        f"Candidate field must be an object: {field}" for field in object_fields if field in candidate and not isinstance(candidate.get(field), dict)
     )
     sequence_fields = ("selected_context_paths", "selected_skills", "learning_signals", "adaptive_adjustments")
     errors.extend(
@@ -1667,7 +1767,7 @@ def _candidate_task_intake_schema_errors(task: dict[object, object]) -> tuple[st
     if refinement is None:
         return ()
     if not isinstance(refinement, dict):
-        return ("Candidate task.intake_refinement must be an object.")
+        return "Candidate task.intake_refinement must be an object."
     errors: list[str] = []
     if not isinstance(refinement.get("enabled"), bool):
         errors.append("Candidate task.intake_refinement.enabled must be a boolean.")
@@ -1740,9 +1840,7 @@ def _candidate_review_contract_schema_errors(candidate: dict[object, object]) ->
         "pass_fail_criteria",
     )
     errors = [
-        f"Candidate review_contract.{field} must be a list of strings."
-        for field in fields
-        if not _candidate_is_string_sequence(contract.get(field))
+        f"Candidate review_contract.{field} must be a list of strings." for field in fields if not _candidate_is_string_sequence(contract.get(field))
     ]
     vdr = contract.get("validation_decision_record")
     if not isinstance(vdr, dict):
@@ -1832,8 +1930,7 @@ def _candidate_benchmark_coverage_errors(
             continue
         if candidate_cases != current_cases:
             errors.append(
-                f"Benchmark coverage changed for {skill.name}: candidate={_inline_or_none(candidate_cases)}, "
-                f"current={_inline_or_none(current_cases)}"
+                f"Benchmark coverage changed for {skill.name}: candidate={_inline_or_none(candidate_cases)}, current={_inline_or_none(current_cases)}"
             )
     return tuple(errors)
 
@@ -2282,9 +2379,7 @@ def _readiness_decision_record(
             "capabilities": getattr(pack, "capabilities_validation_status", "unknown"),
         },
         "benchmark_validation_state": getattr(pack, "benchmark_validation_status", "unknown"),
-        "selected_skills": tuple(
-            {"name": skill.name, "source": skill.source} for skill in (*selected_pack_skills, *selected_runtime_skills)
-        ),
+        "selected_skills": tuple({"name": skill.name, "source": skill.source} for skill in (*selected_pack_skills, *selected_runtime_skills)),
         "selected_knowledge": selected_knowledge,
         "learning_signals_used": problem_signals or ("No negative learning signals used.",),
         "scope_characteristics": scope,
@@ -4118,6 +4213,76 @@ def _output_section_items(text: str, section: str) -> tuple[str, ...]:
     return tuple(items)
 
 
+def _candidate_executor_failed(output: str) -> bool:
+    """Return whether candidate execution failed before implementation review."""
+    review_text = _codex_output_after_prompt_contract(output)
+    lowered = (review_text if "Codex Prompt:" in output else output).lower()
+    if "local_executor_unavailable" in lowered:
+        return True
+    if "failure: executor failure" in lowered:
+        return True
+    return "candidate execution status: failure" in lowered and "process tree status: process_tree_terminated" in lowered
+
+
+def _codex_output_after_prompt_contract(output: str) -> str:
+    """Return only the execution result area, excluding echoed prompt contract text."""
+    lines = output.splitlines()
+    prompt_index = _last_line_index(lines, "Codex Prompt:")
+    if prompt_index is None:
+        return output
+    policy_index = _last_line_index(lines, "Local executor policy:", start=prompt_index)
+    if policy_index is not None:
+        result_index = _first_result_section_after_policy(lines, policy_index)
+        if result_index is not None:
+            return "\n".join(lines[result_index:])
+        first_blank = _first_blank_line_after(lines, policy_index)
+        if first_blank is not None:
+            return "\n".join(lines[first_blank + 1 :])
+    result_index = _first_actual_output_section_index(lines, start=prompt_index + 1)
+    if result_index is None:
+        return ""
+    return "\n".join(lines[result_index:])
+
+
+def _last_line_index(lines: list[str], prefix: str, *, start: int = 0) -> int | None:
+    """Return the last line index whose stripped text starts with `prefix`."""
+    index: int | None = None
+    for current in range(start, len(lines)):
+        if lines[current].strip().startswith(prefix):
+            index = current
+    return index
+
+
+def _first_result_section_after_policy(lines: list[str], policy_index: int) -> int | None:
+    """Return the first actual result section after the local executor policy block."""
+    first_blank = _first_blank_line_after(lines, policy_index)
+    if first_blank is None:
+        return None
+    return _first_actual_output_section_index(lines, start=first_blank + 1)
+
+
+def _first_blank_line_after(lines: list[str], start: int) -> int | None:
+    """Return the first blank line index after `start`."""
+    for index in range(start + 1, len(lines)):
+        if not lines[index].strip():
+            return index
+    return None
+
+
+def _first_actual_output_section_index(lines: list[str], *, start: int) -> int | None:
+    """Return the first non-bulleted output section header after `start`."""
+    for index in range(start, len(lines)):
+        if _is_actual_output_section_header(lines[index].strip()):
+            return index
+    return None
+
+
+def _is_actual_output_section_header(line: str) -> bool:
+    """Return whether `line` is an implementation output section header."""
+    headers = ("Files read", "Files changed", "Summary", "Validation", "PASS", "FAIL")
+    return any(re.fullmatch(rf"{re.escape(header)}\s*:?", line, flags=re.IGNORECASE) for header in headers)
+
+
 def _section_start_index(lines: list[str], section: str) -> int | None:
     """Return the index of a section header line."""
     pattern = re.compile(rf"^\s*-?\s*{re.escape(section)}\s*:?\s*$", flags=re.IGNORECASE)
@@ -4135,13 +4300,16 @@ def _is_known_output_section_header(line: str) -> bool:
 
 def _has_pass_or_fail(text: str) -> bool:
     """Return whether `text` contains an explicit PASS or FAIL token."""
-    return re.search(r"\b(PASS|FAIL)\b", text, flags=re.IGNORECASE) is not None
+    return _status_token(text) is not None
 
 
 def _status_token(text: str) -> str | None:
-    """Return the first explicit PASS/FAIL token found."""
-    match = re.search(r"\b(PASS|FAIL)\b", text, flags=re.IGNORECASE)
-    return match.group(1).upper() if match is not None else None
+    """Return the first standalone PASS/FAIL verdict line found."""
+    for line in text.splitlines():
+        match = re.fullmatch(r"\s*(?:[-*]\s*)?(PASS|FAIL)\s*:?\s*", line, flags=re.IGNORECASE)
+        if match is not None:
+            return match.group(1).upper()
+    return None
 
 
 def _validation_evidence_present(text: str) -> bool:
@@ -4230,11 +4398,7 @@ def _validation_decision_record_gaps(actual_validation: tuple[str, ...]) -> tupl
     text = " ".join(actual_validation).lower()
     if not text or not any(term in text for term in VALIDATION_ESCALATION_TERMS):
         return ()
-    missing = tuple(
-        field
-        for field, evidence_terms in VDR_FIELD_EVIDENCE_TERMS.items()
-        if not any(term in text for term in evidence_terms)
-    )
+    missing = tuple(field for field, evidence_terms in VDR_FIELD_EVIDENCE_TERMS.items() if not any(term in text for term in evidence_terms))
     if not missing:
         return ()
     return (f"Validation escalated without VDR evidence: missing {', '.join(missing)}.",)

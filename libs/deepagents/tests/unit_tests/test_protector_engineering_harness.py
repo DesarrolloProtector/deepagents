@@ -3050,6 +3050,169 @@ PASS
     assert "Files read" not in history_path.read_text(encoding="utf-8")
 
 
+def test_candidate_outcome_classifies_executor_failure_without_review_noise(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    codex_output = f"""{candidate["proposed_codex_prompt"]}
+
+Local executor policy:
+- Use only local workspace shell/file execution for repository inspection and edits.
+- Connector-only or remote repository fallback is explicitly disallowed for candidate-execute.
+- If local workspace execution becomes unavailable, stop immediately and report LOCAL_EXECUTOR_UNAVAILABLE.
+
+Candidate execution status: failure
+Process tree status: process_tree_terminated
+Failure: executor failure
+Process termination diagnostics:
+- root_process_id: 1234
+- tracked_process_count: 2
+- termination_method: executor_failure
+- terminated_processes: 1234, 5678
+- resisted_processes: (none)
+raw_output_saved: C:\\tmp\\candidate.codex-output.txt
+"""
+
+    report = engineering.render_candidate_outcome_report(
+        candidate=candidate,
+        candidate_source="candidate.json",
+        codex_output=codex_output,
+        codex_output_source="candidate.codex-output.txt",
+    )
+
+    assert report.status == "executor_failed"
+    assert report.summary.status == "executor_failed"
+    assert report.summary.changed_files == ()
+    assert report.summary.executed_validations == ()
+    assert report.summary.deviations == ()
+    assert report.summary.follow_up_prompt is not None
+    assert "Repair the local candidate executor" in report.summary.follow_up_prompt
+    assert "Status: executor_failed" in report.text
+    assert "Actual files changed:\n- (none)" in report.text
+    assert "Executed validation:\n- (none)" in report.text
+    assert "Validation gaps:\n- executor unavailable / no validation run" in report.text
+    assert "Codex claimed PASS" not in report.text
+    assert "dashboard mentioned without task scope" not in report.text
+    assert "memory mentioned without task scope" not in report.text
+    assert "mcp mentioned without task scope" not in report.text
+    assert "autonomous mentioned without task scope" not in report.text
+    assert "governance mentioned without task scope" not in report.text
+
+
+def test_candidate_outcome_ignores_echoed_prompt_protected_terms(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    codex_output = f"""{candidate["proposed_codex_prompt"]}
+
+Local executor policy:
+- Use only local workspace shell/file execution for repository inspection and edits.
+- Connector-only or remote repository fallback is explicitly disallowed for candidate-execute.
+- If local workspace execution becomes unavailable, stop immediately and report LOCAL_EXECUTOR_UNAVAILABLE.
+
+Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build check passed and UI workflow smoke test verified.
+
+PASS
+"""
+
+    report = engineering.render_candidate_outcome_report(
+        candidate=candidate,
+        candidate_source="candidate.json",
+        codex_output=codex_output,
+        codex_output_source="candidate.codex-output.txt",
+    )
+
+    assert report.status == "accepted"
+    assert report.summary.deviations == ()
+    assert "dashboard mentioned without task scope" not in report.text
+    assert "memory mentioned without task scope" not in report.text
+    assert "mcp mentioned without task scope" not in report.text
+    assert "autonomous mentioned without task scope" not in report.text
+    assert "governance mentioned without task scope" not in report.text
+
+
+def test_candidate_outcome_prompt_pass_fail_criteria_do_not_claim_pass(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+
+    report = engineering.render_candidate_outcome_report(
+        candidate=candidate,
+        candidate_source="candidate.json",
+        codex_output=str(candidate["proposed_codex_prompt"]),
+        codex_output_source="candidate.codex-output.txt",
+    )
+
+    assert report.status == "needs review"
+    assert "Codex output did not include PASS or FAIL." in report.text
+    assert "Codex claimed PASS" not in report.text
+
+
+def test_cli_candidate_outcome_executor_failure_saves_executor_failed_history(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate_path = tmp_path / "candidate.json"
+    codex_output_path = tmp_path / "codex-output.txt"
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    codex_output_path.write_text(
+        """Candidate execution status: failure
+Process tree status: process_tree_terminated
+Failure: executor failure
+LOCAL_EXECUTOR_UNAVAILABLE
+""",
+        encoding="utf-8",
+    )
+
+    assert (
+        cli.main(
+            [
+                "candidate-outcome",
+                "--repo",
+                str(repo),
+                "--codex-output",
+                str(codex_output_path),
+                "--save-history",
+                str(candidate_path),
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    assert "Status: executor_failed" in stdout
+    history_path = repo / ".protector-harness" / "outcome-history.jsonl"
+    payload = json.loads(history_path.read_text(encoding="utf-8").strip())
+    assert payload["status"] == "executor_failed"
+    assert payload["changed_files"] == []
+    assert payload["executed_validations"] == []
+    assert payload["deviations"] == []
+    assert "Repair the local candidate executor" in payload["follow_up_prompt"]
+
+
 def test_cli_candidate_outcome_requires_repo_to_save_history(tmp_path: Path, capsys) -> None:
     repo = _build_repo(tmp_path / "repo")
     candidate = tmp_path / "candidate.json"
