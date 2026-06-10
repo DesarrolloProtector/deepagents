@@ -70,6 +70,7 @@ _CLI_SPINNER_INTERVAL_SECONDS = 0.1
 _CLI_SPINNER_FRAMES = ("|", "/", "-", "\\")
 _CODEX_TERMINATION_WAIT_SECONDS = 5.0
 _CODEX_WINDOWS_SANDBOX_HELPER = "codex-windows-sandbox-setup.exe"
+_CODEX_DIAGNOSTIC_TAIL_CHARS = 2000
 _CODEX_TERMINAL_EXECUTOR_FAILURE_PATTERNS = (
     "LOCAL_EXECUTOR_UNAVAILABLE",
     f"{_CODEX_WINDOWS_SANDBOX_HELPER} program not found",
@@ -1053,7 +1054,7 @@ def _run_candidate_execute(args: argparse.Namespace, parser: argparse.ArgumentPa
         parser.error(f"Codex command failed to start: {exc}")
 
     _write_candidate_execution_output(args, parser, result)
-    if result.termination_report is not None:
+    if result.termination_report is not None or result.failed:
         sys.stdout.write(_render_candidate_execute_termination(args.candidate_json, output=args.output, repo=args.repo, result=result))
         return _candidate_execute_termination_returncode(result)
     sys.stdout.write("\nNext review command:\n")
@@ -1066,8 +1067,10 @@ def _candidate_execute_termination_returncode(result: _CodexExecutionResult) -> 
     """Return the CLI status for a controlled candidate termination."""
     if result.timed_out:
         return 124
-    if result.failed:
+    if result.returncode != 0:
         return result.returncode
+    if result.failed:
+        return 1
     return 130
 
 
@@ -1609,6 +1612,10 @@ class _CodexExecutionResult:
     failed: bool = False
     failure_message: str | None = None
     termination_report: _ProcessTerminationReport | None = None
+    failure_kind: str | None = None
+    root_exit_code: int | None = None
+    stdout_tail: str = ""
+    stderr_tail: str = ""
 
 
 @dataclass(frozen=True)
@@ -1678,7 +1685,7 @@ def _launch_codex_process(
         command,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
@@ -1700,14 +1707,14 @@ def _run_owned_codex_process(
     output = _ProcessOutputBuffer()
     errors: queue.SimpleQueue[str] = queue.SimpleQueue()
     terminal_failure = threading.Event()
-    reader = threading.Thread(
-        target=_read_process_stdout,
-        args=(process.stdout, output, errors, output_mode, terminal_failure),
-        name="candidate-execute-stdout",
-        daemon=True,
+    readers = _start_process_readers(
+        process,
+        output=output,
+        errors=errors,
+        output_mode=output_mode,
+        terminal_failure=terminal_failure,
     )
-    reader.start()
-    write_result = _write_prompt_or_terminate(owned, prompt=prompt, reader=reader, output=output)
+    write_result = _write_prompt_or_terminate(owned, prompt=prompt, readers=tuple(readers), output=output)
     if write_result is not None:
         return write_result
 
@@ -1716,52 +1723,70 @@ def _run_owned_codex_process(
     try:
         while True:
             if terminal_failure.is_set():
+                root_exit_code = _process_exit_code(process)
                 report = _terminate_process_tree(owned, method="executor_failure")
-                _join_reader(reader)
+                _join_readers(tuple(readers))
                 return _CodexExecutionResult(
                     returncode=1,
                     output=output.text(),
                     failed=True,
                     failure_message=output.terminal_failure_reason() or "terminal executor failure",
                     termination_report=report,
+                    failure_kind="harness_killed_process_tree_after_terminal_executor_failure",
+                    root_exit_code=root_exit_code,
+                    stdout_tail=output.stdout_tail(),
+                    stderr_tail=output.stderr_tail(),
                 )
             returncode = _wait_for_process(process, timeout=poll_interval)
             if returncode is not None:
-                _join_reader(reader)
+                _join_readers(tuple(readers))
                 _close_owned_process(owned)
                 return _completed_codex_result(returncode, output=output, errors=errors)
 
             now = time.monotonic()
             if timeout is not None and now - started >= timeout:
                 report = _terminate_process_tree(owned, method="timeout")
-                _join_reader(reader)
+                _join_readers(tuple(readers))
                 return _CodexExecutionResult(
                     returncode=124,
                     output=output.text(),
                     timed_out=True,
                     termination_report=report,
+                    failure_kind="harness_timeout",
+                    root_exit_code=_process_exit_code(process),
+                    stdout_tail=output.stdout_tail(),
+                    stderr_tail=output.stderr_tail(),
                 )
             if heartbeat_interval > 0 and now >= next_heartbeat:
                 _write_candidate_execute_heartbeat(process, elapsed_seconds=now - started)
                 next_heartbeat = now + heartbeat_interval
     except KeyboardInterrupt:
         report = _terminate_process_tree(owned, method="keyboard_interrupt")
-        _join_reader(reader)
+        _join_readers(tuple(readers))
         return _CodexExecutionResult(
             returncode=130,
             output=output.text(),
             interrupted=True,
             termination_report=report,
+            failure_kind="harness_cancelled_by_operator",
+            root_exit_code=_process_exit_code(process),
+            stdout_tail=output.stdout_tail(),
+            stderr_tail=output.stderr_tail(),
         )
     except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
+        root_exit_code = _process_exit_code(process)
         report = _terminate_process_tree(owned, method="failure")
-        _join_reader(reader)
+        _join_readers(tuple(readers))
         return _CodexExecutionResult(
             returncode=1,
             output=output.text(),
             failed=True,
             failure_message=str(exc),
             termination_report=report,
+            failure_kind="harness_killed_process_tree_after_executor_exception",
+            root_exit_code=root_exit_code,
+            stdout_tail=output.stdout_tail(),
+            stderr_tail=output.stderr_tail(),
         )
 
 
@@ -1769,7 +1794,7 @@ def _write_prompt_or_terminate(
     owned: _OwnedCodexProcess,
     *,
     prompt: str,
-    reader: threading.Thread,
+    readers: tuple[threading.Thread, ...],
     output: _ProcessOutputBuffer,
 ) -> _CodexExecutionResult | None:
     """Write the prompt, terminating the process tree if stdin setup fails."""
@@ -1778,24 +1803,65 @@ def _write_prompt_or_terminate(
         owned.process.stdin.close()
     except KeyboardInterrupt:
         report = _terminate_process_tree(owned, method="keyboard_interrupt")
-        _join_reader(reader)
+        _join_readers(readers)
         return _CodexExecutionResult(
             returncode=130,
             output=output.text(),
             interrupted=True,
             termination_report=report,
+            failure_kind="harness_cancelled_by_operator",
+            root_exit_code=_process_exit_code(owned.process),
+            stdout_tail=output.stdout_tail(),
+            stderr_tail=output.stderr_tail(),
         )
     except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
+        root_exit_code = _process_exit_code(owned.process)
         report = _terminate_process_tree(owned, method="failure")
-        _join_reader(reader)
+        _join_readers(readers)
         return _CodexExecutionResult(
             returncode=1,
             output=output.text(),
             failed=True,
             failure_message=str(exc),
             termination_report=report,
+            failure_kind="stdin_pipe_or_eof_issue",
+            root_exit_code=root_exit_code,
+            stdout_tail=output.stdout_tail(),
+            stderr_tail=output.stderr_tail(),
         )
     return None
+
+
+def _start_process_readers(
+    process: subprocess.Popen[str],
+    *,
+    output: _ProcessOutputBuffer,
+    errors: queue.SimpleQueue[str],
+    output_mode: str,
+    terminal_failure: threading.Event,
+) -> tuple[threading.Thread, ...]:
+    """Start stdout/stderr reader threads for a Codex process."""
+    readers = [
+        threading.Thread(
+            target=_read_process_stream,
+            args=(process.stdout, output, errors, output_mode, terminal_failure, "stdout"),
+            name="candidate-execute-stdout",
+            daemon=True,
+        )
+    ]
+    stderr_stream = getattr(process, "stderr", None)
+    if stderr_stream is not None:
+        readers.append(
+            threading.Thread(
+                target=_read_process_stream,
+                args=(stderr_stream, output, errors, output_mode, terminal_failure, "stderr"),
+                name="candidate-execute-stderr",
+                daemon=True,
+            )
+        )
+    for reader in readers:
+        reader.start()
+    return tuple(readers)
 
 
 def _completed_codex_result(
@@ -1807,27 +1873,79 @@ def _completed_codex_result(
     """Build the result for a normally exited Codex process."""
     reader_error = _first_queue_item(errors)
     if reader_error is not None:
-        return _CodexExecutionResult(returncode=1, output=output.text(), failed=True, failure_message=reader_error)
-    return _CodexExecutionResult(returncode=returncode, output=output.text())
+        return _CodexExecutionResult(
+            returncode=1,
+            output=output.text(),
+            failed=True,
+            failure_message=reader_error,
+            failure_kind="stream_reader_error",
+            root_exit_code=returncode,
+            stdout_tail=output.stdout_tail(),
+            stderr_tail=output.stderr_tail(),
+        )
+    failure_kind, failure_message = _completed_codex_failure(returncode, output.text())
+    if failure_kind is not None:
+        return _CodexExecutionResult(
+            returncode=returncode,
+            output=output.text(),
+            failed=True,
+            failure_message=failure_message,
+            failure_kind=failure_kind,
+            root_exit_code=returncode,
+            stdout_tail=output.stdout_tail(),
+            stderr_tail=output.stderr_tail(),
+        )
+    return _CodexExecutionResult(
+        returncode=returncode,
+        output=output.text(),
+        root_exit_code=returncode,
+        stdout_tail=output.stdout_tail(),
+        stderr_tail=output.stderr_tail(),
+    )
+
+
+def _completed_codex_failure(returncode: int, output: str) -> tuple[str | None, str | None]:
+    """Classify completed Codex runs that did not produce an implementation result."""
+    no_assistant = _codex_transcript_without_assistant_result(output)
+    if returncode == 0 and no_assistant:
+        return ("codex_exited_zero_without_assistant_result", "Codex exited 0 without producing an assistant/result turn")
+    if returncode != 0 and no_assistant:
+        return (
+            "codex_exited_nonzero_without_assistant_result",
+            f"Codex exited {returncode} without producing an assistant/result turn",
+        )
+    if returncode != 0:
+        return ("codex_exited_nonzero", f"Codex exited with non-zero status {returncode}")
+    return (None, None)
 
 
 class _ProcessOutputBuffer:
     """Thread-safe process output accumulator."""
 
     def __init__(self) -> None:
-        self._chunks: list[str] = []
+        self._chunks: list[tuple[str, str]] = []
         self._terminal_failure_reason: str | None = None
         self._lock = threading.Lock()
 
-    def append(self, text: str) -> None:
+    def append(self, text: str, *, stream_name: str) -> None:
         """Append one output chunk."""
         with self._lock:
-            self._chunks.append(text)
+            self._chunks.append((stream_name, text))
 
     def text(self) -> str:
         """Return accumulated output."""
         with self._lock:
-            return "".join(self._chunks)
+            return "".join(text for _, text in self._chunks)
+
+    def stdout_tail(self) -> str:
+        """Return a bounded stdout tail for diagnostics."""
+        with self._lock:
+            return _tail_text("".join(text for stream, text in self._chunks if stream == "stdout"))
+
+    def stderr_tail(self) -> str:
+        """Return a bounded stderr tail for diagnostics."""
+        with self._lock:
+            return _tail_text("".join(text for stream, text in self._chunks if stream == "stderr"))
 
     def mark_terminal_failure(self, reason: str) -> None:
         """Remember the first terminal executor failure reason."""
@@ -1841,20 +1959,22 @@ class _ProcessOutputBuffer:
             return self._terminal_failure_reason
 
 
-def _read_process_stdout(
+def _read_process_stream(
     stream: object,
     output: _ProcessOutputBuffer,
     errors: queue.SimpleQueue[str],
     output_mode: str,
     terminal_failure: threading.Event,
+    stream_name: str,
 ) -> None:
     """Read process output without blocking the watchdog loop."""
     try:
         for chunk in stream:
             if output_mode == "echo":
-                sys.stdout.write(chunk)
-                sys.stdout.flush()
-            output.append(chunk)
+                target = sys.stderr if stream_name == "stderr" else sys.stdout
+                target.write(chunk)
+                target.flush()
+            output.append(chunk, stream_name=stream_name)
             reason = _terminal_executor_failure_reason(output.text())
             if reason is not None:
                 output.mark_terminal_failure(reason)
@@ -1866,13 +1986,74 @@ def _read_process_stdout(
 
 def _terminal_executor_failure_reason(output: str) -> str | None:
     """Return a terminal executor failure reason when Codex output proves local execution is unavailable."""
-    lower = output.lower()
+    diagnostic_output = _codex_result_region(output)
+    if not diagnostic_output.strip():
+        return None
+    lower = diagnostic_output.lower()
     for pattern in _CODEX_TERMINAL_EXECUTOR_FAILURE_PATTERNS:
         if pattern.lower() in lower:
             return pattern
-    if "fail" in lower and ("executor" in lower or "sandbox" in lower or "local workspace execution" in lower):
-        return "executor failure"
     return None
+
+
+def _codex_transcript_without_assistant_result(output: str) -> bool:
+    """Return whether Codex produced only its session/user prompt transcript."""
+    if "OpenAI Codex" not in output or "Codex Prompt:" not in output:
+        return False
+    lines = [line.strip().lower() for line in output.splitlines()]
+    return "user" in lines and "assistant" not in lines and not _codex_result_region(output).strip()
+
+
+def _codex_result_region(output: str) -> str:
+    """Return the assistant/result region, excluding echoed prompt contract text."""
+    lines = output.splitlines()
+    prompt_index = _last_line_index(lines, "Codex Prompt:")
+    if prompt_index is None:
+        return output
+    assistant_index = _first_exact_line_index(lines, "assistant", start=prompt_index + 1)
+    if assistant_index is not None:
+        return "\n".join(lines[assistant_index + 1 :])
+    policy_index = _last_line_index(lines, "Local executor policy:", start=prompt_index)
+    if policy_index is not None:
+        blank_index = _first_blank_line_after(lines, policy_index)
+        if blank_index is not None:
+            return "\n".join(lines[blank_index + 1 :])
+    return ""
+
+
+def _last_line_index(lines: list[str], prefix: str, *, start: int = 0) -> int | None:
+    """Return the last line index whose stripped text starts with `prefix`."""
+    index: int | None = None
+    for current in range(start, len(lines)):
+        if lines[current].strip().startswith(prefix):
+            index = current
+    return index
+
+
+def _first_exact_line_index(lines: list[str], value: str, *, start: int = 0) -> int | None:
+    """Return the first line index whose stripped text matches `value`."""
+    for current in range(start, len(lines)):
+        if lines[current].strip().lower() == value:
+            return current
+    return None
+
+
+def _first_blank_line_after(lines: list[str], start: int) -> int | None:
+    """Return the first blank line index after `start`."""
+    for current in range(start + 1, len(lines)):
+        if not lines[current].strip():
+            return current
+    return None
+
+
+def _tail_text(text: str) -> str:
+    """Return a bounded tail for process diagnostics."""
+    if not text:
+        return "(none)"
+    if len(text) <= _CODEX_DIAGNOSTIC_TAIL_CHARS:
+        return text
+    omitted = len(text) - _CODEX_DIAGNOSTIC_TAIL_CHARS
+    return f"... <truncated {omitted} chars>\n{text[-_CODEX_DIAGNOSTIC_TAIL_CHARS:]}"
 
 
 def _wait_for_process(process: subprocess.Popen[str], *, timeout: float) -> int | None:
@@ -1888,6 +2069,24 @@ def _wait_for_process(process: subprocess.Popen[str], *, timeout: float) -> int 
 def _join_reader(reader: threading.Thread) -> None:
     """Join the output reader briefly without letting it block cancellation."""
     reader.join(timeout=_CODEX_READER_JOIN_SECONDS)
+
+
+def _join_readers(readers: tuple[threading.Thread, ...]) -> None:
+    """Join output readers briefly without letting them block cancellation."""
+    for reader in readers:
+        _join_reader(reader)
+
+
+def _process_exit_code(process: object) -> int | None:
+    """Return the current process exit code when available."""
+    poll = getattr(process, "poll", None)
+    if not callable(poll):
+        return None
+    try:
+        value = poll()
+    except Exception:  # noqa: BLE001  # Diagnostics must not crash cleanup.
+        return None
+    return value if isinstance(value, int) else None
 
 
 def _close_owned_process(owned: _OwnedCodexProcess) -> None:
@@ -2281,17 +2480,50 @@ def _render_candidate_execute_termination(
     if report is not None and report.resisted_pids:
         termination = "termination_incomplete"
     output_row = f"raw_output_saved: {output.resolve()}" if output is not None else "raw_output_saved: (not requested)"
+    save_hint = ""
+    if output is None:
+        save_hint_path = candidate.with_suffix(".codex-output.txt").resolve()
+        save_hint = f"rerun_to_save_raw_output: add --output {save_hint_path}\n"
     diagnostics = _render_process_termination_report(report)
     failure = f"Failure: {result.failure_message}\n" if result.failure_message else ""
+    failure_details = _render_candidate_execute_failure_diagnostics(result)
     next_command = ""
     if output is not None:
         next_command = f"\nNext recommended command:\n{_candidate_outcome_next_command(candidate, output=output, repo=repo)}\n"
     return f"""
 Candidate execution status: {status}
 Process tree status: {termination}
-{failure}{diagnostics}
+{failure}{failure_details}{diagnostics}
 {output_row}
+{save_hint}
 {next_command}"""
+
+
+def _render_candidate_execute_failure_diagnostics(result: _CodexExecutionResult) -> str:
+    """Render Codex launcher/stream diagnostics for failed candidate execution."""
+    if not result.failed and not result.timed_out and not result.interrupted:
+        return ""
+    rows = [
+        "Candidate execution diagnostics:",
+        f"- failure_kind: {result.failure_kind or '(unknown)'}",
+        f"- root_exit_code: {result.root_exit_code if result.root_exit_code is not None else '(unknown)'}",
+        f"- no_assistant_result: {_yes_no(value=_codex_transcript_without_assistant_result(result.output))}",
+        "- stdout_tail:",
+        _indent_block(result.stdout_tail or _tail_text(result.output)),
+        "- stderr_tail:",
+        _indent_block(result.stderr_tail or "(none)"),
+    ]
+    return "\n".join(rows) + "\n"
+
+
+def _yes_no(*, value: bool) -> str:
+    """Render a boolean diagnostic as yes/no."""
+    return "yes" if value else "no"
+
+
+def _indent_block(text: str) -> str:
+    """Indent a multiline diagnostic block."""
+    return "\n".join(f"  {line}" for line in (text or "(none)").splitlines())
 
 
 def _render_process_termination_report(report: _ProcessTerminationReport | None) -> str:

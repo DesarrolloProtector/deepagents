@@ -4215,6 +4215,8 @@ def _output_section_items(text: str, section: str) -> tuple[str, ...]:
 
 def _candidate_executor_failed(output: str) -> bool:
     """Return whether candidate execution failed before implementation review."""
+    if _codex_transcript_contains_only_user_prompt(output):
+        return True
     review_text = _codex_output_after_prompt_contract(output)
     lowered = (review_text if "Codex Prompt:" in output else output).lower()
     if "local_executor_unavailable" in lowered:
@@ -4222,6 +4224,12 @@ def _candidate_executor_failed(output: str) -> bool:
     if "failure: executor failure" in lowered:
         return True
     return "candidate execution status: failure" in lowered and "process tree status: process_tree_terminated" in lowered
+
+
+def _codex_transcript_contains_only_user_prompt(output: str) -> bool:
+    """Return whether raw Codex output captured only the submitted prompt."""
+    lines = [line.strip() for line in output.splitlines()]
+    return "OpenAI Codex" in output and "user" in lines and "assistant" not in lines and "Codex Prompt:" in output
 
 
 def _codex_output_after_prompt_contract(output: str) -> str:

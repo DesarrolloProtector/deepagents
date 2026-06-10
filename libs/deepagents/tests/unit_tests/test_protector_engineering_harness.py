@@ -3213,6 +3213,52 @@ LOCAL_EXECUTOR_UNAVAILABLE
     assert "Repair the local candidate executor" in payload["follow_up_prompt"]
 
 
+def test_cli_candidate_outcome_codex_transcript_without_assistant_is_executor_failed(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate_path = tmp_path / "candidate.json"
+    codex_output_path = tmp_path / "codex-output.txt"
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    codex_output_path.write_text(
+        f"""OpenAI Codex v0.139.0
+--------
+workdir: {repo}
+model: gpt-5.5
+provider: openai
+--------
+user
+{candidate["proposed_codex_prompt"]}
+""",
+        encoding="utf-8",
+    )
+
+    assert (
+        cli.main(
+            [
+                "candidate-outcome",
+                "--repo",
+                str(repo),
+                "--codex-output",
+                str(codex_output_path),
+                "--save-history",
+                str(candidate_path),
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    assert "Status: executor_failed" in stdout
+    payload = json.loads((repo / ".protector-harness" / "outcome-history.jsonl").read_text(encoding="utf-8").strip())
+    assert payload["status"] == "executor_failed"
+    assert payload["changed_files"] == []
+    assert payload["executed_validations"] == []
+
+
 def test_cli_candidate_outcome_requires_repo_to_save_history(tmp_path: Path, capsys) -> None:
     repo = _build_repo(tmp_path / "repo")
     candidate = tmp_path / "candidate.json"
@@ -4161,6 +4207,72 @@ def test_cli_candidate_execute_preflight_spinner_disabled_for_non_tty_output(tmp
     assert captured.out == cli._render_executor_reliability_report(report, candidate_blocked=True)
 
 
+def test_cli_candidate_execute_no_assistant_failure_prints_diagnostics_and_save_hint(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+    _pass_executor_reliability(monkeypatch)
+    raw_output = "OpenAI Codex v0.139.0\nuser\nCodex Prompt:\nTask\n"
+
+    def fake_run_codex_once(
+        command: tuple[str, ...],
+        prompt: str,
+        **kwargs: object,
+    ) -> cli._CodexExecutionResult:
+        _ = command, prompt, kwargs
+        return cli._CodexExecutionResult(
+            returncode=0,
+            output=raw_output,
+            failed=True,
+            failure_message="Codex exited 0 without producing an assistant/result turn",
+            failure_kind="codex_exited_zero_without_assistant_result",
+            root_exit_code=0,
+            stdout_tail=raw_output,
+            stderr_tail="stderr: no assistant turn\n",
+        )
+
+    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
+
+    assert (
+        cli.main(
+            [
+                "candidate-execute",
+                "--codex-cmd",
+                "fake-codex",
+                "--approve-sha",
+                approval_sha,
+                "--repo",
+                str(repo),
+                str(candidate),
+            ]
+        )
+        == 1
+    )
+
+    stdout = capsys.readouterr().out
+    assert "Candidate execution status: failure" in stdout
+    assert "Failure: Codex exited 0 without producing an assistant/result turn" in stdout
+    assert "- failure_kind: codex_exited_zero_without_assistant_result" in stdout
+    assert "- root_exit_code: 0" in stdout
+    assert "- no_assistant_result: yes" in stdout
+    assert "- stdout_tail:" in stdout
+    assert "OpenAI Codex v0.139.0" in stdout
+    assert "- stderr_tail:" in stdout
+    assert "stderr: no assistant turn" in stdout
+    assert "raw_output_saved: (not requested)" in stdout
+    assert f"rerun_to_save_raw_output: add --output {candidate.with_suffix('.codex-output.txt').resolve()}" in stdout
+
+
 def test_local_executor_interface_keeps_candidate_prompt_semantics(tmp_path: Path) -> None:
     repo = _build_repo(tmp_path / "repo")
     executor = cli._CodexCliExecutor(command=("fake-codex",), repo=repo)
@@ -4364,6 +4476,102 @@ def test_run_codex_once_executor_fail_terminates_and_preserves_partial_output(mo
     assert result.failure_message == "executor failure"
     assert result.output == "before failure\nFAIL: executor failure while starting sandbox\n"
     assert terminated == ["executor_failure"]
+
+
+def test_run_codex_once_prompt_echo_does_not_trigger_executor_failure_kill(monkeypatch) -> None:
+    terminated: list[str] = []
+    prompt_echo = """OpenAI Codex v0.139.0
+--------
+user
+Codex Prompt:
+Mandatory output:
+- Summary
+- Validation
+- PASS/FAIL
+
+Local executor policy:
+- Use only local workspace shell/file execution for repository inspection and edits.
+- If local workspace execution becomes unavailable, stop immediately and report LOCAL_EXECUTOR_UNAVAILABLE.
+"""
+
+    class FakeStdin:
+        def write(self, text: str) -> None:
+            assert text == "prompt"
+
+        def close(self) -> None:
+            return None
+
+    class FakeProcess:
+        pid = 12345
+
+        def __init__(self, command: object, **kwargs: object) -> None:
+            _ = command, kwargs
+            self.stdin = FakeStdin()
+            self.stdout = iter((prompt_echo,))
+            self.stderr = iter(())
+
+        def wait(self, timeout: float | None = None) -> int:
+            _ = timeout
+            return 0
+
+    def fake_terminate(process: object, *, method: str) -> cli._ProcessTerminationReport:
+        _ = process
+        terminated.append(method)
+        return cli._ProcessTerminationReport(
+            root_pid=12345,
+            tracked_pids=(12345,),
+            method=method,
+            terminated_pids=(12345,),
+            resisted_pids=(),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(cli, "_terminate_process_tree", fake_terminate)
+
+    result = cli._run_codex_once(("fake-codex",), "prompt")
+
+    assert result.returncode == 0
+    assert result.failed
+    assert result.failure_kind == "codex_exited_zero_without_assistant_result"
+    assert result.root_exit_code == 0
+    assert result.failure_message == "Codex exited 0 without producing an assistant/result turn"
+    assert result.termination_report is None
+    assert terminated == []
+    assert "PASS/FAIL" in result.stdout_tail
+
+
+def test_run_codex_once_nonzero_no_assistant_captures_stdout_and_stderr_tails(monkeypatch) -> None:
+    class FakeStdin:
+        def write(self, text: str) -> None:
+            assert text == "prompt"
+
+        def close(self) -> None:
+            return None
+
+    class FakeProcess:
+        pid = 12345
+
+        def __init__(self, command: object, **kwargs: object) -> None:
+            _ = command, kwargs
+            self.stdin = FakeStdin()
+            self.stdout = iter(("OpenAI Codex v0.139.0\nuser\nCodex Prompt:\nTask\n",))
+            self.stderr = iter(("stderr: provider closed stream before assistant turn\n",))
+
+        def wait(self, timeout: float | None = None) -> int:
+            _ = timeout
+            return 7
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+
+    result = cli._run_codex_once(("fake-codex",), "prompt")
+
+    assert result.returncode == 7
+    assert result.failed
+    assert result.failure_kind == "codex_exited_nonzero_without_assistant_result"
+    assert result.root_exit_code == 7
+    assert result.failure_message == "Codex exited 7 without producing an assistant/result turn"
+    assert "OpenAI Codex" in result.stdout_tail
+    assert "provider closed stream" in result.stderr_tail
 
 
 def test_run_codex_once_keyboard_interrupt_terminates_real_child_and_descendant(tmp_path: Path, monkeypatch) -> None:
