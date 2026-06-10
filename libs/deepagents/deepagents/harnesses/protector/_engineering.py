@@ -430,10 +430,13 @@ class TaskIntakeRefinement:
 
     raw_task: str
     evidence_paths: tuple[str, ...]
+    evidence_notes: tuple[str, ...]
     status: str
     normalized_task: str
     target_surface: str
     requested_change: str
+    observed_state: str
+    expected_state: str
     explicit_non_goals: tuple[str, ...]
     preserved_behavior: tuple[str, ...]
     suspected_risk_level: str
@@ -784,12 +787,22 @@ def render_prompt_benchmark_report(results: tuple[PromptBenchmarkResult, ...]) -
     return "\n".join(rows)
 
 
-def refine_operator_task(raw_task: str, *, evidence_paths: tuple[str, ...] = ()) -> TaskIntakeRefinement:
+def refine_operator_task(
+    raw_task: str,
+    *,
+    evidence_paths: tuple[str, ...] = (),
+    evidence_notes: tuple[str, ...] = (),
+) -> TaskIntakeRefinement:
     """Normalize rough operator task text into bounded deterministic intent."""
     task = " ".join(raw_task.split())
-    tokens = _tokens(task)
-    target_surface = _task_intake_target_surface(task, tokens)
-    requested_change = _task_intake_requested_change(task, tokens)
+    notes = tuple(" ".join(note.split()) for note in evidence_notes if note.strip())
+    evidence_text = " ".join(notes)
+    intake_text = " ".join(item for item in (task, evidence_text) if item)
+    tokens = _tokens(intake_text)
+    target_surface = _task_intake_target_surface(intake_text, tokens)
+    requested_change = _task_intake_requested_change(intake_text, tokens)
+    observed_state = _task_intake_observed_state(notes)
+    expected_state = _task_intake_expected_state(notes)
     missing = _task_intake_missing_details(target_surface, requested_change, tokens)
     status = "needs_clarification" if missing else "ready"
     non_goals = _task_intake_non_goals(tokens)
@@ -801,14 +814,20 @@ def refine_operator_task(raw_task: str, *, evidence_paths: tuple[str, ...] = ())
         non_goals=non_goals,
         preserved_behavior=preserved,
         evidence_paths=evidence_paths,
+        evidence_notes=notes,
+        observed_state=observed_state,
+        expected_state=expected_state,
     )
     return TaskIntakeRefinement(
         raw_task=task,
         evidence_paths=evidence_paths,
+        evidence_notes=notes,
         status=status,
         normalized_task=normalized,
         target_surface=target_surface,
         requested_change=requested_change,
+        observed_state=observed_state,
+        expected_state=expected_state,
         explicit_non_goals=non_goals,
         preserved_behavior=preserved,
         suspected_risk_level=risk,
@@ -847,9 +866,15 @@ def _task_intake_requested_change(task: str, tokens: frozenset[str]) -> str:
     """Infer the requested change without broadening scope."""
     lowered = task.lower()
     if tokens & {"delete"} and tokens & {"icon", "button", "action"}:
-        if "taildwind" in lowered or "tailwind" in lowered:
-            return "Update only the delete action icon/button styling to match the existing Tailwind-style delete actions."
-        return "Update only the delete action icon/button styling."
+        change = "Update only the delete action icon/button styling."
+        if ("taildwind" in lowered or "tailwind" in lowered) and "trash" in lowered:
+            change = (
+                "Update only the delete action icon/button styling to match the existing Tailwind trash/delete action "
+                "used by other promoted views."
+            )
+        elif "taildwind" in lowered or "tailwind" in lowered:
+            change = "Update only the delete action icon/button styling to match the existing Tailwind-style delete actions."
+        return change
     if tokens & {"css", "style", "styles", "visual"}:
         return "Update only the requested visual styling."
     if tokens & {"icon"}:
@@ -904,6 +929,38 @@ def _task_intake_risk_level(tokens: frozenset[str]) -> str:
     return "low"
 
 
+def _evidence_note_clauses(evidence_notes: tuple[str, ...]) -> tuple[str, ...]:
+    """Split operator evidence notes into compact clauses without analyzing files."""
+    clauses: list[str] = []
+    for note in evidence_notes:
+        clauses.extend(clause.strip(" -") for clause in re.split(r"[.;]\s*", note) if clause.strip(" -"))
+    return tuple(clauses)
+
+
+def _task_intake_observed_state(evidence_notes: tuple[str, ...]) -> str:
+    """Return operator-provided observed state from evidence notes."""
+    observed = tuple(
+        clause
+        for clause in _evidence_note_clauses(evidence_notes)
+        if any(marker in clause.lower() for marker in ("screenshot shows", "screen shows", "observed", "currently", "is still", "shows"))
+    )
+    if observed:
+        return f"Operator evidence note observation: {'; '.join(observed)}."
+    return ""
+
+
+def _task_intake_expected_state(evidence_notes: tuple[str, ...]) -> str:
+    """Return operator-provided expected state from evidence notes."""
+    expected = tuple(
+        clause
+        for clause in _evidence_note_clauses(evidence_notes)
+        if any(marker in clause.lower() for marker in ("expected", "should", "match", "used elsewhere"))
+    )
+    if expected:
+        return f"Operator evidence note expectation: {'; '.join(expected)}."
+    return ""
+
+
 def _task_intake_normalized_task(
     *,
     target_surface: str,
@@ -911,15 +968,26 @@ def _task_intake_normalized_task(
     non_goals: tuple[str, ...],
     preserved_behavior: tuple[str, ...],
     evidence_paths: tuple[str, ...],
+    evidence_notes: tuple[str, ...],
+    observed_state: str,
+    expected_state: str,
 ) -> str:
     """Render the normalized bounded task text."""
     target = target_surface or "the target surface that the operator must clarify"
     change = requested_change or "Clarify the requested change before implementation."
     non_goal_text = " ".join(non_goals)
     preserved_text = " ".join(preserved_behavior)
-    evidence_text = ""
+    note_text = ""
+    if observed_state or expected_state:
+        note_text = f" {observed_state} {expected_state}".rstrip()
+    elif evidence_notes:
+        note_text = f" Operator evidence notes are available: {_inline_or_none(evidence_notes)}."
+    evidence_text = note_text
     if evidence_paths:
-        evidence_text = f" Evidence references are available but not analyzed: {_inline_or_none(evidence_paths)}."
+        evidence_text = (
+            f"{evidence_text} Evidence references are available but not analyzed: {_inline_or_none(evidence_paths)}."
+        ).strip()
+        evidence_text = f" {evidence_text}"
     return f"{change} Target surface: {target}. {non_goal_text} Preserve: {preserved_text}{evidence_text}"
 
 
@@ -934,9 +1002,12 @@ def _task_intake_refinement_payload(refinement: TaskIntakeRefinement | None) -> 
         "enabled": True,
         "status": refinement.status,
         "evidence_paths": refinement.evidence_paths,
+        "evidence_notes": refinement.evidence_notes,
         "normalized_task": refinement.normalized_task,
         "target_surface": refinement.target_surface,
         "requested_change": refinement.requested_change,
+        "observed_state": refinement.observed_state,
+        "expected_state": refinement.expected_state,
         "explicit_non_goals": refinement.explicit_non_goals,
         "preserved_behavior": refinement.preserved_behavior,
         "suspected_risk_level": refinement.suspected_risk_level,
@@ -944,15 +1015,20 @@ def _task_intake_refinement_payload(refinement: TaskIntakeRefinement | None) -> 
     }
 
 
-def _evidence_handling_rows(evidence_paths: tuple[str, ...]) -> tuple[str, ...]:
+def _evidence_handling_rows(evidence_paths: tuple[str, ...], evidence_notes: tuple[str, ...]) -> tuple[str, ...]:
     """Return deterministic evidence-reference handling requirements."""
-    if not evidence_paths:
+    if not evidence_paths and not evidence_notes:
         return ("No evidence references were attached.",)
-    return (
-        "Treat evidence paths as operator-provided references only.",
-        "Do not infer screenshot/image/file contents unless a human or future tool explicitly analyzes them.",
-        "Codex/reviewer must consider these references when validating observed UI or file state.",
-    )
+    rows: list[str] = []
+    if evidence_paths:
+        rows.append("Treat evidence paths as operator-provided references only.")
+    if evidence_notes:
+        rows.append("Treat evidence notes as operator-provided observations, not inferred facts.")
+    if evidence_paths and not evidence_notes:
+        rows.append("Evidence paths are attached but not interpreted.")
+    rows.append("Do not infer screenshot/image/file contents unless a human or future tool explicitly analyzes them.")
+    rows.append("Codex/reviewer must consider these references when validating observed UI or file state.")
+    return tuple(rows)
 
 
 def _render_task_intake_refinement(refinement: TaskIntakeRefinement | None) -> str:
@@ -965,14 +1041,21 @@ Raw operator task:
 - {refinement.raw_task}
 Evidence references:
 {_one_line_list(refinement.evidence_paths)}
+Operator evidence notes:
+{_one_line_list(refinement.evidence_notes)}
 Evidence handling:
 - Evidence paths are references only; no OCR, image analysis, or file parsing was performed.
+- Evidence notes are operator-provided observations, not inferred facts.
 Normalized task intent:
 - {refinement.normalized_task}
 Target surface:
 - {refinement.target_surface or "(missing)"}
 Requested change:
 - {refinement.requested_change or "(missing)"}
+Observed state:
+- {refinement.observed_state or "(not provided)"}
+Expected state:
+- {refinement.expected_state or "(not provided)"}
 Explicit non-goals:
 {_one_line_list(refinement.explicit_non_goals)}
 Preserved behavior:
@@ -992,9 +1075,14 @@ def render_controlled_execution_plan(
     include_history: bool = False,
     refine_task: bool = False,
     evidence_paths: tuple[str, ...] = (),
+    evidence_notes: tuple[str, ...] = (),
 ) -> RenderedExecutionPlan:
     """Render a controlled multi-agent execution plan without invoking Codex."""
-    task_refinement = refine_operator_task(task, evidence_paths=evidence_paths) if refine_task or evidence_paths else None
+    task_refinement = (
+        refine_operator_task(task, evidence_paths=evidence_paths, evidence_notes=evidence_notes)
+        if refine_task or evidence_paths or evidence_notes
+        else None
+    )
     effective_task = _effective_task_for_plan(task, task_refinement)
     selection = _select_context(repo, effective_task, repo_alias=repo_alias)
     task_mode = _classify_task_mode(effective_task)
@@ -1055,6 +1143,7 @@ Knowledge gates:
             task_mode=task_mode,
             selection=selection,
             evidence_paths=evidence_paths,
+            evidence_notes=evidence_notes,
             prompt_skills=prompt_skills,
             codex_prompt=codex_prompt,
         )
@@ -1079,6 +1168,7 @@ def _render_ecc_supervised_automation_pilot(
     task_mode: TaskMode,
     selection: _ContextSelection,
     evidence_paths: tuple[str, ...],
+    evidence_notes: tuple[str, ...],
     prompt_skills: tuple[PromptSkill, ...],
     codex_prompt: str,
 ) -> str:
@@ -1134,6 +1224,7 @@ Blockers or missing coverage:
             task_mode=task_mode,
             selection=selection,
             evidence_paths=evidence_paths,
+            evidence_notes=evidence_notes,
             prompt_skills=prompt_skills,
             selected_pack_skills=selected_pack_skills,
             selected_runtime_skills=selected_runtime_skills,
@@ -1159,6 +1250,7 @@ def _render_ecc_review_contract(
     task_mode: TaskMode,
     selection: _ContextSelection,
     evidence_paths: tuple[str, ...],
+    evidence_notes: tuple[str, ...],
     prompt_skills: tuple[PromptSkill, ...],
     selected_pack_skills: tuple[PromptSkill, ...],
     selected_runtime_skills: tuple[PromptSkill, ...],
@@ -1182,8 +1274,11 @@ Selected context paths:
 Evidence references:
 {_one_line_list(evidence_paths)}
 
+Operator evidence notes:
+{_one_line_list(evidence_notes)}
+
 Evidence handling:
-{_one_line_list(_evidence_handling_rows(evidence_paths))}
+{_one_line_list(_evidence_handling_rows(evidence_paths, evidence_notes))}
 
 Expected implementation areas:
 {_one_line_list(_expected_implementation_areas(prompt_skills, task_mode))}
@@ -1261,6 +1356,7 @@ def _automation_candidate_payload(
             "mode": task_mode,
             "intake_refinement": _task_intake_refinement_payload(task_refinement),
             "evidence_paths": task_refinement.evidence_paths if task_refinement is not None else (),
+            "evidence_notes": task_refinement.evidence_notes if task_refinement is not None else (),
         },
         "selected_context_paths": selected_paths,
         "selected_knowledge": {
@@ -1273,7 +1369,11 @@ def _automation_candidate_payload(
             "expected_implementation_areas": _expected_implementation_areas(prompt_skills, task_mode),
             "expected_files_likely_to_change": _expected_files_likely_to_change(task, selected_paths),
             "evidence_references": task_refinement.evidence_paths if task_refinement is not None else (),
-            "evidence_handling": _evidence_handling_rows(task_refinement.evidence_paths if task_refinement is not None else ()),
+            "operator_evidence_notes": task_refinement.evidence_notes if task_refinement is not None else (),
+            "evidence_handling": _evidence_handling_rows(
+                task_refinement.evidence_paths if task_refinement is not None else (),
+                task_refinement.evidence_notes if task_refinement is not None else (),
+            ),
             "expected_validation_scope": _expected_review_validation_scope(task, task_mode, prompt_skills),
             "validation_decision_record": _validation_decision_record_payload(),
             "benchmark_relevance": _benchmark_relevance_rows(selected_pack_skills, coverage),
@@ -1388,6 +1488,7 @@ def render_candidate_outcome_report(
     selected_runtime_skills = tuple(skill for skill in skills if skill.source != "pack")
     expected_files = _candidate_string_sequence(contract.get("expected_files_likely_to_change"))
     evidence_paths = _candidate_evidence_paths(payload)
+    evidence_notes = _candidate_evidence_notes(payload)
     actual_changed_files = _output_section_items(codex_output, "Files changed")
     expected_validation = _candidate_string_sequence(contract.get("expected_validation_scope"))
     actual_validation = _output_section_items(codex_output, "Validation")
@@ -1443,6 +1544,9 @@ Knowledge used:
 
 Evidence references:
 {_one_line_list(evidence_paths)}
+
+Operator evidence notes:
+{_one_line_list(evidence_notes)}
 
 Expected files likely to change:
 {_one_line_list(expected_files)}
@@ -1551,6 +1655,8 @@ def _candidate_task_schema_errors(candidate: dict[object, object]) -> tuple[str,
         errors.append(f"Candidate task.mode is unsupported: {_candidate_display_value(task.get('mode'))}")
     if "evidence_paths" in task and not _candidate_is_string_sequence(task.get("evidence_paths")):
         errors.append("Candidate task.evidence_paths must be a list of strings.")
+    if "evidence_notes" in task and not _candidate_is_string_sequence(task.get("evidence_notes")):
+        errors.append("Candidate task.evidence_notes must be a list of strings.")
     errors.extend(_candidate_task_intake_schema_errors(task))
     return tuple(errors)
 
@@ -1586,12 +1692,12 @@ def _candidate_enabled_task_intake_schema_errors(
     )
     errors.extend(
         f"Candidate task.intake_refinement.{field} must be a string."
-        for field in ("target_surface", "requested_change")
+        for field in ("target_surface", "requested_change", "observed_state", "expected_state")
         if not isinstance(refinement.get(field), str)
     )
     errors.extend(
         f"Candidate task.intake_refinement.{field} must be a list of strings."
-        for field in ("evidence_paths", "explicit_non_goals", "preserved_behavior", "missing_details")
+        for field in ("evidence_paths", "evidence_notes", "explicit_non_goals", "preserved_behavior", "missing_details")
         if not _candidate_is_string_sequence(refinement.get(field))
     )
     if not isinstance(task.get("raw_operator_task"), str) or not task.get("raw_operator_task"):
@@ -1625,6 +1731,7 @@ def _candidate_review_contract_schema_errors(candidate: dict[object, object]) ->
         "expected_implementation_areas",
         "expected_files_likely_to_change",
         "evidence_references",
+        "operator_evidence_notes",
         "evidence_handling",
         "expected_validation_scope",
         "benchmark_relevance",
@@ -1845,6 +1952,16 @@ def _candidate_evidence_paths(candidate: dict[object, object]) -> tuple[str, ...
     return _candidate_string_sequence(refinement.get("evidence_paths"))
 
 
+def _candidate_evidence_notes(candidate: dict[object, object]) -> tuple[str, ...]:
+    """Return candidate operator evidence notes without reading evidence files."""
+    task = _candidate_dict_field(candidate, "task")
+    notes = _candidate_string_sequence(task.get("evidence_notes"))
+    if notes:
+        return notes
+    refinement = _candidate_dict_field(task, "intake_refinement")
+    return _candidate_string_sequence(refinement.get("evidence_notes"))
+
+
 def _render_candidate_dry_run_text(
     *,
     payload: dict[object, object],
@@ -1882,6 +1999,9 @@ Review contract summary:
 Evidence references:
 {_one_line_list(_candidate_evidence_paths(payload))}
 
+Operator evidence notes:
+{_one_line_list(_candidate_evidence_notes(payload))}
+
 Readiness Decision Record:
 {_candidate_rdr_summary(_candidate_dict_field(payload, "automation_readiness"))}
 
@@ -1895,6 +2015,7 @@ def _render_candidate_review_contract_summary(contract: dict[object, object]) ->
         (
             f"Expected implementation areas: {_inline_or_none(_candidate_string_sequence(contract.get('expected_implementation_areas')))}",
             f"Evidence references: {_inline_or_none(_candidate_string_sequence(contract.get('evidence_references')))}",
+            f"Operator evidence notes: {_inline_or_none(_candidate_string_sequence(contract.get('operator_evidence_notes')))}",
             f"Evidence handling: {_inline_or_none(_candidate_string_sequence(contract.get('evidence_handling')))}",
             f"Expected validation scope: {_inline_or_none(_candidate_string_sequence(contract.get('expected_validation_scope')))}",
             f"Validation Decision Record: {_candidate_vdr_summary(_candidate_dict_field(contract, 'validation_decision_record'))}",
@@ -1969,10 +2090,13 @@ def _candidate_task_refinement(candidate: dict[object, object]) -> TaskIntakeRef
     return TaskIntakeRefinement(
         raw_task=_candidate_string_field(task, "raw_operator_task"),
         evidence_paths=_candidate_string_sequence(refinement.get("evidence_paths")),
+        evidence_notes=_candidate_string_sequence(refinement.get("evidence_notes")),
         status=_candidate_string_field(refinement, "status") or "needs_clarification",
         normalized_task=_candidate_string_field(refinement, "normalized_task"),
         target_surface=_candidate_string_field(refinement, "target_surface"),
         requested_change=_candidate_string_field(refinement, "requested_change"),
+        observed_state=_candidate_string_field(refinement, "observed_state"),
+        expected_state=_candidate_string_field(refinement, "expected_state"),
         explicit_non_goals=_candidate_string_sequence(refinement.get("explicit_non_goals")),
         preserved_behavior=_candidate_string_sequence(refinement.get("preserved_behavior")),
         suspected_risk_level=_candidate_string_field(refinement, "suspected_risk_level"),

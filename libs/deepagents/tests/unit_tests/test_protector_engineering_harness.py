@@ -853,6 +853,77 @@ def test_cli_plan_refine_task_preserves_evidence_references(tmp_path: Path, caps
     assert "IMAGE CONTENT SHOULD NOT BE READ" not in stdout
     assert "IMAGE CONTENT SHOULD NOT BE READ" not in output.read_text(encoding="utf-8")
     assert "Evidence references are available but not analyzed" in payload["proposed_codex_prompt"]
+    assert payload["task"]["evidence_notes"] == []
+    assert "Evidence paths are attached but not interpreted." in contract["evidence_handling"]
+
+
+def test_evidence_note_improves_normalized_task_and_candidate(tmp_path: Path) -> None:
+    note = (
+        "Screenshot shows Clients/NewClient receipts table. Delete action is still a red rounded legacy button; "
+        "expected style is the Tailwind trash icon used elsewhere."
+    )
+    rendered = engineering.render_controlled_execution_plan(
+        task="Change delete icon, other views use tailwind",
+        repo=_build_repo(tmp_path / "repo"),
+        refine_task=True,
+        evidence_notes=(note,),
+    )
+    payload = rendered.automation_candidate
+    intake = payload["task"]["intake_refinement"]
+    contract = payload["review_contract"]
+
+    assert intake["status"] == "ready"
+    assert intake["target_surface"] == "Clients/NewClient receipts table"
+    assert "Tailwind trash/delete action used by other promoted views" in intake["requested_change"]
+    assert "Delete action is still a red rounded legacy button" in intake["observed_state"]
+    assert "expected style is the Tailwind trash icon used elsewhere" in intake["expected_state"]
+    assert "Clients/NewClient receipts table" in intake["normalized_task"]
+    assert payload["task"]["evidence_notes"] == (note,)
+    assert contract["operator_evidence_notes"] == (note,)
+    assert "Treat evidence notes as operator-provided observations, not inferred facts." in contract["evidence_handling"]
+    assert "Operator evidence notes:" in rendered.text
+    assert "Operator evidence note observation:" in payload["proposed_codex_prompt"]
+
+
+def test_cli_plan_preserves_evidence_notes_in_candidate_and_guide(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    output = tmp_path / "candidate.json"
+    note = (
+        "Screenshot shows Clients/NewClient receipts table. Delete action is still a red rounded legacy button; "
+        "expected style is the Tailwind trash icon used elsewhere."
+    )
+
+    assert (
+        cli.main(
+            [
+                "plan",
+                "--repo",
+                str(repo),
+                "--refine-task",
+                "--evidence-note",
+                note,
+                "--candidate-json",
+                str(output),
+                "Change",
+                "delete",
+                "icon,",
+                "other",
+                "views",
+                "use",
+                "tailwind",
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert payload["task"]["evidence_notes"] == [note]
+    assert payload["review_contract"]["operator_evidence_notes"] == [note]
+    assert "--evidence-note" in stdout
+    assert "Operator evidence notes:" in stdout
+    assert note in stdout
 
 
 def test_candidate_dry_run_renders_evidence_references(tmp_path: Path) -> None:
@@ -870,18 +941,40 @@ def test_candidate_dry_run_renders_evidence_references(tmp_path: Path) -> None:
     assert rendered.valid
     assert "Evidence references:" in rendered.text
     assert str(evidence) in rendered.text
+    assert "Operator evidence notes:\n- (none)" in rendered.text
     assert "Evidence handling: Treat evidence paths as operator-provided references only." in rendered.text
+    assert "Evidence paths are attached but not interpreted." in rendered.text
     assert "DO NOT INVENT THIS CONTENT" not in rendered.text
+
+
+def test_candidate_dry_run_renders_operator_evidence_notes(tmp_path: Path) -> None:
+    note = "Screenshot shows Clients/NewClient receipts table; expected style is the Tailwind trash icon used elsewhere."
+    candidate = engineering.render_controlled_execution_plan(
+        task="Change delete icon, other views use tailwind",
+        repo=_build_repo(tmp_path / "repo"),
+        refine_task=True,
+        evidence_notes=(note,),
+    ).automation_candidate
+
+    rendered = engineering.render_automation_candidate_dry_run(candidate, source="candidate.json")
+
+    assert rendered.valid
+    assert "Operator evidence notes:" in rendered.text
+    assert note in rendered.text
+    assert "Operator evidence notes: " in rendered.text
+    assert "Treat evidence notes as operator-provided observations, not inferred facts." in rendered.text
 
 
 def test_candidate_outcome_includes_evidence_references(tmp_path: Path) -> None:
     evidence = tmp_path / "screenshot.png"
     evidence.write_text("UNREAD IMAGE CONTENT", encoding="utf-8")
+    note = "Screenshot shows Clients/NewClient receipts table; expected style is the Tailwind trash icon used elsewhere."
     candidate = engineering.render_controlled_execution_plan(
         task="Change the delete action icon on Clients/New Client table of receipts, all other views use taildwind",
         repo=_build_repo(tmp_path / "repo"),
         refine_task=True,
         evidence_paths=(str(evidence),),
+        evidence_notes=(note,),
     ).automation_candidate
 
     report = engineering.render_candidate_outcome_report(
@@ -906,6 +999,8 @@ PASS
 
     assert "Evidence references:\n-" in report.text
     assert str(evidence) in report.text
+    assert "Operator evidence notes:\n-" in report.text
+    assert note in report.text
     assert "UNREAD IMAGE CONTENT" not in report.text
 
 

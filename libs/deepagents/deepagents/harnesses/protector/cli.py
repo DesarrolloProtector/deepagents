@@ -274,6 +274,12 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     plan.add_argument("--with-history", action="store_true", help="Include recent repo-scoped supervised outcome signals.")
     plan.add_argument("--refine-task", action="store_true", help="Normalize rough operator task text before candidate generation.")
     plan.add_argument("--evidence", type=Path, action="append", default=[], help="Evidence file path reference to attach; repeat for multiple files.")
+    plan.add_argument(
+        "--evidence-note",
+        action="append",
+        default=[],
+        help="Human-readable evidence observation to attach; repeat for multiple notes.",
+    )
     plan.add_argument("--candidate-json", type=Path, default=None, help="Optional path for writing a structured automation candidate JSON.")
     plan.add_argument("--overwrite", action="store_true", help="Allow --candidate-json to replace an existing file.")
     plan.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
@@ -713,6 +719,7 @@ def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         include_history=args.with_history,
         refine_task=args.refine_task,
         evidence_paths=tuple(str(path) for path in args.evidence),
+        evidence_notes=tuple(args.evidence_note),
     )
     candidate_path: Path | None = None
     if args.candidate_json is not None:
@@ -786,10 +793,15 @@ def _render_candidate_execution_guide(candidate_path: Path, *, repo: Path | None
     refine_args = ("--refine-task",) if isinstance(intake, dict) and intake.get("enabled") is True else ()
     evidence = task_payload.get("evidence_paths") if isinstance(task_payload, dict) else ()
     evidence_args: list[str] = []
-    if isinstance(evidence, list):
+    if isinstance(evidence, (list, tuple)):
         for path in evidence:
             if isinstance(path, str):
                 evidence_args.extend(("--evidence", path))
+    evidence_notes = task_payload.get("evidence_notes") if isinstance(task_payload, dict) else ()
+    if isinstance(evidence_notes, (list, tuple)):
+        for note in evidence_notes:
+            if isinstance(note, str):
+                evidence_args.extend(("--evidence-note", note))
     generate = _powershell_command(
         (
             "ph",
