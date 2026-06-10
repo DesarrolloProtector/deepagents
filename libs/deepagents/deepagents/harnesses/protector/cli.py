@@ -22,6 +22,9 @@ from deepagents.harnesses.protector._engineering import (
     HarnessUsageError,
     RenderedOutput,
     append_outcome_history,
+    automation_candidate_approval_sha,
+    automation_candidate_codex_prompt,
+    automation_candidate_readiness_classification,
     build_read_only_agent,
     render_automation_candidate_dry_run,
     render_candidate_outcome_report,
@@ -54,6 +57,7 @@ _MIN_POSITIONAL_REPO_TASK_ARGS = 2
 _INTERACTIVE_SENTINEL = "END"
 _GMEM_MOVEABLE = 0x0002
 _CF_UNICODETEXT = 13
+_DEFAULT_CODEX_COMMAND = "codex exec -"
 STABLE_ECC_PACK_COMMANDS = (
     "task",
     "review",
@@ -63,6 +67,7 @@ STABLE_ECC_PACK_COMMANDS = (
     "outcome-learning",
     "candidate-dry-run",
     "candidate-outcome",
+    "candidate-execute",
     "benchmark",
     "ecc-status",
 )
@@ -286,6 +291,21 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     candidate_outcome.add_argument("--codex-output", type=Path, required=True, help="Text file containing Codex implementation output to review.")
     candidate_outcome.add_argument("--save-history", action="store_true", help="Append a structured outcome summary to repo-local ECC history.")
     candidate_outcome.add_argument("candidate_json", type=Path, help="Exported automation candidate JSON to use as the review contract.")
+
+    candidate_execute = subparsers.add_parser(
+        "candidate-execute",
+        help="Run one explicitly approved foreground Codex execution for an automation-ready candidate.",
+    )
+    candidate_execute.add_argument("--approve-sha", default=None, help="Required canonical SHA-256 approval token for the candidate JSON.")
+    candidate_execute.add_argument(
+        "--codex-cmd",
+        default=_DEFAULT_CODEX_COMMAND,
+        help=f"Codex command to invoke once. Default: {_DEFAULT_CODEX_COMMAND!r}.",
+    )
+    candidate_execute.add_argument("--output", type=Path, default=None, help="Optional file path for persisting raw Codex output.")
+    candidate_execute.add_argument("--overwrite", action="store_true", help="Allow --output to replace an existing file.")
+    candidate_execute.add_argument("--repo", default=None, help="Optional repository path or alias shown in the next candidate-outcome command.")
+    candidate_execute.add_argument("candidate_json", type=Path, help="Automation-ready candidate JSON to execute once.")
 
     run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
     run.add_argument("repo", help="Repo alias/path to target.")
@@ -741,6 +761,117 @@ def _run_candidate_outcome(args: argparse.Namespace, parser: argparse.ArgumentPa
     return 0
 
 
+def _run_candidate_execute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph candidate-execute`."""
+    try:
+        payload = json.loads(args.candidate_json.read_text(encoding="utf-8"))
+    except OSError as exc:
+        parser.error(f"unable to read candidate JSON: {exc}")
+    except json.JSONDecodeError as exc:
+        parser.error(f"invalid candidate JSON at {args.candidate_json}: {exc.msg}")
+
+    source = str(args.candidate_json.resolve())
+    dry_run = render_automation_candidate_dry_run(payload, source=source)
+    if not dry_run.valid:
+        sys.stdout.write(dry_run.text)
+        sys.stdout.write("\nCandidate execution refused: invalid candidate.\n")
+        return 1
+
+    expected_sha = automation_candidate_approval_sha(payload)
+    classification = automation_candidate_readiness_classification(payload)
+    if classification != "automation_ready":
+        sys.stdout.write(_render_candidate_execute_refusal(expected_sha, f"candidate readiness is {classification}; expected automation_ready"))
+        return 1
+    if args.approve_sha != expected_sha:
+        reason = "approval SHA is missing" if args.approve_sha is None else "approval SHA does not match"
+        sys.stdout.write(_render_candidate_execute_refusal(expected_sha, reason))
+        return 1
+
+    prompt = automation_candidate_codex_prompt(payload)
+    if not prompt:
+        parser.error("candidate proposed_codex_prompt is missing")
+    command = _parse_codex_command(args.codex_cmd, parser)
+    try:
+        result = _run_codex_once(command, prompt)
+    except OSError as exc:
+        parser.error(f"Codex command failed to start: {exc}")
+
+    if args.output is not None:
+        try:
+            _write_text_output(args.output, result.output, overwrite=args.overwrite)
+        except HarnessUsageError as exc:
+            parser.error(str(exc))
+    sys.stdout.write("\nNext review command:\n")
+    sys.stdout.write(_candidate_outcome_next_command(args.candidate_json, output=args.output, repo=args.repo))
+    sys.stdout.write("\n")
+    return result.returncode
+
+
+@dataclass(frozen=True)
+class _CodexExecutionResult:
+    """Foreground Codex command result."""
+
+    returncode: int
+    output: str
+
+
+def _run_codex_once(command: tuple[str, ...], prompt: str) -> _CodexExecutionResult:
+    """Invoke one foreground Codex command with the prompt on stdin."""
+    process = subprocess.Popen(  # noqa: S603  # Operator-supplied command is the explicit execution boundary for this pilot.
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if process.stdin is None or process.stdout is None:
+        return _CodexExecutionResult(returncode=1, output="")
+    process.stdin.write(prompt)
+    process.stdin.close()
+
+    chunks: list[str] = []
+    for chunk in process.stdout:
+        sys.stdout.write(chunk)
+        chunks.append(chunk)
+    return _CodexExecutionResult(returncode=process.wait(), output="".join(chunks))
+
+
+def _parse_codex_command(command: str, parser: argparse.ArgumentParser) -> tuple[str, ...]:
+    """Parse a configured Codex command without shell expansion."""
+    try:
+        parts = tuple(shlex.split(command, posix=sys.platform != "win32"))
+    except ValueError as exc:
+        parser.error(f"invalid --codex-cmd: {exc}")
+    if not parts:
+        parser.error("--codex-cmd must not be empty")
+    return parts
+
+
+def _render_candidate_execute_refusal(expected_sha: str, reason: str) -> str:
+    """Render an execution refusal with the approval token."""
+    return f"""Candidate execution refused: {reason}.
+Candidate approval SHA: {expected_sha}
+Re-run with: --approve-sha {expected_sha}
+"""
+
+
+def _candidate_outcome_next_command(candidate: Path, *, output: Path | None, repo: str | None) -> str:
+    """Render the next explicit candidate review command."""
+    output_text = str(output.resolve()) if output is not None else "<codex-output>"
+    repo_text = repo if repo is not None else "<repo>"
+    return f"ph candidate-outcome {candidate.resolve()} --codex-output {output_text} --repo {repo_text} --save-history"
+
+
+def _write_text_output(path: Path, text: str, *, overwrite: bool) -> None:
+    """Write explicit raw output with overwrite protection."""
+    target = path.resolve()
+    if target.exists() and not overwrite:
+        msg = f"output file already exists: {target}; pass --overwrite to replace it"
+        raise HarnessUsageError(msg)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+
+
 def _write_json_output(path: Path, payload: dict[str, object], *, overwrite: bool) -> None:
     """Write a deterministic JSON payload with explicit overwrite protection."""
     target = path.resolve()
@@ -832,6 +963,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901, PLR0912  # ex
         result = _run_candidate_dry_run(args, parser)
     elif args.command == "candidate-outcome":
         result = _run_candidate_outcome(args, parser)
+    elif args.command == "candidate-execute":
+        result = _run_candidate_execute(args, parser)
     elif args.command == "run":
         result = _run_interactive(args, parser)
     elif args.command == "status":

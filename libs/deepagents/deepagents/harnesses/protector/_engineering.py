@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -1181,6 +1182,24 @@ Supervision boundaries:
 - No memory/session persistence was written.
 - No autonomous loop was started."""
     return OutcomeReport(text=text, status=status, follow_up=follow_up, summary=summary)
+
+
+def automation_candidate_approval_sha(candidate: object) -> str:
+    """Return the canonical SHA-256 approval token for a candidate."""
+    payload = json.dumps(candidate, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def automation_candidate_readiness_classification(candidate: object) -> str:
+    """Return a candidate readiness classification for execution gating."""
+    payload = candidate if isinstance(candidate, dict) else {}
+    return _candidate_readiness_classification(payload)
+
+
+def automation_candidate_codex_prompt(candidate: object) -> str:
+    """Return the proposed Codex prompt from a candidate."""
+    payload = candidate if isinstance(candidate, dict) else {}
+    return _candidate_string_field(payload, "proposed_codex_prompt")
 
 
 def _automation_candidate_schema_errors(candidate: object) -> tuple[str, ...]:

@@ -447,6 +447,7 @@ def test_protector_platform_boundaries_are_explicit() -> None:
         "outcome-learning",
         "candidate-dry-run",
         "candidate-outcome",
+        "candidate-execute",
         "benchmark",
         "ecc-status",
     )
@@ -2492,6 +2493,184 @@ def test_cli_candidate_outcome_requires_repo_to_save_history(tmp_path: Path, cap
 
     assert exc_info.value.code == 2
     assert "--save-history requires --repo for candidate-outcome" in capsys.readouterr().err
+
+
+def test_cli_candidate_execute_refuses_invalid_candidate(tmp_path: Path, monkeypatch, capsys) -> None:
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(json.dumps({"schema_version": "bad"}), encoding="utf-8")
+
+    def fail_popen(*args: object, **kwargs: object) -> object:
+        _ = args, kwargs
+        msg = "candidate-execute must not invoke Codex for invalid candidates"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fail_popen)
+
+    assert cli.main(["candidate-execute", str(candidate)]) == 1
+
+    stdout = capsys.readouterr().out
+    assert "Schema validation: FAIL" in stdout
+    assert "Candidate execution refused: invalid candidate." in stdout
+
+
+def test_cli_candidate_execute_refuses_non_automation_ready_candidate(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+
+    def fail_popen(*args: object, **kwargs: object) -> object:
+        _ = args, kwargs
+        msg = "candidate-execute must not invoke Codex for supervised_only candidates"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fail_popen)
+
+    assert cli.main(["candidate-execute", "--approve-sha", approval_sha, str(candidate)]) == 1
+
+    stdout = capsys.readouterr().out
+    assert "candidate readiness is supervised_only; expected automation_ready" in stdout
+    assert f"Candidate approval SHA: {approval_sha}" in stdout
+
+
+def test_cli_candidate_execute_refuses_missing_or_wrong_approval_sha(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+
+    def fail_popen(*args: object, **kwargs: object) -> object:
+        _ = args, kwargs
+        msg = "candidate-execute must not invoke Codex before approval"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fail_popen)
+
+    assert cli.main(["candidate-execute", str(candidate)]) == 1
+    missing_stdout = capsys.readouterr().out
+    assert "approval SHA is missing" in missing_stdout
+    assert f"Candidate approval SHA: {approval_sha}" in missing_stdout
+
+    assert cli.main(["candidate-execute", "--approve-sha", "wrong", str(candidate)]) == 1
+    wrong_stdout = capsys.readouterr().out
+    assert "approval SHA does not match" in wrong_stdout
+    assert f"Re-run with: --approve-sha {approval_sha}" in wrong_stdout
+
+
+def test_cli_candidate_execute_invokes_fake_codex_once_and_writes_explicit_output(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    output = tmp_path / "codex-output.txt"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+    calls: list[dict[str, object]] = []
+
+    class FakeStdin:
+        def __init__(self) -> None:
+            self.text = ""
+            self.closed = False
+
+        def write(self, text: str) -> None:
+            self.text += text
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeProcess:
+        def __init__(self, command: object, **kwargs: object) -> None:
+            self.stdin = FakeStdin()
+            self.stdout = iter(("fake codex output\n",))
+            self.command = command
+            self.kwargs = kwargs
+            calls.append({"command": command, "kwargs": kwargs, "process": self})
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+
+    assert (
+        cli.main(
+            [
+                "candidate-execute",
+                "--codex-cmd",
+                "fake-codex",
+                "--approve-sha",
+                approval_sha,
+                "--output",
+                str(output),
+                "--repo",
+                str(repo),
+                str(candidate),
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    assert len(calls) == 1
+    process = calls[0]["process"]
+    assert calls[0]["command"] == ("fake-codex",)
+    assert calls[0]["kwargs"]["stdin"] == cli.subprocess.PIPE
+    assert calls[0]["kwargs"]["stdout"] == cli.subprocess.PIPE
+    assert process.stdin.text.startswith("Codex Prompt:\n")
+    assert process.stdin.closed
+    assert "fake codex output" in stdout
+    assert output.read_text(encoding="utf-8") == "fake codex output\n"
+    assert "Next review command:" in stdout
+    assert f"ph candidate-outcome {candidate.resolve()} --codex-output {output.resolve()} --repo {repo} --save-history" in stdout
+
+
+def test_cli_candidate_execute_does_not_persist_raw_output_without_output_option(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+
+    class FakeStdin:
+        def write(self, text: str) -> None:
+            assert text.startswith("Codex Prompt:\n")
+
+        def close(self) -> None:
+            return None
+
+    class FakeProcess:
+        stdin = FakeStdin()
+        stdout = iter(("transient output only\n",))
+
+        def __init__(self, command: object, **kwargs: object) -> None:
+            _ = command, kwargs
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+
+    assert cli.main(["candidate-execute", "--codex-cmd", "fake-codex", "--approve-sha", approval_sha, str(candidate)]) == 0
+
+    stdout = capsys.readouterr().out
+    assert "transient output only" in stdout
+    assert "--codex-output <codex-output>" in stdout
+    assert not (tmp_path / "codex-output.txt").exists()
 
 
 def test_cli_outcome_learning_lists_derived_signals(tmp_path: Path, capsys) -> None:
