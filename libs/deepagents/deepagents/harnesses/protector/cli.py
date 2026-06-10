@@ -8,6 +8,7 @@ import ctypes
 import json
 import os
 import queue
+import re
 import shlex
 import shutil
 import signal
@@ -65,6 +66,7 @@ _CF_UNICODETEXT = 13
 _DEFAULT_CODEX_COMMAND = "codex exec -"
 _CODEX_EXECUTION_HEARTBEAT_SECONDS = 10.0
 _CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS = 60.0
+_CODEX_PREFLIGHT_DIAGNOSTIC_OUTPUT_LIMIT = 2000
 _CODEX_PROCESS_POLL_SECONDS = 0.1
 _CODEX_READER_JOIN_SECONDS = 1.0
 _CLI_SPINNER_INTERVAL_SECONDS = 0.1
@@ -88,6 +90,7 @@ _CODEX_TERMINAL_EXECUTOR_FAILURE_PATTERNS = (
     "executor failure",
     "local executor unavailable",
 )
+_SECRET_VALUE_GROUP_INDEX = 2
 STABLE_ECC_PACK_COMMANDS = (
     "task",
     "review",
@@ -1481,11 +1484,13 @@ def _run_codex_workspace_preflight(
     """Run the Codex CLI workspace reliability preflight."""
     proof = repo / ".protector-harness" / "executor-preflight.tmp"
     token = f"protector-executor-preflight-{os.getpid()}-{time.monotonic_ns()}"
+    preflight_prompt = _codex_workspace_preflight_prompt(token=token)
+    delete_prompt = _codex_workspace_delete_preflight_prompt()
     try:
         _notify_progress(progress, "checking workspace command")
         result = _run_codex_candidate_probe_once(
             command,
-            _codex_workspace_preflight_prompt(token=token),
+            preflight_prompt,
             repo=repo,
             env=runtime.env,
         )
@@ -1494,7 +1499,7 @@ def _run_codex_workspace_preflight(
         _notify_progress(progress, "checking workspace write/delete")
         delete_result = _run_codex_candidate_probe_once(
             command,
-            _codex_workspace_delete_preflight_prompt(),
+            delete_prompt,
             repo=repo,
             env=runtime.env,
         )
@@ -1513,6 +1518,9 @@ def _run_codex_workspace_preflight(
     checks = _codex_workspace_preflight_checks(
         result,
         delete_result=delete_result,
+        command=command,
+        preflight_prompt=preflight_prompt,
+        delete_prompt=delete_prompt,
         proof=proof,
         proof_text=proof_text,
         token=token,
@@ -1546,6 +1554,9 @@ def _codex_workspace_preflight_checks(
     result: _CodexExecutionResult,
     *,
     delete_result: _CodexExecutionResult,
+    command: tuple[str, ...],
+    preflight_prompt: str,
+    delete_prompt: str,
     proof: Path,
     proof_text: str | None,
     token: str,
@@ -1575,7 +1586,13 @@ def _codex_workspace_preflight_checks(
         _ExecutorReliabilityCheck(
             name="workspace_command",
             passed=result.returncode == 0 and _EXECUTOR_PREFLIGHT_BEGIN in output and _EXECUTOR_PREFLIGHT_OK in output,
-            detail=_workspace_preflight_detail(result, _EXECUTOR_PREFLIGHT_OK),
+            detail=_workspace_preflight_detail(
+                result,
+                _EXECUTOR_PREFLIGHT_OK,
+                command=command,
+                prompt=preflight_prompt,
+                redactions=(token,),
+            ),
             suggested_fix=None
             if result.returncode == 0 and _EXECUTOR_PREFLIGHT_BEGIN in output and _EXECUTOR_PREFLIGHT_OK in output
             else "Fix local Codex workspace command execution before running candidate automation.",
@@ -1596,7 +1613,13 @@ def _codex_workspace_preflight_checks(
             detail=(
                 "Codex wrote .protector-harness/executor-preflight.tmp with the expected token and deleted it."
                 if write_proved and delete_proved
-                else "Codex did not prove temporary workspace write/delete with a verifiable token."
+                else _workspace_write_delete_detail(
+                    write_proved=write_proved,
+                    delete_proved=delete_proved,
+                    delete_result=delete_result,
+                    command=command,
+                    delete_prompt=delete_prompt,
+                )
             ),
             suggested_fix=None
             if write_proved and delete_proved
@@ -1632,13 +1655,127 @@ def _first_matching_pattern(output: str) -> str:
     return "sandbox/helper failure"
 
 
-def _workspace_preflight_detail(result: _CodexExecutionResult, marker: str) -> str:
+def _workspace_preflight_detail(
+    result: _CodexExecutionResult,
+    marker: str,
+    *,
+    command: tuple[str, ...],
+    prompt: str,
+    redactions: tuple[str, ...],
+) -> str:
     """Render concise workspace preflight detail."""
     if result.returncode != 0:
-        return f"Preflight Codex command exited {result.returncode}."
+        return _render_preflight_failure_diagnostics(
+            exit_code=result.returncode,
+            command=command,
+            prompt=prompt,
+            output=result.output,
+            redactions=redactions,
+        )
     if marker not in result.output:
-        return f"Preflight output did not include marker {marker}."
+        return (
+            f"Preflight output did not include marker {marker}.\n"
+            + _render_preflight_command_shape(command=command, prompt=prompt, redactions=redactions)
+            + "\n"
+            + _render_bounded_preflight_output(result.output, redactions=redactions)
+        )
     return "Codex local workspace command completed with expected markers."
+
+
+def _workspace_write_delete_detail(
+    *,
+    write_proved: bool,
+    delete_proved: bool,
+    delete_result: _CodexExecutionResult,
+    command: tuple[str, ...],
+    delete_prompt: str,
+) -> str:
+    """Render write/delete failure detail with bounded diagnostics when delete failed."""
+    rows = [
+        "Codex did not prove temporary workspace write/delete with a verifiable token.",
+        f"write_proved: {_yes_no_bool(value=write_proved)}",
+        f"delete_proved: {_yes_no_bool(value=delete_proved)}",
+    ]
+    if delete_result.returncode != 0:
+        rows.append(
+            _render_preflight_failure_diagnostics(
+                exit_code=delete_result.returncode,
+                command=command,
+                prompt=delete_prompt,
+                output=delete_result.output,
+                redactions=(),
+            )
+        )
+    return "\n".join(rows)
+
+
+def _render_preflight_failure_diagnostics(
+    *,
+    exit_code: int,
+    command: tuple[str, ...],
+    prompt: str,
+    output: str,
+    redactions: tuple[str, ...],
+) -> str:
+    """Render bounded, redacted Codex preflight failure diagnostics."""
+    return "\n".join(
+        (
+            f"Preflight Codex command exited {exit_code}.",
+            _render_preflight_command_shape(command=command, prompt=prompt, redactions=redactions),
+            _render_bounded_preflight_output(output, redactions=redactions),
+        )
+    )
+
+
+def _render_preflight_command_shape(
+    *,
+    command: tuple[str, ...],
+    prompt: str,
+    redactions: tuple[str, ...],
+) -> str:
+    """Render the exact preflight command and sanitized prompt shape."""
+    sanitized_prompt = _redact_preflight_text(prompt, redactions=redactions).strip()
+    return f"preflight_command: {_powershell_command(command)}\npreflight_prompt:\n{sanitized_prompt}"
+
+
+def _render_bounded_preflight_output(output: str, *, redactions: tuple[str, ...]) -> str:
+    """Render bounded, redacted preflight stdout/stderr."""
+    text = _redact_preflight_text(output, redactions=redactions).strip()
+    if not text:
+        text = "(no output captured)"
+    if len(text) > _CODEX_PREFLIGHT_DIAGNOSTIC_OUTPUT_LIMIT:
+        omitted = len(text) - _CODEX_PREFLIGHT_DIAGNOSTIC_OUTPUT_LIMIT
+        text = f"{text[:_CODEX_PREFLIGHT_DIAGNOSTIC_OUTPUT_LIMIT]}\n... <truncated {omitted} chars>"
+    return f"preflight_stdout_stderr:\n{text}"
+
+
+def _redact_preflight_text(text: str, *, redactions: tuple[str, ...]) -> str:
+    """Redact obvious secrets from preflight diagnostics."""
+    redacted = text
+    for secret in redactions:
+        if secret:
+            redacted = redacted.replace(secret, "<redacted>")
+    patterns = (
+        r"(?i)(api[_-]?key\s*[:=]\s*)([^\s,;]+)",
+        r"(?i)(token\s*[:=]\s*)([^\s,;]+)",
+        r"(?i)(authorization\s*:\s*bearer\s+)([^\s,;]+)",
+        r"\bsk-[A-Za-z0-9_-]{8,}\b",
+    )
+    for pattern in patterns:
+        redacted = re.sub(pattern, _redact_secret_match, redacted)
+    return redacted
+
+
+def _redact_secret_match(match: re.Match[str]) -> str:
+    """Return a redacted regex replacement while preserving labels."""
+    if match.lastindex and match.lastindex >= _SECRET_VALUE_GROUP_INDEX:
+        return f"{match.group(1)}<redacted>"
+    return "<redacted>"
+
+
+def _yes_no_bool(*, value: bool) -> str:
+    """Render a boolean as yes/no for diagnostics."""
+    return "yes" if value else "no"
 
 
 def _codex_workspace_preflight_prompt(*, token: str) -> str:
