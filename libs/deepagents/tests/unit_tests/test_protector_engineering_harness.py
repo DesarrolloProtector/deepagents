@@ -741,6 +741,24 @@ def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
     assert "PASS only if the Codex output addresses the proposed task and respects every selected pack-skill restriction." in rendered.text
 
 
+def test_expected_files_do_not_use_selected_guidance_context(tmp_path: Path) -> None:
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix public payment workflow contract button Razor CSS visual alignment",
+        repo=_build_repo(tmp_path / "repo"),
+    )
+    candidate = rendered.automation_candidate
+    review_contract = candidate["review_contract"]
+    selected_context_paths = candidate["selected_context_paths"]
+
+    assert ".codex/agent-workflow/feature-contract-template.md" in selected_context_paths
+    assert "Selected context paths:" in rendered.text
+    assert "- .codex/agent-workflow/feature-contract-template.md" in rendered.text
+    assert review_contract["expected_files_likely_to_change"] == ("Unknown until code inspection",)
+    assert "Expected files likely to change:\n- Unknown until code inspection" in rendered.text
+    expected_files_section = rendered.text.split("Expected files likely to change:", maxsplit=1)[1].split("Expected validation scope:", maxsplit=1)[0]
+    assert ".codex/agent-workflow/feature-contract-template.md" not in expected_files_section
+
+
 def test_supervised_outcome_report_accepts_plan_consistent_codex_output(tmp_path: Path) -> None:
     report = engineering.render_supervised_outcome_report(
         task="Fix legacy onboarding path convergence for operator UI views",
@@ -974,6 +992,7 @@ def test_execution_plan_exposes_structured_automation_candidate(tmp_path: Path) 
         "summary": "Fix legacy onboarding path convergence for operator UI views",
         "mode": "ui_runtime_bug",
     }
+    assert "AGENTS.md" in candidate["selected_context_paths"]
     assert "contract-first company and financer onboarding" in " ".join(candidate["selected_knowledge"]["facts"])
     assert {"name": "navigation_surface_convergence", "source": "pack"} in candidate["selected_skills"]
     assert candidate["benchmark_coverage"]["navigation_surface_convergence"] == (

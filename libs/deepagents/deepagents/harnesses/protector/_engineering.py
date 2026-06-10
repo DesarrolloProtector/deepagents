@@ -42,6 +42,7 @@ AUTOMATION_CANDIDATE_REQUIRED_FIELDS = (
     "schema_version",
     "selected_pack",
     "task",
+    "selected_context_paths",
     "selected_knowledge",
     "selected_skills",
     "benchmark_coverage",
@@ -934,11 +935,14 @@ Codex execution: disabled
 Proposed Codex task:
 - {_task_objective(task)}
 
+Selected context paths:
+{_one_line_list(selected_paths)}
+
 Expected implementation areas:
 {_one_line_list(_expected_implementation_areas(prompt_skills, task_mode))}
 
 Expected files likely to change:
-{_one_line_list(_expected_files_likely_to_change(selected_paths))}
+{_one_line_list(_expected_files_likely_to_change(task, selected_paths))}
 
 Expected validation scope:
 {_one_line_list(_expected_review_validation_scope(task, task_mode, prompt_skills))}
@@ -1004,6 +1008,7 @@ def _automation_candidate_payload(
             "summary": _task_objective(task),
             "mode": task_mode,
         },
+        "selected_context_paths": selected_paths,
         "selected_knowledge": {
             "paths": _selected_knowledge_paths(selection),
             "facts": selection.knowledge,
@@ -1012,7 +1017,7 @@ def _automation_candidate_payload(
         "benchmark_coverage": {skill.name: coverage.get(skill.name, ()) for skill in selected_pack_skills},
         "review_contract": {
             "expected_implementation_areas": _expected_implementation_areas(prompt_skills, task_mode),
-            "expected_files_likely_to_change": _expected_files_likely_to_change(selected_paths),
+            "expected_files_likely_to_change": _expected_files_likely_to_change(task, selected_paths),
             "expected_validation_scope": _expected_review_validation_scope(task, task_mode, prompt_skills),
             "validation_decision_record": _validation_decision_record_payload(),
             "benchmark_relevance": _benchmark_relevance_rows(selected_pack_skills, coverage),
@@ -1255,12 +1260,14 @@ def _automation_candidate_schema_errors(candidate: object) -> tuple[str, ...]:
         for field in object_fields
         if field in candidate and not isinstance(candidate.get(field), dict)
     )
-    sequence_fields = ("selected_skills", "learning_signals", "adaptive_adjustments")
+    sequence_fields = ("selected_context_paths", "selected_skills", "learning_signals", "adaptive_adjustments")
     errors.extend(
         f"Candidate field must be a list: {field}"
         for field in sequence_fields
         if field in candidate and not _candidate_is_sequence(candidate.get(field))
     )
+    if "selected_context_paths" in candidate and not _candidate_is_string_sequence(candidate.get("selected_context_paths")):
+        errors.append("Candidate field must be a list of strings: selected_context_paths")
     if "proposed_codex_prompt" in candidate and not isinstance(candidate.get("proposed_codex_prompt"), str):
         errors.append("Candidate field must be a string: proposed_codex_prompt")
     errors.extend(_candidate_task_schema_errors(candidate))
@@ -1777,12 +1784,69 @@ def _expected_implementation_areas(skills: tuple[PromptSkill, ...], task_mode: T
     return tuple(_unique_preserve_order(rows))
 
 
-def _expected_files_likely_to_change(selected_paths: tuple[str, ...]) -> tuple[str, ...]:
-    """Return likely file/change areas from already-selected context without scanning diffs."""
-    candidates = [path for path in selected_paths if not path.endswith(("AGENTS.md", "MEMORY.md")) and "knowledge/" not in path.replace("\\", "/")]
+def _expected_files_likely_to_change(task: str, selected_paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Return likely implementation files without treating guidance as targets."""
+    task_tokens = _tokens(task)
+    candidates = tuple(
+        path
+        for path in selected_paths
+        if _is_concrete_implementation_path(path) and (_path_is_named_by_task(path, task_tokens) or _route_knowledge_supports_path(path, task_tokens))
+    )
     if candidates:
-        return tuple(candidates[:6])
-    return ("Unknown until Codex inspects the selected context; reviewers should reject unrelated file churn.",)
+        return candidates[:6]
+    return ("Unknown until code inspection",)
+
+
+def _is_concrete_implementation_path(path: str) -> bool:
+    """Return whether a selected context path can be treated as an implementation target."""
+    normalized = path.replace("\\", "/").lower()
+    if normalized.endswith(("agents.md", "memory.md")):
+        return False
+    if any(
+        part in normalized
+        for part in (
+            ".codex/",
+            ".agents/",
+            ".protector-harness/",
+            "agent-workflow/",
+            "docs/flows/",
+            "knowledge/",
+            "packs/",
+            "skill.md",
+            "feature-contract-template.md",
+        )
+    ):
+        return False
+    return normalized.endswith(
+        (
+            ".cs",
+            ".cshtml",
+            ".css",
+            ".html",
+            ".js",
+            ".json",
+            ".razor",
+            ".razor.css",
+            ".scss",
+            ".ts",
+            ".tsx",
+        )
+    )
+
+
+def _path_is_named_by_task(path: str, task_tokens: frozenset[str]) -> bool:
+    """Return whether the task text names a specific selected implementation path."""
+    normalized = path.replace("\\", "/").lower()
+    pieces = tuple(piece for piece in re.split(r"[/_.-]+", normalized) if len(piece) > 1)
+    return bool(task_tokens & set(pieces))
+
+
+def _route_knowledge_supports_path(path: str, task_tokens: frozenset[str]) -> bool:
+    """Return whether route/view-style task terms support a selected implementation path."""
+    normalized = path.replace("\\", "/").lower()
+    if not any(part in normalized for part in ("/views/", "/pages/", "/components/", "/wwwroot/", "/styles/")):
+        return False
+    return bool(task_tokens & {"css", "razor", "style", "styles", "ui", "view", "views", "visual"})
 
 
 def _expected_review_validation_scope(task: str, task_mode: TaskMode, skills: tuple[PromptSkill, ...]) -> tuple[str, ...]:
@@ -2154,7 +2218,7 @@ def render_supervised_outcome_report(
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
     selected_pack_skills = tuple(skill for skill in skills if skill.source == "pack")
     selected_runtime_skills = tuple(skill for skill in skills if skill.source != "pack")
-    expected_files = _expected_files_likely_to_change(selected_paths)
+    expected_files = _expected_files_likely_to_change(task, selected_paths)
     actual_changed_files = _output_section_items(codex_output, "Files changed")
     expected_validation = _expected_review_validation_scope(task, task_mode, skills)
     actual_validation = _output_section_items(codex_output, "Validation")
@@ -3375,7 +3439,7 @@ def _changed_file_deviations(expected_files: tuple[str, ...], actual_files: tupl
     """Return file-change deviations from the supervised plan."""
     if not actual_files:
         return ("Codex output did not report changed files.",)
-    if expected_files and expected_files[0].startswith("Unknown until Codex"):
+    if expected_files and expected_files[0].startswith("Unknown until"):
         return ()
     expected_tokens = _tokens(" ".join(expected_files))
     deviations: list[str] = []
