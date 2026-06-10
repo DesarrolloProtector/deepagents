@@ -906,6 +906,22 @@ PASS
     assert "files=Views/Operator/Index.cshtml" in rendered.text
 
 
+def test_automation_readiness_marks_verified_covered_plan_ready(tmp_path: Path) -> None:
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+    )
+
+    assert "Automation Readiness:" in rendered.text
+    assert "Classification: automation_ready" in rendered.text
+    assert "Pack benchmark validation: passing." in rendered.text
+    assert "Selected pack skills have benchmark coverage." in rendered.text
+    assert "Repo knowledge selected:" in rendered.text
+    assert "No recurring validation, drift, coverage, follow-up, or file-mismatch learning signal found." in rendered.text
+    assert "proceed supervised; the task is ready for a future automation pilot gate" in rendered.text
+
+
 def test_outcome_learning_signals_derive_recurring_patterns(tmp_path: Path) -> None:
     repo = _build_repo(tmp_path / "repo")
     for _ in range(2):
@@ -956,6 +972,10 @@ def test_plan_with_history_surfaces_recurring_learning_signals(tmp_path: Path) -
     assert "Recurring failed validation: not run (2 outcomes)." in rendered.text
     assert "Repeated drift/deviation pattern: dashboard mentioned without task scope (2 outcomes)." in rendered.text
     assert "Recommendation: state the anti-drift constraint explicitly before Codex runs." in rendered.text
+    assert "Automation Readiness:" in rendered.text
+    assert "Classification: supervised_only" in rendered.text
+    assert "Historical signal considered: Recurring failed validation: not run (2 outcomes)." in rendered.text
+    assert "Recommended next step:\n- tighten prompt/review contract." in rendered.text
 
 
 def test_plan_with_history_applies_explainable_adaptive_adjustments(tmp_path: Path) -> None:
@@ -992,6 +1012,24 @@ def test_plan_with_history_applies_explainable_adaptive_adjustments(tmp_path: Pa
         "Triggered by learning signal: Recurring changed-file mismatch: Changed file outside expected plan context: "
         "Views/Unexpected.cshtml (2 outcomes)." in rendered.text
     )
+
+
+def test_automation_readiness_blocks_missing_pack_skill_coverage(tmp_path: Path, monkeypatch) -> None:
+    def no_coverage() -> dict[str, tuple[str, ...]]:
+        return {}
+
+    monkeypatch.setattr(engineering, "discover_pack_prompt_skill_benchmark_coverage", no_coverage)
+
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+    )
+
+    assert "Automation Readiness:" in rendered.text
+    assert "Classification: blocked" in rendered.text
+    assert "Selected pack skills missing benchmark coverage: navigation_surface_convergence." in rendered.text
+    assert "Recommended next step:\n- add benchmark first." in rendered.text
 
 
 def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:

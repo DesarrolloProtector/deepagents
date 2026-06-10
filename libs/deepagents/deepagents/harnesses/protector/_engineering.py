@@ -427,6 +427,15 @@ class OutcomeReport:
 
 
 @dataclass(frozen=True)
+class AutomationReadinessDecision:
+    """Deterministic readiness decision for future supervised automation."""
+
+    classification: str
+    reasons: tuple[str, ...]
+    recommendation: str
+
+
+@dataclass(frozen=True)
 class RenderedReviewerPrompt:
     """Codex reviewer prompt plus deterministic findings metadata."""
 
@@ -699,8 +708,14 @@ def render_controlled_execution_plan(
     plan = build_execution_plan(task_mode=task_mode, prompt_skills=prompt_skills)
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
     codex_prompt = _render_codex_prompt(task, selection)
+    learning_signals = _outcome_learning_signals(repo, prompt_skills)
+    readiness = _automation_readiness_decision(
+        selection=selection,
+        prompt_skills=prompt_skills,
+        task_mode=task_mode,
+        learning_signals=learning_signals,
+    )
     history_signals = _recent_outcome_signals(repo, prompt_skills) if include_history else ()
-    learning_signals = _outcome_learning_signals(repo, prompt_skills) if include_history else ()
     planning_adaptations = _adaptive_planning_adjustments(learning_signals) if include_history else ()
     history_section = (
         f"""
@@ -734,6 +749,8 @@ Knowledge gates:
             codex_prompt=codex_prompt,
         )
     }
+
+{_render_automation_readiness(readiness)}
 {history_section}"""
     return RenderedExecutionPlan(
         text=text,
@@ -865,6 +882,138 @@ Anti-drift checks:
 
 PASS/FAIL criteria:
 {_one_line_list(_review_pass_fail_criteria(task_mode, selected_pack_skills))}"""
+
+
+def _render_automation_readiness(decision: AutomationReadinessDecision) -> str:
+    """Render deterministic readiness for future supervised automation."""
+    return f"""Automation Readiness:
+Classification: {decision.classification}
+Decision reasons:
+{_one_line_list(decision.reasons)}
+Recommended next step:
+- {decision.recommendation}
+Automation boundaries:
+- Codex execution remains disabled.
+- Autonomous loops remain disabled.
+- No model calls, workflow engine, or dashboard are introduced."""
+
+
+def _automation_readiness_decision(
+    *,
+    selection: _ContextSelection,
+    prompt_skills: tuple[PromptSkill, ...],
+    task_mode: TaskMode,
+    learning_signals: tuple[str, ...],
+) -> AutomationReadinessDecision:
+    """Classify whether a planned task is ready for future automation."""
+    pack = discover_protector_pack(include_benchmarks=True)
+    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    selected_pack_skills = tuple(skill for skill in prompt_skills if skill.source == "pack")
+    selected_runtime_skills = tuple(skill for skill in prompt_skills if skill.source != "pack")
+    missing_coverage = tuple(skill.name for skill in selected_pack_skills if not coverage.get(skill.name))
+    reasons = list(_automation_pack_reasons(pack))
+    if selected_pack_skills:
+        reasons.append(f"Selected pack skills: {', '.join(skill.name for skill in selected_pack_skills)}.")
+    else:
+        reasons.append("No pack-owned specialization skill selected for this task.")
+    if selected_runtime_skills:
+        reasons.append(f"Runtime generic fallback selected: {', '.join(skill.name for skill in selected_runtime_skills)}.")
+    if missing_coverage:
+        reasons.append(f"Selected pack skills missing benchmark coverage: {', '.join(missing_coverage)}.")
+    else:
+        reasons.append("Selected pack skills have benchmark coverage.")
+    if selection.knowledge:
+        reasons.append(f"Repo knowledge selected: {len(selection.knowledge)} compact fact(s).")
+    else:
+        reasons.append("No repo knowledge selected for the planned task.")
+    problem_signals = _problem_learning_signals(learning_signals)
+    if problem_signals:
+        reasons.extend(f"Historical signal considered: {signal}" for signal in problem_signals)
+    else:
+        reasons.append("No recurring validation, drift, coverage, follow-up, or file-mismatch learning signal found.")
+    if task_mode == "review_only":
+        reasons.append("Task mode is review_only; implementation automation is not appropriate.")
+
+    classification = _automation_readiness_classification(
+        pack=pack,
+        missing_coverage=missing_coverage,
+        selected_pack_skills=selected_pack_skills,
+        has_knowledge=bool(selection.knowledge),
+        problem_signals=problem_signals,
+        task_mode=task_mode,
+    )
+    return AutomationReadinessDecision(
+        classification=classification,
+        reasons=tuple(_unique_preserve_order(reasons)),
+        recommendation=_automation_readiness_recommendation(classification, pack, missing_coverage, problem_signals, task_mode),
+    )
+
+
+def _automation_pack_reasons(pack: object) -> tuple[str, ...]:
+    """Return concrete pack validation evidence for readiness."""
+    return (
+        f"Pack validation: {getattr(pack, 'validation_status', 'unknown')}.",
+        f"Pack prompt-skill validation: {getattr(pack, 'prompt_skills_validation_status', 'unknown')}.",
+        f"Pack capability validation: {getattr(pack, 'capabilities_validation_status', 'unknown')}.",
+        f"Pack benchmark validation: {getattr(pack, 'benchmark_validation_status', 'unknown')}.",
+    )
+
+
+def _automation_readiness_classification(
+    *,
+    pack: object,
+    missing_coverage: tuple[str, ...],
+    selected_pack_skills: tuple[PromptSkill, ...],
+    has_knowledge: bool,
+    problem_signals: tuple[str, ...],
+    task_mode: TaskMode,
+) -> str:
+    """Return automation_ready, supervised_only, or blocked."""
+    if not _pack_ready_for_automation(pack):
+        return "blocked"
+    if missing_coverage or any(signal.startswith("Skill repeatedly lacks benchmark coverage:") for signal in problem_signals):
+        return "blocked"
+    if task_mode == "review_only" or not selected_pack_skills or not has_knowledge or problem_signals:
+        return "supervised_only"
+    return "automation_ready"
+
+
+def _pack_ready_for_automation(pack: object) -> bool:
+    """Return whether pack validation evidence is automation-ready."""
+    return (
+        getattr(pack, "validation_status", "") == "valid"
+        and getattr(pack, "prompt_skills_validation_status", "") == "valid"
+        and getattr(pack, "capabilities_validation_status", "") == "valid"
+        and getattr(pack, "benchmark_validation_status", "") == "passing"
+    )
+
+
+def _automation_readiness_recommendation(
+    classification: str,
+    pack: object,
+    missing_coverage: tuple[str, ...],
+    problem_signals: tuple[str, ...],
+    task_mode: TaskMode,
+) -> str:
+    """Return the next supervised step for the readiness decision."""
+    if classification == "automation_ready":
+        return "proceed supervised; the task is ready for a future automation pilot gate but Codex execution remains disabled here."
+    if classification == "blocked" and not _pack_ready_for_automation(pack):
+        return "block until pack validation passes."
+    if classification == "blocked" and (missing_coverage or any("benchmark coverage" in signal for signal in problem_signals)):
+        return "add benchmark first."
+    if task_mode == "review_only":
+        return "proceed supervised; keep this as a review contract rather than an implementation automation candidate."
+    return "tighten prompt/review contract."
+
+
+def _problem_learning_signals(learning_signals: tuple[str, ...]) -> tuple[str, ...]:
+    """Return learning signals that should affect readiness."""
+    return tuple(
+        signal
+        for signal in learning_signals
+        if not signal.startswith(("No outcome history entries", "No recurring outcome learning signals", "History unavailable"))
+    )
 
 
 def _expected_implementation_areas(skills: tuple[PromptSkill, ...], task_mode: TaskMode) -> tuple[str, ...]:
