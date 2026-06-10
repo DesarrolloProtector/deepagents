@@ -705,13 +705,19 @@ def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run the deprecated `ph plan` compatibility view."""
     repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
     rendered = render_controlled_execution_plan(task=task, repo=repo, repo_alias=repo_alias, include_history=args.with_history)
+    candidate_path: Path | None = None
     if args.candidate_json is not None:
         try:
             _write_json_output(args.candidate_json, rendered.automation_candidate, overwrite=args.overwrite)
         except HarnessUsageError as exc:
             parser.error(str(exc))
+        candidate_path = args.candidate_json.resolve()
     sys.stdout.write(rendered.text)
     sys.stdout.write("\n")
+    if candidate_path is not None:
+        sys.stdout.write("\n")
+        sys.stdout.write(_render_candidate_execution_guide(candidate_path, repo=repo, task=task, candidate=rendered.automation_candidate))
+        sys.stdout.write("\n")
     return 0
 
 
@@ -759,6 +765,76 @@ def _run_candidate_outcome(args: argparse.Namespace, parser: argparse.ArgumentPa
         path = append_outcome_history(repo, report)
         sys.stdout.write(f"Outcome history saved: {path}\n")
     return 0
+
+
+def _render_candidate_execution_guide(candidate_path: Path, *, repo: Path | None, task: str, candidate: dict[str, object]) -> str:
+    """Render copy-pasteable PowerShell commands for first candidate execution."""
+    approval_sha = automation_candidate_approval_sha(candidate)
+    output = candidate_path.with_suffix(".codex-output.txt")
+    repo_text = str(repo.resolve()) if repo is not None else "<repo>"
+    generate = _powershell_command(
+        (
+            "ph",
+            "plan",
+            "--repo",
+            repo_text,
+            "--candidate-json",
+            str(candidate_path),
+            task,
+        )
+    )
+    dry_run = _powershell_command(("ph", "candidate-dry-run", str(candidate_path)))
+    execute = _powershell_command(
+        (
+            "ph",
+            "candidate-execute",
+            "--approve-sha",
+            approval_sha,
+            "--output",
+            str(output),
+            "--repo",
+            repo_text,
+            str(candidate_path),
+        )
+    )
+    review = _powershell_command(
+        (
+            "ph",
+            "candidate-outcome",
+            str(candidate_path),
+            "--codex-output",
+            str(output),
+            "--repo",
+            repo_text,
+            "--save-history",
+        )
+    )
+    return f"""Candidate Execution Guide (PowerShell)
+Candidate JSON: {candidate_path}
+Raw Codex output file: {output}
+Approval SHA: {approval_sha}
+
+1. Generate candidate:
+{generate}
+
+2. Dry-run candidate:
+{dry_run}
+
+3. Copy approval SHA:
+{approval_sha}
+
+4. Execute candidate once:
+{execute}
+
+5. Review outcome and save history:
+{review}
+
+Safety:
+- Commands above do not run automatically from this guide.
+- candidate-execute still requires the exact --approve-sha.
+- candidate-execute runs one foreground Codex command only.
+- Raw Codex output is persisted only because --output is present.
+- History is saved only by candidate-outcome --save-history."""
 
 
 def _run_candidate_execute(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -860,6 +936,19 @@ def _candidate_outcome_next_command(candidate: Path, *, output: Path | None, rep
     output_text = str(output.resolve()) if output is not None else "<codex-output>"
     repo_text = repo if repo is not None else "<repo>"
     return f"ph candidate-outcome {candidate.resolve()} --codex-output {output_text} --repo {repo_text} --save-history"
+
+
+def _powershell_command(parts: tuple[str, ...]) -> str:
+    """Render a command line suitable for Windows PowerShell copy/paste."""
+    return " ".join(_powershell_quote(part) for part in parts)
+
+
+def _powershell_quote(value: str) -> str:
+    """Quote a single PowerShell argument when needed."""
+    if value and not any(char.isspace() for char in value) and not any(char in value for char in "'\"&|<>()@;"):
+        return value
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
 
 
 def _write_text_output(path: Path, text: str, *, overwrite: bool) -> None:

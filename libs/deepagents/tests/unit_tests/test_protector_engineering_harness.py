@@ -2341,9 +2341,23 @@ def test_cli_plan_can_export_automation_candidate_json(tmp_path: Path, capsys) -
 
     stdout = capsys.readouterr().out
     payload = json.loads(output.read_text(encoding="utf-8"))
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
     assert stdout.startswith("Execution Plan:")
     assert "Automation Readiness:" in stdout
     assert "ecc-automation-candidate-v1" not in stdout
+    assert "Candidate Execution Guide (PowerShell)" in stdout
+    assert "1. Generate candidate:" in stdout
+    assert "2. Dry-run candidate:" in stdout
+    assert "3. Copy approval SHA:" in stdout
+    assert "4. Execute candidate once:" in stdout
+    assert "5. Review outcome and save history:" in stdout
+    assert f"Approval SHA: {approval_sha}" in stdout
+    assert f"ph candidate-dry-run {output.resolve()}" in stdout
+    assert f"ph candidate-execute --approve-sha {approval_sha}" in stdout
+    assert f"--output {output.with_suffix('.codex-output.txt').resolve()}" in stdout
+    assert f"ph candidate-outcome {output.resolve()}" in stdout
+    assert "--save-history" in stdout
+    assert "candidate-execute runs one foreground Codex command only." in stdout
     assert payload["schema_version"] == "ecc-automation-candidate-v1"
     assert payload["selected_pack"]["benchmark_validation_status"] == "passing"
     assert payload["task"]["mode"] == "ui_runtime_bug"
