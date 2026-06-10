@@ -3298,6 +3298,83 @@ LOCAL_EXECUTOR_UNAVAILABLE
     assert "Validation gaps:\n- (none)" in report.text
 
 
+def test_candidate_outcome_recovers_completed_result_from_polluted_self_matched_transcript(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    target = repo / "FinanciacionCore" / "Views" / "Clients" / "NewClient.cshtml"
+    target.parent.mkdir(parents=True)
+    target.write_text('<button class="btn vameco-red"><i data-lucide="x-circle"></i></button>\n', encoding="utf-8")
+    candidate = engineering.render_controlled_execution_plan(
+        task="Style only the delete icon in Clients/NewClient receipts table as a red Tailwind trash icon.",
+        repo=repo,
+    ).automation_candidate
+    codex_output = f"""OpenAI Codex v0.139.0
+--------
+workdir: {repo}
+--------
+user
+{candidate["proposed_codex_prompt"]}
+
+Local executor policy:
+- Use only local workspace shell/file execution for repository inspection and edits.
+- Connector-only or remote repository fallback is explicitly disallowed for candidate-execute.
+- If local workspace execution becomes unavailable, stop immediately and report LOCAL_EXECUTOR_UNAVAILABLE.
+
+assistant
+I inspected the target Razor file and kept the change to the delete icon styling.
+
+exec
+pwsh.exe rg -S .
+
+.\\candidate.codex-output.txt:1000:LOCAL_EXECUTOR_UNAVAILABLE
+.\\candidate.json:141:"PASS/FAIL criteria mention Clients/NewClient"
+.\\.protector-harness\\outcome-history.jsonl:1:{{"status":"executor_failed"}}
+.\\FinanciacionCore\\bin\\Debug\\net8.0\\ignored.dll:binary output
+.\\FinanciacionCore\\Docs\\notes.md:delete icon unrelated note
+.\\FinanciacionCore\\Connected Services\\Foo\\Reference.cs:generated output
+.\\FinanciacionCore\\Data\\Migrations\\20260610120000_Create.cs:migration output
+.\\FinanciacionCore\\wwwroot\\css\\site.css.map:{{"mappings":"AAAA","sourcesContent":["large generated map blob"]}}
+
+**Summary**
+Updated only the Clients/NewClient receipts table delete action styling.
+
+**Validation**
+Diff review confirmed only the targeted Razor delete button changed; dotnet build FinanciacionCore\\FinanciacionCore.csproj passed.
+
+**PASS/FAIL**
+PASS
+
+diff --git a/FinanciacionCore/Views/Clients/NewClient.cshtml b/FinanciacionCore/Views/Clients/NewClient.cshtml
+index 1111111..2222222 100644
+--- a/FinanciacionCore/Views/Clients/NewClient.cshtml
++++ b/FinanciacionCore/Views/Clients/NewClient.cshtml
+@@ -1 +1 @@
+-<button class="btn vameco-red"><i data-lucide="x-circle"></i></button>
++<button class="flex text-red-500 hover:text-red-700"><i data-lucide="trash-2"></i></button>
+
+Candidate execution status: failure
+Failure: executor failure
+LOCAL_EXECUTOR_UNAVAILABLE
+"""
+
+    report = engineering.render_candidate_outcome_report(
+        candidate=candidate,
+        candidate_source="candidate.json",
+        codex_output=codex_output,
+        codex_output_source="candidate.codex-output.txt",
+        repo=repo,
+    )
+
+    assert report.status != "executor_failed"
+    assert report.summary.status != "executor_failed"
+    assert report.summary.changed_files == ("FinanciacionCore/Views/Clients/NewClient.cshtml",)
+    assert report.summary.executed_validations == (
+        "Diff review confirmed only the targeted Razor delete button changed; "
+        "dotnet build FinanciacionCore\\FinanciacionCore.csproj passed.",
+    )
+    assert "Status: executor_failed" not in report.text
+    assert "Actual files changed:\n- FinanciacionCore/Views/Clients/NewClient.cshtml" in report.text
+
+
 def test_candidate_outcome_prompt_pass_fail_criteria_do_not_claim_pass(tmp_path: Path) -> None:
     repo = _build_repo(tmp_path / "repo")
     candidate = engineering.render_controlled_execution_plan(

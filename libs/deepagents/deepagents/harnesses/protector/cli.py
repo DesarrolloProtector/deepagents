@@ -911,21 +911,22 @@ def _run_candidate_outcome(args: argparse.Namespace, parser: argparse.ArgumentPa
         codex_output = args.codex_output.read_text(encoding="utf-8")
     except OSError as exc:
         parser.error(f"unable to read Codex output: {exc}")
+    repo = _resolve_positional_repo(args.repo, parser) if args.repo is not None else None
     try:
         report = render_candidate_outcome_report(
             candidate=payload,
             candidate_source=str(args.candidate_json.resolve()),
             codex_output=codex_output,
             codex_output_source=str(args.codex_output.resolve()),
+            repo=repo,
         )
     except HarnessUsageError as exc:
         parser.error(str(exc))
     sys.stdout.write(report.text)
     sys.stdout.write("\n")
     if args.save_history:
-        if args.repo is None:
+        if repo is None:
             parser.error("--save-history requires --repo for candidate-outcome")
-        repo = _resolve_positional_repo(args.repo, parser)
         path = append_outcome_history(repo, report)
         sys.stdout.write(f"Outcome history saved: {path}\n")
     return 0

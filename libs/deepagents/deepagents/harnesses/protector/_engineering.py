@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -119,6 +120,38 @@ VALIDATION_NEGATION_TERMS = (
     "unable to run",
     "wasn't run",
     "were not run",
+)
+OUTCOME_IGNORED_PATH_MARKERS = (
+    "/.protector-harness/",
+    "/bin/",
+    "/connected services/",
+    "/docs/",
+    "/migrations/",
+    "/obj/",
+    "candidate.codex-output.txt",
+    "candidate.json",
+)
+OUTCOME_IGNORED_SOURCE_MAP_SUFFIXES = (
+    ".css.map",
+    ".js.map",
+)
+OUTCOME_LARGE_GENERATED_LINE_LENGTH = 4000
+OUTCOME_LARGE_GENERATED_LINE_MARKERS = (
+    '"mappings"',
+    "base64,",
+    "sourcemappingurl",
+    "sourcescontent",
+)
+_KNOWN_OUTPUT_HEADERS = frozenset(
+    {
+        "files read",
+        "files changed",
+        "summary",
+        "validation",
+        "pass",
+        "fail",
+        "pass/fail",
+    }
 )
 GLOBAL_VALIDATION_LAW = "Choose the cheapest credible falsifier first; escalate validation only when uncertainty remains and record why."
 VDR_REQUIRED_FIELDS = ("uncertainty", "cheapest_falsifier", "escalation_reason")
@@ -1473,6 +1506,7 @@ def render_candidate_outcome_report(
     candidate_source: str,
     codex_output: str,
     codex_output_source: str,
+    repo: Path | None = None,
 ) -> OutcomeReport:
     """Render a supervised outcome report using an exported candidate as the plan source."""
     dry_run = render_automation_candidate_dry_run(candidate, source=candidate_source)
@@ -1495,7 +1529,8 @@ def render_candidate_outcome_report(
     evidence_paths = _candidate_evidence_paths(payload)
     evidence_notes = _candidate_evidence_notes(payload)
     expected_validation = _candidate_string_sequence(contract.get("expected_validation_scope"))
-    if _candidate_executor_failed(codex_output):
+    repo_changed_files = _repo_diff_changed_files(repo)
+    if _candidate_executor_failed(codex_output, repo_changed_files=repo_changed_files):
         return _render_candidate_executor_failed_outcome(
             payload=payload,
             task=task,
@@ -1510,9 +1545,16 @@ def render_candidate_outcome_report(
             expected_validation=expected_validation,
         )
 
-    review_text = _codex_output_after_prompt_contract(codex_output)
-    actual_changed_files = _output_section_items(review_text, "Files changed")
-    actual_validation = _output_section_items(review_text, "Validation")
+    review_text = _pollution_filtered_codex_output(_codex_output_after_prompt_contract(codex_output))
+    actual_changed_files = _first_nonempty_tuple(
+        _changed_file_section_items(review_text),
+        _changed_files_from_unified_diff(review_text),
+        repo_changed_files,
+    )
+    actual_validation = _first_nonempty_tuple(
+        _output_section_items(review_text, "Validation"),
+        _validation_items_from_narrative(review_text),
+    )
     review = _review_codex_output(task, review_text)
     selected_skill_deviations = _selected_skill_behavior_deviations(review_text, selected_pack_skills, selected_runtime_skills)
     blocker_deviations = _outcome_blocker_deviations(pack, selected_pack_skills, coverage)
@@ -4368,7 +4410,148 @@ def _visual_microfix_task_details(task: str) -> str:
 
 def _contains_section(text: str, section: str) -> bool:
     """Return whether `text` contains a required output section label."""
-    return re.search(rf"(^|\n)\s*-?\s*{re.escape(section)}\b", text, flags=re.IGNORECASE) is not None
+    wanted = _normalized_output_header(section)
+    return any(_normalized_output_header(line) == wanted for line in text.splitlines())
+
+
+def _first_nonempty_tuple(*items: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the first non-empty tuple after removing display placeholders."""
+    for item in items:
+        meaningful = _meaningful_output_items(item)
+        if meaningful:
+            return meaningful
+    return ()
+
+
+def _meaningful_output_items(items: tuple[str, ...]) -> tuple[str, ...]:
+    """Return section items that represent real output, not placeholders."""
+    return tuple(item for item in items if item.strip().lower() not in {"(none)", "none"})
+
+
+def _pollution_filtered_codex_output(text: str) -> str:
+    """Remove known self-matched or generated search-output lines from a transcript."""
+    return "\n".join(line for line in text.splitlines() if not _is_polluted_transcript_line(line))
+
+
+def _is_polluted_transcript_line(line: str) -> bool:
+    """Return whether one transcript line is from ignored self-match/generated output."""
+    normalized = _normalize_outcome_path(line)
+    if _is_ignored_outcome_path(normalized):
+        return True
+    return len(line) > OUTCOME_LARGE_GENERATED_LINE_LENGTH and any(
+        term in normalized for term in OUTCOME_LARGE_GENERATED_LINE_MARKERS
+    )
+
+
+def _normalize_outcome_path(text: str) -> str:
+    """Normalize path-like text for outcome filtering."""
+    return text.replace("\\", "/").lower()
+
+
+def _is_ignored_outcome_path(path: str) -> bool:
+    """Return whether an outcome path should be ignored for implementation evidence."""
+    normalized = f"/{_normalize_outcome_path(path).lstrip('./')}"
+    if any(marker in normalized for marker in OUTCOME_IGNORED_PATH_MARKERS):
+        return True
+    return normalized.endswith(OUTCOME_IGNORED_SOURCE_MAP_SUFFIXES)
+
+
+def _changed_files_from_unified_diff(text: str) -> tuple[str, ...]:
+    """Extract changed file paths from embedded unified diff headers."""
+    files: list[str] = []
+    for line in text.splitlines():
+        match = re.match(r"^diff --git a/(.+?) b/(.+)$", line.strip())
+        if match is not None:
+            _append_outcome_file(files, match.group(2))
+            continue
+        match = re.match(r"^\+\+\+ b/(.+)$", line.strip())
+        if match is not None:
+            _append_outcome_file(files, match.group(1))
+    return tuple(files)
+
+
+def _changed_file_section_items(text: str) -> tuple[str, ...]:
+    """Extract only path-like entries from a `Files changed` section."""
+    files: list[str] = []
+    for item in _output_section_items(text, "Files changed"):
+        _append_outcome_file(files, item.strip("`"))
+    return tuple(files)
+
+
+def _append_outcome_file(files: list[str], path: str) -> None:
+    """Append one meaningful outcome file path, preserving order."""
+    cleaned = path.strip().strip('"').replace("\\", "/")
+    if not cleaned or cleaned == "/dev/null" or _is_ignored_outcome_path(cleaned):
+        return
+    if " " in cleaned:
+        return
+    if "/" not in cleaned and "." not in Path(cleaned).name:
+        return
+    if cleaned not in files:
+        files.append(cleaned)
+
+
+def _repo_diff_changed_files(repo: Path | None) -> tuple[str, ...]:
+    """Return current repo diff files when outcome transcript parsing is ambiguous."""
+    if repo is None:
+        return ()
+    try:
+        completed = subprocess.run(  # noqa: S603  # fixed git command with repo passed as one argv value
+            ("git", "-C", str(repo), "diff", "--name-only", "--"),
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    if completed.returncode != 0:
+        return ()
+    files: list[str] = []
+    for line in completed.stdout.splitlines():
+        _append_outcome_file(files, line)
+    return tuple(files)
+
+
+def _validation_items_from_narrative(text: str) -> tuple[str, ...]:
+    """Recover validation evidence from malformed final assistant sections."""
+    items: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip().lstrip("-* ").strip()
+        if not stripped or _is_known_output_section_header(stripped) or _is_polluted_transcript_line(stripped):
+            continue
+        lowered = stripped.lower()
+        if any(term in lowered for term in VALIDATION_EVIDENCE_TERMS):
+            items.append(stripped)
+    return tuple(_unique_preserve_order(items[-5:]))
+
+
+def _has_execution_activity(text: str) -> bool:
+    """Return whether the transcript shows actual assistant or local command activity."""
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "\nassistant\n",
+            "\ncodex\n",
+            "\nexec\n",
+            "pwsh.exe ",
+            "powershell.exe ",
+            " succeeded in ",
+            "diff --git ",
+        )
+    )
+
+
+def _normalized_output_header(line: str) -> str:
+    """Normalize markdown/plain Codex section headings."""
+    normalized = line.strip()
+    normalized = re.sub(r"^\s*[-*]\s+", "", normalized)
+    normalized = normalized.strip("#").strip()
+    normalized = normalized.strip("*`_ ").strip()
+    normalized = normalized.rstrip(":").strip()
+    return normalized.lower()
 
 
 def _output_section_items(text: str, section: str) -> tuple[str, ...]:
@@ -4387,22 +4570,25 @@ def _output_section_items(text: str, section: str) -> tuple[str, ...]:
         if stripped.startswith("- "):
             stripped = stripped[2:].strip()
         items.append(stripped)
-    return tuple(items)
+    return _meaningful_output_items(tuple(items))
 
 
-def _candidate_executor_failed(output: str) -> bool:
+def _candidate_executor_failed(output: str, *, repo_changed_files: tuple[str, ...] = ()) -> bool:
     """Return whether candidate execution failed before implementation review."""
-    if _codex_transcript_contains_only_user_prompt(output):
-        return True
-    review_text = _codex_output_after_prompt_contract(output)
-    if _completed_codex_result_present(review_text):
+    review_text = _pollution_filtered_codex_output(_codex_output_after_prompt_contract(output))
+    if (
+        _completed_codex_result_present(review_text)
+        or _changed_files_from_unified_diff(review_text)
+        or (repo_changed_files and _has_execution_activity(review_text))
+    ):
         return False
     lowered = (review_text if "Codex Prompt:" in output else output).lower()
-    if "local_executor_unavailable" in lowered:
-        return True
-    if "failure: executor failure" in lowered:
-        return True
-    return "candidate execution status: failure" in lowered and "process tree status: process_tree_terminated" in lowered
+    return (
+        _codex_transcript_contains_only_user_prompt(output)
+        or "local_executor_unavailable" in lowered
+        or "failure: executor failure" in lowered
+        or ("candidate execution status: failure" in lowered and "process tree status: process_tree_terminated" in lowered)
+    )
 
 
 def _completed_codex_result_present(output: str) -> bool:
@@ -4412,6 +4598,8 @@ def _completed_codex_result_present(output: str) -> bool:
     if _output_section_items(output, "Files changed"):
         return True
     if _output_section_items(output, "Validation"):
+        return True
+    if _changed_files_from_unified_diff(output):
         return True
     return _status_token(output) is not None
 
@@ -4428,6 +4616,9 @@ def _codex_output_after_prompt_contract(output: str) -> str:
     prompt_index = _last_line_index(lines, "Codex Prompt:")
     if prompt_index is None:
         return output
+    turn_index = _first_codex_result_turn_index(lines, start=prompt_index + 1)
+    if turn_index is not None:
+        return "\n".join(lines[turn_index:])
     policy_index = _last_line_index(lines, "Local executor policy:", start=prompt_index)
     if policy_index is not None:
         result_index = _first_result_section_after_policy(lines, policy_index)
@@ -4449,6 +4640,14 @@ def _last_line_index(lines: list[str], prefix: str, *, start: int = 0) -> int | 
         if lines[current].strip().startswith(prefix):
             index = current
     return index
+
+
+def _first_codex_result_turn_index(lines: list[str], *, start: int) -> int | None:
+    """Return the first Codex assistant/local-command turn marker after a prompt."""
+    for index in range(start, len(lines)):
+        if lines[index].strip().lower() in {"assistant", "codex", "exec"}:
+            return index
+    return None
 
 
 def _first_result_section_after_policy(lines: list[str], policy_index: int) -> int | None:
@@ -4477,24 +4676,22 @@ def _first_actual_output_section_index(lines: list[str], *, start: int) -> int |
 
 def _is_actual_output_section_header(line: str) -> bool:
     """Return whether `line` is an implementation output section header."""
-    headers = ("Files read", "Files changed", "Summary", "Validation", "PASS", "FAIL")
-    return any(re.fullmatch(rf"{re.escape(header)}\s*:?", line, flags=re.IGNORECASE) for header in headers)
+    return _normalized_output_header(line) in _KNOWN_OUTPUT_HEADERS
 
 
 def _section_start_index(lines: list[str], section: str) -> int | None:
     """Return the last index of a section header line."""
-    pattern = re.compile(rf"^\s*-?\s*{re.escape(section)}\s*:?\s*$", flags=re.IGNORECASE)
+    wanted = _normalized_output_header(section)
     found: int | None = None
     for index, line in enumerate(lines):
-        if pattern.match(line):
+        if _normalized_output_header(line) == wanted:
             found = index
     return found
 
 
 def _is_known_output_section_header(line: str) -> bool:
     """Return whether a line starts a known Codex output section."""
-    headers = ("Files read", "Files changed", "Summary", "Validation", "PASS", "FAIL")
-    return any(re.fullmatch(rf"{re.escape(header)}\s*:?", line, flags=re.IGNORECASE) for header in headers)
+    return _normalized_output_header(line) in _KNOWN_OUTPUT_HEADERS
 
 
 def _has_pass_or_fail(text: str) -> bool:
