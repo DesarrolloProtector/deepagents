@@ -58,6 +58,24 @@ def _pass_executor_reliability(monkeypatch) -> None:
 
     monkeypatch.setattr(cli._CodexCliExecutor, "check_reliability", pass_reliability)
 
+    def fake_resolve_executable(command: tuple[str, ...]) -> Path:
+        _ = command
+        return Path("fake-codex.exe")
+
+    def fake_runtime(executable: Path) -> cli._CodexRuntimeEnvironment:
+        _ = executable
+        return cli._CodexRuntimeEnvironment(
+            executable_path=Path("fake-codex.exe"),
+            env={},
+            npm_package_location="test",
+            sandbox_helper_path="test",
+            runtime_path_prefix="test",
+            sandbox_helper_check=cli._ExecutorReliabilityCheck(name="sandbox_helper", passed=True, detail="test"),
+        )
+
+    monkeypatch.setattr(cli, "_resolve_executor_executable", fake_resolve_executable)
+    monkeypatch.setattr(cli, "_resolve_codex_runtime_environment", fake_runtime)
+
 
 class _FakeCompleted:
     def __init__(self, *, returncode: int = 0, stdout: str = "codex-cli 0.0.0-test\n", stderr: str = "") -> None:
@@ -76,6 +94,13 @@ def _fake_codex_which(tmp_path: Path) -> Callable[[str], str]:
         return str(tmp_path / f"{executable}.exe")
 
     return which
+
+
+def _write_fake_sandbox_helper(tmp_path: Path) -> Path:
+    helper = tmp_path / "codex-resources" / cli._CODEX_WINDOWS_SANDBOX_HELPER
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    helper.write_text("helper", encoding="utf-8")
+    return helper
 
 
 def _missing_which(executable: str) -> str | None:
@@ -3520,6 +3545,7 @@ def test_codex_cli_executor_preflight_success_allows_execution(tmp_path: Path, m
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
+    _write_fake_sandbox_helper(tmp_path)
 
     def fake_run_codex_once(
         command: tuple[str, ...],
@@ -3572,6 +3598,7 @@ def test_codex_cli_executor_preflight_reports_wrong_codex_home(tmp_path: Path, m
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-codex-home"))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
+    _write_fake_sandbox_helper(tmp_path)
 
     def fail_run_codex_once(*args: object, **kwargs: object) -> cli._CodexExecutionResult:
         _ = args, kwargs
@@ -3595,6 +3622,7 @@ def test_codex_cli_executor_preflight_reports_workspace_read_failure(tmp_path: P
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
+    _write_fake_sandbox_helper(tmp_path)
 
     def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
         _ = command, kwargs
@@ -3624,6 +3652,7 @@ def test_codex_cli_executor_preflight_reports_workspace_write_delete_failure(tmp
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
+    _write_fake_sandbox_helper(tmp_path)
 
     def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
         _ = command, kwargs
@@ -3654,6 +3683,7 @@ def test_codex_cli_executor_preflight_reports_sandbox_helper_failure(tmp_path: P
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
+    _write_fake_sandbox_helper(tmp_path)
 
     def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
         _ = command, prompt, kwargs
@@ -3676,6 +3706,7 @@ def test_executor_status_detects_candidate_execution_path_sandbox_failure(tmp_pa
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
+    _write_fake_sandbox_helper(tmp_path)
 
     def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
         _ = command, kwargs
@@ -3732,6 +3763,99 @@ def test_executor_status_reports_effective_execution_path(tmp_path: Path, monkey
     assert "sandbox_mode: workspace-write" in stdout
     assert f"execution_strategy: {cli._codex_execution_strategy(repo)}" in stdout
     assert "CODEX_HOME: C:/Users/test/.codex (env)" in stdout
+
+
+def test_executor_status_and_candidate_execute_use_identical_environment_resolution(tmp_path: Path, monkeypatch) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    helper = _write_fake_sandbox_helper(tmp_path)
+    calls: list[dict[str, object]] = []
+    proof = repo / ".protector-harness" / "executor-preflight.tmp"
+
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
+    monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
+
+    def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
+        calls.append({"command": command, "prompt": prompt, "kwargs": kwargs})
+        if "delete preflight" in prompt:
+            proof.unlink(missing_ok=True)
+            return cli._CodexExecutionResult(returncode=0, output=f"{cli._EXECUTOR_PREFLIGHT_DELETE_OK}\n")
+        if "exactly this text: " in prompt:
+            token = prompt.split("exactly this text: ", maxsplit=1)[1].splitlines()[0]
+            proof.parent.mkdir(parents=True, exist_ok=True)
+            proof.write_text(token, encoding="utf-8")
+            return cli._CodexExecutionResult(
+                returncode=0,
+                output=(
+                    f"{cli._EXECUTOR_PREFLIGHT_BEGIN}\n"
+                    f"{cli._EXECUTOR_PREFLIGHT_READ_OK}\n"
+                    f"{cli._EXECUTOR_PREFLIGHT_WRITE_OK}\n"
+                    f"{cli._EXECUTOR_PREFLIGHT_OK}\n"
+                ),
+            )
+        return cli._CodexExecutionResult(returncode=0, output="candidate output\n")
+
+    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
+    executor = cli._CodexCliExecutor(command=("fake-codex", "exec", "-"), repo=repo)
+
+    report = executor.check_reliability()
+    result = executor.execute("Codex Prompt:\nDo work.", timeout=None)
+
+    assert report.ok
+    assert result.returncode == 0
+    preflight_env = calls[0]["kwargs"]["env"]
+    execute_env = calls[-1]["kwargs"]["env"]
+    assert preflight_env["PATH"] == execute_env["PATH"]
+    assert str(helper.parent) == str(preflight_env["PATH"]).split(";")[0]
+    assert calls[0]["kwargs"]["cwd"] == repo
+    assert calls[-1]["kwargs"]["cwd"] == repo
+
+
+def test_cli_candidate_execute_missing_sandbox_helper_blocks_before_prompt(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
+    monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
+
+    def fail_run_codex_once(*args: object, **kwargs: object) -> cli._CodexExecutionResult:
+        _ = args, kwargs
+        msg = "candidate prompt must not be sent when sandbox helper is missing"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(cli, "_run_codex_once", fail_run_codex_once)
+
+    assert (
+        cli.main(
+            [
+                "candidate-execute",
+                "--codex-cmd",
+                "fake-codex",
+                "--approve-sha",
+                approval_sha,
+                "--repo",
+                str(repo),
+                str(candidate),
+            ]
+        )
+        == 1
+    )
+
+    stdout = capsys.readouterr().out
+    assert "Candidate execution refused: local executor reliability preflight failed." in stdout
+    assert f"{cli._CODEX_WINDOWS_SANDBOX_HELPER} could not be resolved" in stdout
+    assert "sandbox_helper_path: (not found)" in stdout
 
 
 def test_cli_candidate_execute_blocks_before_candidate_prompt_when_preflight_fails(
@@ -4009,6 +4133,98 @@ def test_run_codex_once_blocked_stdout_reader_does_not_prevent_interrupt(monkeyp
     assert result.interrupted
     assert result.returncode == 130
     assert terminated == ["keyboard_interrupt"]
+
+
+def test_run_codex_once_local_executor_unavailable_terminates_process_tree(monkeypatch) -> None:
+    terminated: list[str] = []
+
+    class FakeStdin:
+        def write(self, text: str) -> None:
+            assert text == "prompt"
+
+        def close(self) -> None:
+            return None
+
+    class FakeProcess:
+        pid = 12345
+
+        def __init__(self, command: object, **kwargs: object) -> None:
+            _ = command, kwargs
+            self.stdin = FakeStdin()
+            self.stdout = iter(("partial output\n", "LOCAL_EXECUTOR_UNAVAILABLE\n", "should not be read\n"))
+
+        def wait(self, timeout: float | None = None) -> int:
+            _ = timeout
+            raise subprocess.TimeoutExpired(cmd=("fake-codex",), timeout=timeout)
+
+    def fake_terminate(process: object, *, method: str) -> cli._ProcessTerminationReport:
+        _ = process
+        terminated.append(method)
+        return cli._ProcessTerminationReport(
+            root_pid=12345,
+            tracked_pids=(12345, 23456),
+            method=method,
+            terminated_pids=(12345, 23456),
+            resisted_pids=(),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(cli, "_terminate_process_tree", fake_terminate)
+
+    result = cli._run_codex_once(("fake-codex",), "prompt")
+
+    assert result.returncode == 1
+    assert result.failed
+    assert result.failure_message == "LOCAL_EXECUTOR_UNAVAILABLE"
+    assert result.output == "partial output\nLOCAL_EXECUTOR_UNAVAILABLE\n"
+    assert terminated == ["executor_failure"]
+    assert result.termination_report is not None
+    assert result.termination_report.method == "executor_failure"
+
+
+def test_run_codex_once_executor_fail_terminates_and_preserves_partial_output(monkeypatch) -> None:
+    terminated: list[str] = []
+
+    class FakeStdin:
+        def write(self, text: str) -> None:
+            assert text == "prompt"
+
+        def close(self) -> None:
+            return None
+
+    class FakeProcess:
+        pid = 12345
+
+        def __init__(self, command: object, **kwargs: object) -> None:
+            _ = command, kwargs
+            self.stdin = FakeStdin()
+            self.stdout = iter(("before failure\n", "FAIL: executor failure while starting sandbox\n", "late output\n"))
+
+        def wait(self, timeout: float | None = None) -> int:
+            _ = timeout
+            raise subprocess.TimeoutExpired(cmd=("fake-codex",), timeout=timeout)
+
+    def fake_terminate(process: object, *, method: str) -> cli._ProcessTerminationReport:
+        _ = process
+        terminated.append(method)
+        return cli._ProcessTerminationReport(
+            root_pid=12345,
+            tracked_pids=(12345,),
+            method=method,
+            terminated_pids=(12345,),
+            resisted_pids=(),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(cli, "_terminate_process_tree", fake_terminate)
+
+    result = cli._run_codex_once(("fake-codex",), "prompt")
+
+    assert result.returncode == 1
+    assert result.failed
+    assert result.failure_message == "executor failure"
+    assert result.output == "before failure\nFAIL: executor failure while starting sandbox\n"
+    assert terminated == ["executor_failure"]
 
 
 def test_run_codex_once_keyboard_interrupt_terminates_real_child_and_descendant(tmp_path: Path, monkeypatch) -> None:

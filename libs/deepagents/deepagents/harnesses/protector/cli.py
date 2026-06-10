@@ -70,16 +70,23 @@ _CODEX_READER_JOIN_SECONDS = 1.0
 _CLI_SPINNER_INTERVAL_SECONDS = 0.1
 _CLI_SPINNER_FRAMES = ("|", "/", "-", "\\")
 _CODEX_TERMINATION_WAIT_SECONDS = 5.0
+_CODEX_WINDOWS_SANDBOX_HELPER = "codex-windows-sandbox-setup.exe"
 _EXECUTOR_PREFLIGHT_BEGIN = "PROTECTOR_EXECUTOR_PREFLIGHT_BEGIN"
 _EXECUTOR_PREFLIGHT_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_OK"
 _EXECUTOR_PREFLIGHT_WRITE_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_WRITE_OK"
 _EXECUTOR_PREFLIGHT_DELETE_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_DELETE_OK"
 _EXECUTOR_PREFLIGHT_READ_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_READ_OK"
 _EXECUTOR_SANDBOX_FAILURE_PATTERNS = (
-    "codex-windows-sandbox-setup.exe program not found",
+    f"{_CODEX_WINDOWS_SANDBOX_HELPER} program not found",
     "sandbox helper",
     "sandbox setup",
     "helper unavailable",
+)
+_CODEX_TERMINAL_EXECUTOR_FAILURE_PATTERNS = (
+    "LOCAL_EXECUTOR_UNAVAILABLE",
+    f"{_CODEX_WINDOWS_SANDBOX_HELPER} program not found",
+    "executor failure",
+    "local executor unavailable",
 )
 STABLE_ECC_PACK_COMMANDS = (
     "task",
@@ -137,6 +144,9 @@ class _ExecutorReliabilityReport:
     sandbox_mode: str = "(unknown)"
     execution_strategy: str = "(unknown)"
     command_line: str = "(unknown)"
+    npm_package_location: str = "(unknown)"
+    sandbox_helper_path: str = "(unknown)"
+    runtime_path_prefix: str = "(unknown)"
 
     @property
     def ok(self) -> bool:
@@ -147,6 +157,18 @@ class _ExecutorReliabilityReport:
     def failing_checks(self) -> tuple[_ExecutorReliabilityCheck, ...]:
         """Return checks that block local candidate execution."""
         return tuple(check for check in self.checks if not check.passed)
+
+
+@dataclass(frozen=True)
+class _CodexRuntimeEnvironment:
+    """Resolved Codex process environment shared by status and execution."""
+
+    executable_path: Path
+    env: dict[str, str]
+    npm_package_location: str
+    sandbox_helper_path: str
+    runtime_path_prefix: str
+    sandbox_helper_check: _ExecutorReliabilityCheck
 
 
 class _LocalWorkspaceExecutor(Protocol):
@@ -1096,6 +1118,7 @@ class _CodexCliExecutor:
         _notify_progress(progress, "resolving executable")
         executable = _resolve_executor_executable(self.command)
         if executable is None:
+            command_line = _powershell_command(self.command)
             return _ExecutorReliabilityReport(
                 executor=self.name,
                 repo=self.repo,
@@ -1112,9 +1135,10 @@ class _CodexCliExecutor:
                 ),
                 sandbox_mode=_codex_sandbox_mode(self.command),
                 execution_strategy=_codex_execution_strategy(self.repo),
-                command_line=_powershell_command(self.command),
+                command_line=command_line,
             )
 
+        runtime = _resolve_codex_runtime_environment(executable)
         checks.append(
             _ExecutorReliabilityCheck(
                 name="active_executable",
@@ -1122,15 +1146,16 @@ class _CodexCliExecutor:
                 detail=str(executable),
             )
         )
+        checks.append(runtime.sandbox_helper_check)
         _notify_progress(progress, "checking version")
-        version, version_check = _check_executor_version(executable)
+        version, version_check = _check_executor_version(executable, env=runtime.env)
         checks.append(version_check)
         _notify_progress(progress, "checking CODEX_HOME")
         codex_home = _codex_home_path()
         checks.append(_check_codex_home(codex_home))
 
         if all(check.passed for check in checks):
-            checks.extend(_run_codex_workspace_preflight(self.command, self.repo, progress=progress))
+            checks.extend(_run_codex_workspace_preflight(self.command, self.repo, runtime=runtime, progress=progress))
 
         return _ExecutorReliabilityReport(
             executor=self.name,
@@ -1142,16 +1167,29 @@ class _CodexCliExecutor:
             sandbox_mode=_codex_sandbox_mode(self.command),
             execution_strategy=_codex_execution_strategy(self.repo),
             command_line=_powershell_command(self.command),
+            npm_package_location=runtime.npm_package_location,
+            sandbox_helper_path=runtime.sandbox_helper_path,
+            runtime_path_prefix=runtime.runtime_path_prefix,
         )
 
     def execute(self, prompt: str, *, timeout: float | None) -> _CodexExecutionResult:
         """Run one candidate prompt with connector fallback explicitly disallowed."""
+        runtime = _resolve_codex_runtime_environment(self._resolved_executable())
         return _run_codex_once(
             self.command,
             _local_executor_candidate_prompt(prompt),
             timeout=timeout,
             cwd=self.repo,
+            env=runtime.env,
         )
+
+    def _resolved_executable(self) -> Path:
+        """Return the resolved Codex executable for execution."""
+        executable = _resolve_executor_executable(self.command)
+        if executable is None:
+            msg = f"unable to resolve executable from command: {self.command[0]}"
+            raise OSError(msg)
+        return executable
 
 
 def _build_local_executor(
@@ -1285,11 +1323,94 @@ def _resolve_executor_executable(command: tuple[str, ...]) -> Path | None:
     return Path(resolved).resolve()
 
 
-def _check_executor_version(executable: Path) -> tuple[str, _ExecutorReliabilityCheck]:
+def _resolve_codex_runtime_environment(executable: Path) -> _CodexRuntimeEnvironment:
+    """Resolve the effective Codex process environment used by status and execution."""
+    npm_package = _resolve_codex_npm_package_location(executable)
+    helper = _resolve_codex_sandbox_helper(executable, npm_package=npm_package)
+    env = dict(os.environ)
+    path_prefix = "(none)"
+    if helper is not None:
+        path_prefix = str(helper.parent)
+        env["PATH"] = f"{path_prefix}{os.pathsep}{env.get('PATH', '')}"
+    helper_check = _codex_sandbox_helper_check(helper)
+    return _CodexRuntimeEnvironment(
+        executable_path=executable,
+        env=env,
+        npm_package_location=str(npm_package) if npm_package is not None else "(not found)",
+        sandbox_helper_path=str(helper) if helper is not None else "(not found)",
+        runtime_path_prefix=path_prefix,
+        sandbox_helper_check=helper_check,
+    )
+
+
+def _resolve_codex_npm_package_location(executable: Path) -> Path | None:
+    """Resolve the npm `@openai/codex` package used by an npm shim."""
+    candidates = (
+        executable.parent / "node_modules" / "@openai" / "codex",
+        executable.parent.parent / "node_modules" / "@openai" / "codex",
+    )
+    for candidate in candidates:
+        if (candidate / "package.json").is_file():
+            return candidate.resolve()
+    return None
+
+
+def _resolve_codex_sandbox_helper(executable: Path, *, npm_package: Path | None) -> Path | None:
+    """Resolve the Windows sandbox helper for the active Codex installation."""
+    if sys.platform != "win32":
+        return None
+    candidates: list[Path] = []
+    if npm_package is not None:
+        vendor = Path("vendor") / "x86_64-pc-windows-msvc" / "codex-resources" / _CODEX_WINDOWS_SANDBOX_HELPER
+        candidates.extend(
+            (
+                npm_package.parent / "codex-win32-x64" / vendor,
+                npm_package / "node_modules" / "@openai" / "codex-win32-x64" / vendor,
+            )
+        )
+    candidates.extend(
+        (
+            executable.parent / "codex-resources" / _CODEX_WINDOWS_SANDBOX_HELPER,
+            executable.parent.parent / "codex-resources" / _CODEX_WINDOWS_SANDBOX_HELPER,
+        )
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    path_match = shutil.which(_CODEX_WINDOWS_SANDBOX_HELPER)
+    if path_match is not None and Path(path_match).is_file():
+        return Path(path_match).resolve()
+    return None
+
+
+def _codex_sandbox_helper_check(helper: Path | None) -> _ExecutorReliabilityCheck:
+    """Return a preflight check for the Codex Windows sandbox helper."""
+    if sys.platform != "win32":
+        return _ExecutorReliabilityCheck(
+            name="sandbox_helper",
+            passed=True,
+            detail="Windows sandbox helper is not required on this platform.",
+        )
+    if helper is not None:
+        return _ExecutorReliabilityCheck(
+            name="sandbox_helper",
+            passed=True,
+            detail=str(helper),
+        )
+    return _ExecutorReliabilityCheck(
+        name="sandbox_helper",
+        passed=False,
+        detail=f"{_CODEX_WINDOWS_SANDBOX_HELPER} could not be resolved for the active Codex executable.",
+        suggested_fix="Use the Codex install whose platform package includes codex-resources, or reinstall/update the active Codex CLI.",
+    )
+
+
+def _check_executor_version(executable: Path, *, env: dict[str, str]) -> tuple[str, _ExecutorReliabilityCheck]:
     """Run the executor version command."""
     try:
         completed = subprocess.run(  # noqa: S603  # The resolved executor path is the inspected local execution boundary.
             (str(executable), "--version"),
+            env=env,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -1354,6 +1475,7 @@ def _run_codex_workspace_preflight(
     command: tuple[str, ...],
     repo: Path,
     *,
+    runtime: _CodexRuntimeEnvironment,
     progress: Callable[[str], None] | None,
 ) -> tuple[_ExecutorReliabilityCheck, ...]:
     """Run the Codex CLI workspace reliability preflight."""
@@ -1365,6 +1487,7 @@ def _run_codex_workspace_preflight(
             command,
             _codex_workspace_preflight_prompt(token=token),
             repo=repo,
+            env=runtime.env,
         )
         _notify_progress(progress, "checking workspace read")
         proof_text = _read_preflight_proof(proof)
@@ -1373,6 +1496,7 @@ def _run_codex_workspace_preflight(
             command,
             _codex_workspace_delete_preflight_prompt(),
             repo=repo,
+            env=runtime.env,
         )
     except OSError as exc:
         if proof.exists():
@@ -1399,7 +1523,13 @@ def _run_codex_workspace_preflight(
     return checks
 
 
-def _run_codex_candidate_probe_once(command: tuple[str, ...], prompt: str, *, repo: Path) -> _CodexExecutionResult:
+def _run_codex_candidate_probe_once(
+    command: tuple[str, ...],
+    prompt: str,
+    *,
+    repo: Path,
+    env: dict[str, str],
+) -> _CodexExecutionResult:
     """Run a preflight prompt through the same wrapper used for candidate execution."""
     return _run_codex_once(
         command,
@@ -1407,6 +1537,7 @@ def _run_codex_candidate_probe_once(command: tuple[str, ...], prompt: str, *, re
         timeout=_CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS,
         heartbeat_interval=0,
         cwd=repo,
+        env=env,
         output_mode="capture",
     )
 
@@ -1571,6 +1702,9 @@ active_executable_path: {report.executable_path}
 effective_command: {report.command_line}
 sandbox_mode: {report.sandbox_mode}
 execution_strategy: {report.execution_strategy}
+npm_package_location: {report.npm_package_location}
+sandbox_helper_path: {report.sandbox_helper_path}
+runtime_PATH_prefix: {report.runtime_path_prefix}
 version: {report.version}
 CODEX_HOME: {report.codex_home}
 
@@ -1627,10 +1761,11 @@ def _run_codex_once(
     heartbeat_interval: float = _CODEX_EXECUTION_HEARTBEAT_SECONDS,
     poll_interval: float = _CODEX_PROCESS_POLL_SECONDS,
     cwd: Path | None = None,
+    env: dict[str, str] | None = None,
     output_mode: str = "echo",
 ) -> _CodexExecutionResult:
     """Invoke one foreground Codex command with the prompt on stdin."""
-    process = _launch_codex_process(command, cwd=cwd)
+    process = _launch_codex_process(command, cwd=cwd, env=env)
     if process.stdin is None or process.stdout is None:
         return _CodexExecutionResult(returncode=1, output="")
     owned = _own_codex_process(process)
@@ -1644,7 +1779,12 @@ def _run_codex_once(
     )
 
 
-def _launch_codex_process(command: tuple[str, ...], *, cwd: Path | None = None) -> subprocess.Popen[str]:
+def _launch_codex_process(
+    command: tuple[str, ...],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen[str]:
     """Launch the foreground Codex process."""
     kwargs: dict[str, object] = {}
     if sys.platform == "win32":
@@ -1653,6 +1793,8 @@ def _launch_codex_process(command: tuple[str, ...], *, cwd: Path | None = None) 
         kwargs["start_new_session"] = True
     if cwd is not None:
         kwargs["cwd"] = str(cwd)
+    if env is not None:
+        kwargs["env"] = env
     return subprocess.Popen(  # noqa: S603  # Operator-supplied command is the explicit execution boundary for this pilot.
         command,
         stdin=subprocess.PIPE,
@@ -1678,40 +1820,32 @@ def _run_owned_codex_process(
     process = owned.process
     output = _ProcessOutputBuffer()
     errors: queue.SimpleQueue[str] = queue.SimpleQueue()
+    terminal_failure = threading.Event()
     reader = threading.Thread(
         target=_read_process_stdout,
-        args=(process.stdout, output, errors, output_mode),
+        args=(process.stdout, output, errors, output_mode, terminal_failure),
         name="candidate-execute-stdout",
         daemon=True,
     )
     reader.start()
-    try:
-        process.stdin.write(prompt)
-        process.stdin.close()
-    except KeyboardInterrupt:
-        report = _terminate_process_tree(owned, method="keyboard_interrupt")
-        _join_reader(reader)
-        return _CodexExecutionResult(
-            returncode=130,
-            output=output.text(),
-            interrupted=True,
-            termination_report=report,
-        )
-    except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
-        report = _terminate_process_tree(owned, method="failure")
-        _join_reader(reader)
-        return _CodexExecutionResult(
-            returncode=1,
-            output=output.text(),
-            failed=True,
-            failure_message=str(exc),
-            termination_report=report,
-        )
+    write_result = _write_prompt_or_terminate(owned, prompt=prompt, reader=reader, output=output)
+    if write_result is not None:
+        return write_result
 
     started = time.monotonic()
     next_heartbeat = started + heartbeat_interval
     try:
         while True:
+            if terminal_failure.is_set():
+                report = _terminate_process_tree(owned, method="executor_failure")
+                _join_reader(reader)
+                return _CodexExecutionResult(
+                    returncode=1,
+                    output=output.text(),
+                    failed=True,
+                    failure_message=output.terminal_failure_reason() or "terminal executor failure",
+                    termination_report=report,
+                )
             returncode = _wait_for_process(process, timeout=poll_interval)
             if returncode is not None:
                 _join_reader(reader)
@@ -1752,6 +1886,39 @@ def _run_owned_codex_process(
         )
 
 
+def _write_prompt_or_terminate(
+    owned: _OwnedCodexProcess,
+    *,
+    prompt: str,
+    reader: threading.Thread,
+    output: _ProcessOutputBuffer,
+) -> _CodexExecutionResult | None:
+    """Write the prompt, terminating the process tree if stdin setup fails."""
+    try:
+        owned.process.stdin.write(prompt)
+        owned.process.stdin.close()
+    except KeyboardInterrupt:
+        report = _terminate_process_tree(owned, method="keyboard_interrupt")
+        _join_reader(reader)
+        return _CodexExecutionResult(
+            returncode=130,
+            output=output.text(),
+            interrupted=True,
+            termination_report=report,
+        )
+    except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
+        report = _terminate_process_tree(owned, method="failure")
+        _join_reader(reader)
+        return _CodexExecutionResult(
+            returncode=1,
+            output=output.text(),
+            failed=True,
+            failure_message=str(exc),
+            termination_report=report,
+        )
+    return None
+
+
 def _completed_codex_result(
     returncode: int,
     *,
@@ -1770,6 +1937,7 @@ class _ProcessOutputBuffer:
 
     def __init__(self) -> None:
         self._chunks: list[str] = []
+        self._terminal_failure_reason: str | None = None
         self._lock = threading.Lock()
 
     def append(self, text: str) -> None:
@@ -1782,12 +1950,24 @@ class _ProcessOutputBuffer:
         with self._lock:
             return "".join(self._chunks)
 
+    def mark_terminal_failure(self, reason: str) -> None:
+        """Remember the first terminal executor failure reason."""
+        with self._lock:
+            if self._terminal_failure_reason is None:
+                self._terminal_failure_reason = reason
+
+    def terminal_failure_reason(self) -> str | None:
+        """Return the first terminal executor failure reason."""
+        with self._lock:
+            return self._terminal_failure_reason
+
 
 def _read_process_stdout(
     stream: object,
     output: _ProcessOutputBuffer,
     errors: queue.SimpleQueue[str],
     output_mode: str,
+    terminal_failure: threading.Event,
 ) -> None:
     """Read process output without blocking the watchdog loop."""
     try:
@@ -1796,8 +1976,24 @@ def _read_process_stdout(
                 sys.stdout.write(chunk)
                 sys.stdout.flush()
             output.append(chunk)
+            reason = _terminal_executor_failure_reason(output.text())
+            if reason is not None:
+                output.mark_terminal_failure(reason)
+                terminal_failure.set()
+                return
     except Exception as exc:  # noqa: BLE001  # Reader failures must not stop timeout/interruption cleanup.
         errors.put(str(exc) or type(exc).__name__)
+
+
+def _terminal_executor_failure_reason(output: str) -> str | None:
+    """Return a terminal executor failure reason when Codex output proves local execution is unavailable."""
+    lower = output.lower()
+    for pattern in _CODEX_TERMINAL_EXECUTOR_FAILURE_PATTERNS:
+        if pattern.lower() in lower:
+            return pattern
+    if "fail" in lower and ("executor" in lower or "sandbox" in lower or "local workspace execution" in lower):
+        return "executor failure"
+    return None
 
 
 def _wait_for_process(process: subprocess.Popen[str], *, timeout: float) -> int | None:
