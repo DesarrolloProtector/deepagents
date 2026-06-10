@@ -1,0 +1,177 @@
+{
+  "adaptive_adjustments": [
+    "No adaptive planning adjustments applied."
+  ],
+  "automation_readiness": {
+    "classification": "automation_ready",
+    "readiness_decision_record": {
+      "automation_rationale": [
+        "Pack, prompt-skill, capability, and benchmark validation are passing.",
+        "Selected pack skills have benchmark coverage: navigation_surface_convergence.",
+        "No selected knowledge is required by the current narrow task evidence.",
+        "No negative learning signals were found.",
+        "Task mode is compatible with a single candidate-backed execution after explicit human approval.",
+        "automation_ready means candidate-backed execution after explicit approval, not autonomous execution."
+      ],
+      "blocking_rationale": [],
+      "decision": "automation_ready wins because required evidence is present: Pack, prompt-skill, capability, and benchmark validation are passing., Selected pack skills have benchmark coverage: navigation_surface_convergence., No selected knowledge is required by the current narrow task evidence., No negative learning signals were found., Task mode is compatible with a single candidate-backed execution after explicit human approval., automation_ready means candidate-backed execution after explicit approval, not autonomous execution.",
+      "evidence": {
+        "benchmark_validation_state": "passing",
+        "learning_signals_used": [
+          "No negative learning signals used."
+        ],
+        "pack_validation_state": {
+          "capabilities": "valid",
+          "prompt_skills": "valid",
+          "validation": "valid"
+        },
+        "scope_characteristics": [
+          "Task mode: ui_runtime_bug.",
+          "Implementation scope is bounded by the proposed task and review contract.",
+          "Pack specialization selected: navigation_surface_convergence.",
+          "Runtime generic skill selected: base_prompt_quality, implementation_fix."
+        ],
+        "selected_knowledge": [],
+        "selected_skills": [
+          {
+            "name": "navigation_surface_convergence",
+            "source": "pack"
+          },
+          {
+            "name": "base_prompt_quality",
+            "source": "runtime_generic"
+          },
+          {
+            "name": "implementation_fix",
+            "source": "runtime_generic"
+          }
+        ]
+      },
+      "remaining_uncertainty": [],
+      "supervision_rationale": []
+    },
+    "reasons": [
+      "Pack validation: valid.",
+      "Pack prompt-skill validation: valid.",
+      "Pack capability validation: valid.",
+      "Pack benchmark validation: passing.",
+      "Selected skills: navigation_surface_convergence [pack], base_prompt_quality [runtime_generic], implementation_fix [runtime_generic].",
+      "Pack, prompt-skill, capability, and benchmark validation are passing.",
+      "Selected pack skills have benchmark coverage: navigation_surface_convergence.",
+      "No selected knowledge is required by the current narrow task evidence.",
+      "No negative learning signals were found.",
+      "Task mode is compatible with a single candidate-backed execution after explicit human approval.",
+      "automation_ready means candidate-backed execution after explicit approval, not autonomous execution."
+    ],
+    "recommended_next_step": "proceed with candidate-backed execution only after explicit human approval; autonomous execution remains disabled."
+  },
+  "benchmark_coverage": {
+    "navigation_surface_convergence": [
+      "legacy-onboarding-path-convergence",
+      "navigation-convergence"
+    ]
+  },
+  "execution_boundaries": {
+    "autonomous_loops": false,
+    "codex_execution": false,
+    "model_calls": false,
+    "workflow_engine": false
+  },
+  "learning_signals": [
+    "No outcome history entries match the selected pack/skills."
+  ],
+  "proposed_codex_prompt": "Codex Prompt:\nTitle: Fix legacy onboarding path convergence for operator UI\nTask mode: ui_runtime_bug\nObjective: Fix legacy onboarding path convergence for operator UI views\nTask details:\nObserved state:\nNavigation, menu, dashboard, or view surfaces are not converging on one coherent operator path.\n\nExpected behavior:\nOperators should reach the same useful workflow surface consistently from navigation, menus, indexes, and legacy views.\n\nObjective:\nFix legacy onboarding path convergence for operator UI views\n\nScope:\nInspect only enough code to locate the faulty condition, then fix surgically. Inspect only enough code to locate the faulty condition, then fix surgically. Preserve explicit scope, restrictions, and validation as hard boundaries. Keep the prompt compact and operational; avoid boilerplate and empty task details. Trace route/menu/view entry points and converge only the requested navigation surface. Scoped edits are allowed only where needed for the requested behavior change. Preserve exact references: UI.\n\nRestrictions:\n- Preserve unrelated behavior and public contracts.\n- Do not include `Files read` or `Files changed` unless explicitly requested.\n- Do not redesign dashboards or unrelated navigation; preserve existing permissions and routes.\n- Do not turn the task into an audit-only response.\n\nValidation:\n- Run the smallest focused build/test/smoke that proves the requested behavior.\n- Verify the affected navigation entries land on the intended operational view.\n- Verify the changed behavior through the narrowest credible check.\nSelected context paths:\n- AGENTS.md\n\nScope boundaries:\n- Inspect only enough code to locate the faulty condition, then fix surgically.\n- Scoped edits are allowed when needed to fix the requested UI/runtime issue.\n- Trace route/menu/view entry points and converge only the requested navigation surface.\n- Scoped edits are allowed only where needed for the requested behavior change.\nNo-drift rules:\n- Stay on the requested repo/workflow surface.\n- Do not broaden repo exploration beyond selected context unless directly needed.\n- Preserve existing public APIs and behavior unless the task explicitly asks to change them.\n- Do not import assumptions from unrelated repos or broader architecture.\n- Do not expand governance, documentation, memory, dashboards, MCP, or autonomous execution.\n- Do not redesign unrelated workflows.\nMode-specific requirements:\n- Trace route/menu/view entry points and converge only the requested navigation surface.\n- Do not redesign dashboards or unrelated navigation; preserve existing permissions and routes.\n- Verify the affected navigation entries land on the intended operational view.\n- Scoped edits are allowed only where needed for the requested behavior change.\n- Do not turn the task into an audit-only response.\n- Verify the changed behavior through the narrowest credible check.\nValidation expectations:\n- inspect only enough code to locate the faulty condition, then fix surgically\n- identify the narrow runtime or route path that should be validated\n- propose the smallest relevant test or smoke check\nMandatory output:\n- Summary\n- Validation\n- PASS/FAIL",
+  "review_contract": {
+    "anti_drift_checks": [
+      "Reject changes outside the proposed Codex task, selected context, or explicitly justified adjacent files.",
+      "Reject dashboard/session/workflow-engine/agent-loop additions unless the task explicitly requested them.",
+      "Reject raw knowledge dumps; knowledge should stay compact and task-relevant.",
+      "spinner",
+      "button render condition"
+    ],
+    "benchmark_relevance": [
+      "navigation_surface_convergence: legacy-onboarding-path-convergence, navigation-convergence"
+    ],
+    "evidence_handling": [
+      "No evidence references were attached."
+    ],
+    "evidence_references": [],
+    "expected_files_likely_to_change": [
+      "Unknown until code inspection"
+    ],
+    "expected_implementation_areas": [
+      "Route, menu, index, dashboard, or promoted operator-view entry points."
+    ],
+    "expected_validation_scope": [
+      "inspect only enough code to locate the faulty condition, then fix surgically",
+      "identify the narrow runtime or route path that should be validated",
+      "propose the smallest relevant test or smoke check",
+      "Run the smallest focused build/test/smoke that proves the requested behavior.",
+      "Verify the affected navigation entries land on the intended operational view.",
+      "Verify the changed behavior through the narrowest credible check.",
+      "Confirm validation is proportional to the changed files and behavior claimed by Codex."
+    ],
+    "operator_evidence_notes": [],
+    "pass_fail_criteria": [
+      "PASS only if the Codex output addresses the proposed task and respects every selected pack-skill restriction.",
+      "PASS only if validation evidence is concrete, scoped, and matches the claimed behavior.",
+      "PASS only if escalated validation includes VDR uncertainty, cheapest_falsifier, and escalation_reason evidence.",
+      "FAIL if Codex executes autonomous loops, creates background sessions, or introduces unrelated framework/platform pieces.",
+      "FAIL if changed files or behavior drift beyond the task without explicit justification.",
+      "PASS must account for benchmark-covered pack skills: navigation_surface_convergence."
+    ],
+    "review_risks": [
+      "Codex may broaden the task beyond the proposed prompt or selected pack capability.",
+      "Codex may claim PASS without concrete validation evidence.",
+      "Do not redesign dashboards or unrelated navigation; preserve existing permissions and routes.",
+      "Generic Protector fallback is present; verify it did not overpower pack-specific specialization."
+    ],
+    "validation_decision_record": {
+      "cheapest_falsifier": "Name the smallest credible check that could disprove the change.",
+      "escalation_reason": "Explain why heavier validation is necessary when escalating beyond the cheapest falsifier.",
+      "global_validation_law": "Choose the cheapest credible falsifier first; escalate validation only when uncertainty remains and record why.",
+      "uncertainty": "State what remains uncertain before choosing validation."
+    }
+  },
+  "schema_version": "ecc-automation-candidate-v1",
+  "selected_context_paths": [
+    "AGENTS.md"
+  ],
+  "selected_knowledge": {
+    "facts": [],
+    "paths": []
+  },
+  "selected_pack": {
+    "benchmark_validation_status": "passing",
+    "capabilities_validation_status": "valid",
+    "name": "protector-financiacioncore",
+    "path": "C:\\Users\\DesarrolladorProtect\\source\\repos\\deepagents\\packs\\protector-financiacioncore",
+    "prompt_skills_validation_status": "valid",
+    "validation_status": "valid"
+  },
+  "selected_skills": [
+    {
+      "name": "base_prompt_quality",
+      "source": "runtime_generic"
+    },
+    {
+      "name": "navigation_surface_convergence",
+      "source": "pack"
+    },
+    {
+      "name": "implementation_fix",
+      "source": "runtime_generic"
+    }
+  ],
+  "task": {
+    "evidence_notes": [],
+    "evidence_paths": [],
+    "intake_refinement": {
+      "enabled": false,
+      "status": "not_requested"
+    },
+    "mode": "ui_runtime_bug",
+    "raw_operator_task": "Fix legacy onboarding path convergence for operator UI views",
+    "summary": "Fix legacy onboarding path convergence for operator UI views"
+  }
+}
