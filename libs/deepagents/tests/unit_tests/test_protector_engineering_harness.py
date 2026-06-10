@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1252,8 +1253,7 @@ def test_automation_readiness_allows_generic_only_narrow_visual_task(tmp_path: P
     assert all(skill["source"] == "runtime_generic" for skill in selected_skills)
     assert rendered.automation_candidate["automation_readiness"]["classification"] == "automation_ready"
     assert (
-        "No pack specialization was selected; generic runtime skills are acceptable because no pack-specific evidence is required."
-        in rendered.text
+        "No pack specialization was selected; generic runtime skills are acceptable because no pack-specific evidence is required." in rendered.text
     )
     assert "automation_ready wins because required evidence is present" in record["decision"]
 
@@ -3096,7 +3096,7 @@ def test_cli_candidate_execute_interrupt_terminates_child_and_preserves_output(
     ).automation_candidate
     candidate.write_text(json.dumps(payload), encoding="utf-8")
     approval_sha = engineering.automation_candidate_approval_sha(payload)
-    terminated: list[object] = []
+    terminated: list[tuple[object, str]] = []
 
     class FakeStdin:
         def write(self, text: str) -> None:
@@ -3130,9 +3130,15 @@ def test_cli_candidate_execute_interrupt_terminates_child_and_preserves_output(
             msg = "wait should not be reached after KeyboardInterrupt"
             raise AssertionError(msg)
 
-    def fake_terminate(process: object) -> bool:
-        terminated.append(process)
-        return True
+    def fake_terminate(process: object, *, method: str) -> cli._ProcessTerminationReport:
+        terminated.append((process, method))
+        return cli._ProcessTerminationReport(
+            root_pid=12345,
+            tracked_pids=(12345, 23456),
+            method=method,
+            terminated_pids=(12345, 23456),
+            resisted_pids=(),
+        )
 
     monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
     monkeypatch.setattr(cli, "_terminate_process_tree", fake_terminate)
@@ -3157,10 +3163,15 @@ def test_cli_candidate_execute_interrupt_terminates_child_and_preserves_output(
 
     stdout = capsys.readouterr().out
     assert len(terminated) == 1
+    assert terminated[0][1] == "keyboard_interrupt"
     assert "partial codex output" in stdout
     assert output.read_text(encoding="utf-8") == "partial codex output\n"
     assert "interrupted_by_operator" in stdout
-    assert "child_process_terminated" in stdout
+    assert "Process tree status: process_tree_terminated" in stdout
+    assert "- root_process_id: 12345" in stdout
+    assert "- tracked_process_count: 2" in stdout
+    assert "- termination_method: keyboard_interrupt" in stdout
+    assert "- terminated_processes: 12345, 23456" in stdout
     assert "Next recommended command:" in stdout
     assert f"ph candidate-outcome {candidate.resolve()} --codex-output {output.resolve()} --repo {repo} --save-history" in stdout
 
@@ -3191,15 +3202,22 @@ def test_cli_candidate_execute_interrupt_reports_termination_failure(tmp_path: P
             raise KeyboardInterrupt
 
     class FakeProcess:
+        pid = 12345
         stdin = FakeStdin()
         stdout = InterruptingStdout()
 
         def __init__(self, command: object, **kwargs: object) -> None:
             _ = command, kwargs
 
-    def fake_terminate_failure(process: object) -> bool:
+    def fake_terminate_failure(process: object, *, method: str) -> cli._ProcessTerminationReport:
         _ = process
-        return False
+        return cli._ProcessTerminationReport(
+            root_pid=12345,
+            tracked_pids=(12345,),
+            method=method,
+            terminated_pids=(),
+            resisted_pids=(12345,),
+        )
 
     monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
     monkeypatch.setattr(cli, "_terminate_process_tree", fake_terminate_failure)
@@ -3208,8 +3226,189 @@ def test_cli_candidate_execute_interrupt_reports_termination_failure(tmp_path: P
 
     stdout = capsys.readouterr().out
     assert "interrupted_by_operator" in stdout
-    assert "termination_failed" in stdout
+    assert "termination_incomplete" in stdout
+    assert "- resisted_processes: 12345" in stdout
     assert "Next recommended command:" not in stdout
+
+
+def test_cli_candidate_execute_timeout_cleans_up_tree_and_reports_diagnostics(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    output = tmp_path / "codex-output.txt"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+
+    class FakeProcess:
+        pid = 12345
+        stdin = object()
+        stdout = object()
+
+        def __init__(self, command: object, **kwargs: object) -> None:
+            _ = command, kwargs
+
+        def communicate(self, prompt: str, *, timeout: float | None = None) -> tuple[str, None]:
+            assert prompt.startswith("Codex Prompt:\n")
+            assert timeout == 0.25
+            raise subprocess.TimeoutExpired(cmd=("fake-codex",), timeout=timeout, output="partial before timeout\n")
+
+    def fake_terminate(process: object, *, method: str) -> cli._ProcessTerminationReport:
+        _ = process
+        return cli._ProcessTerminationReport(
+            root_pid=12345,
+            tracked_pids=(12345, 23456, 34567),
+            method=method,
+            terminated_pids=(12345, 23456, 34567),
+            resisted_pids=(),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(cli, "_terminate_process_tree", fake_terminate)
+
+    assert (
+        cli.main(
+            [
+                "candidate-execute",
+                "--codex-cmd",
+                "fake-codex",
+                "--approve-sha",
+                approval_sha,
+                "--timeout",
+                "0.25",
+                "--output",
+                str(output),
+                str(candidate),
+            ]
+        )
+        == 124
+    )
+
+    stdout = capsys.readouterr().out
+    assert "partial before timeout" in stdout
+    assert output.read_text(encoding="utf-8") == "partial before timeout\n"
+    assert "Candidate execution status: timeout" in stdout
+    assert "- root_process_id: 12345" in stdout
+    assert "- tracked_process_count: 3" in stdout
+    assert "- termination_method: timeout" in stdout
+    assert "- resisted_processes: (none)" in stdout
+
+
+def test_run_codex_once_failure_cleans_up_tree(monkeypatch) -> None:
+    class FailingStdout:
+        def __iter__(self) -> "FailingStdout":
+            return self
+
+        def __next__(self) -> str:
+            msg = "stdout pipe failed"
+            raise RuntimeError(msg)
+
+    class FakeProcess:
+        pid = 12345
+
+        class FakeStdin:
+            def write(self, text: str) -> None:
+                assert text == "prompt"
+
+            def close(self) -> None:
+                return None
+
+        def __init__(self, command: object, **kwargs: object) -> None:
+            _ = command, kwargs
+            self.stdin = self.FakeStdin()
+            self.stdout = FailingStdout()
+
+    def fake_terminate(process: object, *, method: str) -> cli._ProcessTerminationReport:
+        _ = process
+        return cli._ProcessTerminationReport(
+            root_pid=12345,
+            tracked_pids=(12345, 23456),
+            method=method,
+            terminated_pids=(12345, 23456),
+            resisted_pids=(),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(cli, "_terminate_process_tree", fake_terminate)
+
+    result = cli._run_codex_once(("fake-codex",), "prompt")
+
+    assert result.returncode == 1
+    assert result.failed
+    assert result.failure_message == "stdout pipe failed"
+    assert result.termination_report is not None
+    assert result.termination_report.method == "failure"
+    assert result.termination_report.tracked_pids == (12345, 23456)
+
+
+def test_run_codex_once_timeout_terminates_child_process(tmp_path: Path) -> None:
+    pid_file = tmp_path / "child.pid"
+    child_code = (
+        f"import os, pathlib, time\npath = pathlib.Path({str(pid_file)!r})\npath.write_text(str(os.getpid()), encoding='utf-8')\ntime.sleep(30)\n"
+    )
+    root_code = (
+        "import pathlib, subprocess, sys, time\n"
+        f"path = pathlib.Path({str(pid_file)!r})\n"
+        f"child_code = {child_code!r}\n"
+        "child = subprocess.Popen([sys.executable, '-c', child_code])\n"
+        "deadline = time.monotonic() + 5\n"
+        "while not path.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.01)\n"
+        "print(f'child={child.pid}', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+
+    result = cli._run_codex_once((sys.executable, "-c", root_code), "prompt", timeout=1)
+
+    child_pid = int(pid_file.read_text(encoding="utf-8"))
+    assert result.returncode == 124
+    assert result.timed_out
+    assert result.termination_report is not None
+    assert result.termination_report.method == "timeout"
+    assert child_pid in result.termination_report.tracked_pids
+    assert child_pid in result.termination_report.terminated_pids
+    assert child_pid not in result.termination_report.resisted_pids
+    assert not cli._is_pid_running(child_pid)
+
+
+def test_run_codex_once_timeout_terminates_nested_descendant(tmp_path: Path) -> None:
+    pid_file = tmp_path / "nested-pids.txt"
+    grandchild_code = "import time\ntime.sleep(30)\n"
+    child_code = (
+        "import os, pathlib, subprocess, sys, time\n"
+        f"path = pathlib.Path({str(pid_file)!r})\n"
+        f"grandchild_code = {grandchild_code!r}\n"
+        "grandchild = subprocess.Popen([sys.executable, '-c', grandchild_code])\n"
+        "path.write_text(f'{os.getpid()} {grandchild.pid}', encoding='utf-8')\n"
+        "time.sleep(30)\n"
+    )
+    root_code = (
+        "import pathlib, subprocess, sys, time\n"
+        f"path = pathlib.Path({str(pid_file)!r})\n"
+        f"child_code = {child_code!r}\n"
+        "child = subprocess.Popen([sys.executable, '-c', child_code])\n"
+        "deadline = time.monotonic() + 5\n"
+        "while not path.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.01)\n"
+        "print(f'child={child.pid}', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+
+    result = cli._run_codex_once((sys.executable, "-c", root_code), "prompt", timeout=1)
+
+    child_pid, grandchild_pid = (int(pid) for pid in pid_file.read_text(encoding="utf-8").split())
+    assert result.returncode == 124
+    assert result.timed_out
+    assert result.termination_report is not None
+    assert result.termination_report.method == "timeout"
+    assert child_pid in result.termination_report.tracked_pids
+    assert grandchild_pid in result.termination_report.tracked_pids
+    assert not result.termination_report.resisted_pids
+    assert not cli._is_pid_running(child_pid)
+    assert not cli._is_pid_running(grandchild_pid)
 
 
 def test_run_codex_once_replaces_invalid_utf8_output(capsys) -> None:

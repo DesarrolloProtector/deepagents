@@ -314,6 +314,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     candidate_execute.add_argument("--output", type=Path, default=None, help="Optional file path for persisting raw Codex output.")
     candidate_execute.add_argument("--overwrite", action="store_true", help="Allow --output to replace an existing file.")
     candidate_execute.add_argument("--repo", default=None, help="Optional repository path or alias shown in the next candidate-outcome command.")
+    candidate_execute.add_argument("--timeout", type=float, default=None, help="Optional timeout in seconds for the foreground Codex execution.")
     candidate_execute.add_argument("candidate_json", type=Path, help="Automation-ready candidate JSON to execute once.")
 
     run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
@@ -895,24 +896,35 @@ def _run_candidate_execute(args: argparse.Namespace, parser: argparse.ArgumentPa
         reason = "approval SHA is missing" if args.approve_sha is None else "approval SHA does not match"
         sys.stdout.write(_render_candidate_execute_refusal(expected_sha, reason))
         return 1
+    if args.timeout is not None and args.timeout <= 0:
+        parser.error("--timeout must be greater than 0")
 
     prompt = automation_candidate_codex_prompt(payload)
     if not prompt:
         parser.error("candidate proposed_codex_prompt is missing")
     command = _parse_codex_command(args.codex_cmd, parser)
     try:
-        result = _run_codex_once(command, prompt)
+        result = _run_codex_once(command, prompt, timeout=args.timeout)
     except OSError as exc:
         parser.error(f"Codex command failed to start: {exc}")
 
     _write_candidate_execution_output(args, parser, result)
-    if result.interrupted:
-        sys.stdout.write(_render_candidate_execute_interruption(args.candidate_json, output=args.output, repo=args.repo, result=result))
-        return 130
+    if result.termination_report is not None:
+        sys.stdout.write(_render_candidate_execute_termination(args.candidate_json, output=args.output, repo=args.repo, result=result))
+        return _candidate_execute_termination_returncode(result)
     sys.stdout.write("\nNext review command:\n")
     sys.stdout.write(_candidate_outcome_next_command(args.candidate_json, output=args.output, repo=args.repo))
     sys.stdout.write("\n")
     return result.returncode
+
+
+def _candidate_execute_termination_returncode(result: _CodexExecutionResult) -> int:
+    """Return the CLI status for a controlled candidate termination."""
+    if result.timed_out:
+        return 124
+    if result.failed:
+        return result.returncode
+    return 130
 
 
 def _write_candidate_execution_output(
@@ -936,10 +948,25 @@ class _CodexExecutionResult:
     returncode: int
     output: str
     interrupted: bool = False
-    child_process_terminated: bool | None = None
+    timed_out: bool = False
+    failed: bool = False
+    failure_message: str | None = None
+    termination_report: _ProcessTerminationReport | None = None
 
 
-def _run_codex_once(command: tuple[str, ...], prompt: str) -> _CodexExecutionResult:
+@dataclass(frozen=True)
+class _ProcessTerminationReport:
+    """Process-tree termination diagnostics."""
+
+    root_pid: int | None
+    tracked_pids: tuple[int, ...]
+    method: str
+    terminated_pids: tuple[int, ...]
+    resisted_pids: tuple[int, ...]
+    diagnostics_error: str | None = None
+
+
+def _run_codex_once(command: tuple[str, ...], prompt: str, *, timeout: float | None = None) -> _CodexExecutionResult:
     """Invoke one foreground Codex command with the prompt on stdin."""
     kwargs: dict[str, object] = {}
     if sys.platform == "win32":
@@ -958,33 +985,107 @@ def _run_codex_once(command: tuple[str, ...], prompt: str) -> _CodexExecutionRes
     )
     if process.stdin is None or process.stdout is None:
         return _CodexExecutionResult(returncode=1, output="")
+    if timeout is None:
+        return _run_codex_streaming(process, prompt)
+    return _run_codex_with_timeout(process, prompt, timeout=timeout)
+
+
+def _run_codex_streaming(process: subprocess.Popen[str], prompt: str) -> _CodexExecutionResult:
+    """Stream Codex output for the default foreground execution path."""
     process.stdin.write(prompt)
     process.stdin.close()
-
     chunks: list[str] = []
     try:
         for chunk in process.stdout:
             sys.stdout.write(chunk)
             chunks.append(chunk)
-        return _CodexExecutionResult(returncode=process.wait(), output="".join(chunks))
     except KeyboardInterrupt:
-        terminated = _terminate_process_tree(process)
+        report = _terminate_process_tree(process, method="keyboard_interrupt")
         return _CodexExecutionResult(
             returncode=130,
             output="".join(chunks),
             interrupted=True,
-            child_process_terminated=terminated,
+            termination_report=report,
         )
+    except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
+        report = _terminate_process_tree(process, method="failure")
+        return _CodexExecutionResult(
+            returncode=1,
+            output="".join(chunks),
+            failed=True,
+            failure_message=str(exc),
+            termination_report=report,
+        )
+    return _CodexExecutionResult(returncode=process.wait(), output="".join(chunks))
 
 
-def _terminate_process_tree(process: subprocess.Popen[str]) -> bool:
+def _run_codex_with_timeout(process: subprocess.Popen[str], prompt: str, *, timeout: float) -> _CodexExecutionResult:
+    """Run Codex with an explicit timeout."""
+    try:
+        output, _ = process.communicate(prompt, timeout=timeout)
+    except KeyboardInterrupt:
+        report = _terminate_process_tree(process, method="keyboard_interrupt")
+        return _CodexExecutionResult(
+            returncode=130,
+            output="",
+            interrupted=True,
+            termination_report=report,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = _timeout_output(exc)
+        if output:
+            sys.stdout.write(output)
+        report = _terminate_process_tree(process, method="timeout")
+        return _CodexExecutionResult(
+            returncode=124,
+            output=output,
+            timed_out=True,
+            termination_report=report,
+        )
+    except Exception as exc:  # noqa: BLE001  # Failure cleanup must run before surfacing a deterministic result.
+        report = _terminate_process_tree(process, method="failure")
+        return _CodexExecutionResult(
+            returncode=1,
+            output="",
+            failed=True,
+            failure_message=str(exc),
+            termination_report=report,
+        )
+    output = output or ""
+    sys.stdout.write(output)
+    return _CodexExecutionResult(returncode=process.returncode if process.returncode is not None else process.wait(), output=output)
+
+
+def _timeout_output(exc: subprocess.TimeoutExpired) -> str:
+    """Return partial timeout output as text."""
+    output = exc.output or ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
+
+
+def _terminate_process_tree(process: subprocess.Popen[str], *, method: str) -> _ProcessTerminationReport:
     """Terminate the foreground Codex process tree where the platform allows it."""
     pid = getattr(process, "pid", None)
     if not isinstance(pid, int) or pid <= 0:
-        return _terminate_direct_process(process)
+        terminated = _terminate_direct_process(process)
+        return _ProcessTerminationReport(
+            root_pid=None,
+            tracked_pids=(),
+            method=method,
+            terminated_pids=() if not terminated else (0,),
+            resisted_pids=(0,) if not terminated else (),
+        )
+    diagnostics_error: str | None = None
+    descendants: tuple[int, ...] = ()
+    try:
+        descendants = _collect_descendant_pids(pid)
+    except Exception as exc:  # noqa: BLE001  # Diagnostics must not block cleanup.
+        diagnostics_error = str(exc)
+    tracked = _ordered_unique_pids((pid, *descendants))
     if sys.platform == "win32":
         try:
-            completed = subprocess.run(  # noqa: S603  # Fixed Windows process-tree termination command.
+            subprocess.run(  # noqa: S603  # Fixed Windows process-tree termination command.
                 ("taskkill", "/PID", str(pid), "/T", "/F"),
                 check=False,
                 capture_output=True,
@@ -993,15 +1094,164 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> bool:
                 errors="replace",
             )
         except OSError:
-            return _terminate_direct_process(process)
-        if completed.returncode == 0:
-            return True
-        return _terminate_direct_process(process)
+            _terminate_direct_process(process)
+    else:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            _terminate_direct_process(process)
     try:
-        os.killpg(pid, signal.SIGTERM)
-    except OSError:
-        return _terminate_direct_process(process)
+        process.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        _terminate_direct_process(process)
+    resisted = _running_pids(tracked)
+    terminated = tuple(item for item in tracked if item not in resisted)
+    return _ProcessTerminationReport(
+        root_pid=pid,
+        tracked_pids=tracked,
+        method=method,
+        terminated_pids=terminated,
+        resisted_pids=resisted,
+        diagnostics_error=diagnostics_error,
+    )
+
+
+def _collect_descendant_pids(root_pid: int) -> tuple[int, ...]:
+    """Collect descendants for a root process from the platform process table."""
+    parent_map = _windows_process_parent_map() if sys.platform == "win32" else _posix_process_parent_map()
+    descendants: list[int] = []
+    pending = [root_pid]
+    while pending:
+        parent = pending.pop(0)
+        children = sorted(pid for pid, ppid in parent_map.items() if ppid == parent)
+        descendants.extend(children)
+        pending.extend(children)
+    return tuple(descendants)
+
+
+def _windows_process_parent_map() -> dict[int, int]:
+    """Return Windows process parent relationships using a Toolhelp snapshot."""
+    max_path = 260
+    th32cs_snapprocess = 0x00000002
+    invalid_handle_value = ctypes.c_void_p(-1).value
+
+    class ProcessEntry32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.c_ulong),
+            ("cntUsage", ctypes.c_ulong),
+            ("th32ProcessID", ctypes.c_ulong),
+            ("th32DefaultHeapID", ctypes.c_void_p),
+            ("th32ModuleID", ctypes.c_ulong),
+            ("cntThreads", ctypes.c_ulong),
+            ("th32ParentProcessID", ctypes.c_ulong),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", ctypes.c_ulong),
+            ("szExeFile", ctypes.c_wchar * max_path),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    snapshot = kernel32.CreateToolhelp32Snapshot(th32cs_snapprocess, 0)
+    if snapshot == invalid_handle_value:
+        msg = "CreateToolhelp32Snapshot failed"
+        raise OSError(msg)
+    try:
+        entry = ProcessEntry32()
+        entry.dwSize = ctypes.sizeof(ProcessEntry32)
+        parent_map: dict[int, int] = {}
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            msg = "Process32FirstW failed"
+            raise OSError(msg)
+        while True:
+            parent_map[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                break
+        return parent_map
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def _posix_process_parent_map() -> dict[int, int]:
+    """Return POSIX process parent relationships from `ps` output."""
+    completed = subprocess.run(
+        ("ps", "-eo", "pid=,ppid="),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.returncode != 0:
+        msg = completed.stderr.strip() or "ps process table query failed"
+        raise OSError(msg)
+    parent_map: dict[int, int] = {}
+    expected_columns = 2
+    for line in completed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != expected_columns:
+            continue
+        try:
+            child, parent = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        parent_map[child] = parent
+    return parent_map
+
+
+def _ordered_unique_pids(pids: tuple[int, ...]) -> tuple[int, ...]:
+    """Return positive PIDs in first-seen order."""
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for pid in pids:
+        if pid <= 0 or pid in seen:
+            continue
+        seen.add(pid)
+        ordered.append(pid)
+    return tuple(ordered)
+
+
+def _running_pids(pids: tuple[int, ...]) -> tuple[int, ...]:
+    """Return PIDs that still appear alive."""
+    return tuple(pid for pid in pids if _is_pid_running(pid))
+
+
+def _is_pid_running(pid: int) -> bool:
+    """Return whether a PID appears to still be running."""
+    if sys.platform == "win32":
+        return _is_windows_pid_running(pid)
+    proc_state_index = 2
+    proc_stat = Path("/proc") / str(pid) / "stat"
+    if proc_stat.exists():
+        try:
+            fields = proc_stat.read_text(encoding="utf-8", errors="replace").split()
+        except OSError:
+            fields = []
+        if len(fields) > proc_state_index and fields[proc_state_index] == "Z":
+            return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
     return True
+
+
+def _is_windows_pid_running(pid: int) -> bool:
+    """Return whether a Windows PID can be opened for synchronization."""
+    process_query_limited_information = 0x00001000
+    still_active = 259
+    inherit_handle = False
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(process_query_limited_information, inherit_handle, pid)
+    if not handle:
+        return False
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return exit_code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _terminate_direct_process(process: object) -> bool:
@@ -1037,24 +1287,59 @@ Re-run with: --approve-sha {expected_sha}
 """
 
 
-def _render_candidate_execute_interruption(
+def _render_candidate_execute_termination(
     candidate: Path,
     *,
     output: Path | None,
     repo: str | None,
     result: _CodexExecutionResult,
 ) -> str:
-    """Render deterministic interruption status for `candidate-execute`."""
-    termination = "child_process_terminated" if result.child_process_terminated else "termination_failed"
+    """Render deterministic termination status for `candidate-execute`."""
+    report = result.termination_report
+    status = "interrupted_by_operator"
+    if result.timed_out:
+        status = "timeout"
+    elif result.failed:
+        status = "failure"
+    termination = "process_tree_terminated"
+    if report is not None and report.resisted_pids:
+        termination = "termination_incomplete"
     output_row = f"raw_output_saved: {output.resolve()}" if output is not None else "raw_output_saved: (not requested)"
+    diagnostics = _render_process_termination_report(report)
+    failure = f"Failure: {result.failure_message}\n" if result.failure_message else ""
     next_command = ""
     if output is not None:
         next_command = f"\nNext recommended command:\n{_candidate_outcome_next_command(candidate, output=output, repo=repo)}\n"
     return f"""
-Candidate execution status: interrupted_by_operator
-Child process status: {termination}
+Candidate execution status: {status}
+Process tree status: {termination}
+{failure}{diagnostics}
 {output_row}
 {next_command}"""
+
+
+def _render_process_termination_report(report: _ProcessTerminationReport | None) -> str:
+    """Render process-tree termination diagnostics."""
+    if report is None:
+        return "Process termination diagnostics: unavailable\n"
+    rows = [
+        "Process termination diagnostics:",
+        f"- root_process_id: {report.root_pid if report.root_pid is not None else '(unknown)'}",
+        f"- tracked_process_count: {len(report.tracked_pids)}",
+        f"- termination_method: {report.method}",
+        f"- terminated_processes: {_format_pid_tuple(report.terminated_pids)}",
+        f"- resisted_processes: {_format_pid_tuple(report.resisted_pids)}",
+    ]
+    if report.diagnostics_error:
+        rows.append(f"- diagnostics_error: {report.diagnostics_error}")
+    return "\n".join(rows) + "\n"
+
+
+def _format_pid_tuple(pids: tuple[int, ...]) -> str:
+    """Render a PID tuple for diagnostics."""
+    if not pids:
+        return "(none)"
+    return ", ".join(str(pid) for pid in pids)
 
 
 def _candidate_outcome_next_command(candidate: Path, *, output: Path | None, repo: str | None) -> str:
