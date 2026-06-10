@@ -18,7 +18,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, Self
 
 from deepagents._version import __version__
 from deepagents.harnesses.protector._ecc import render_ecc_status
@@ -49,7 +49,7 @@ from deepagents.harnesses.protector._engineering import (
 from deepagents.profiles.harness.harness_profiles import _get_harness_profile
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 REPOS_CONFIG_ENV_VAR = "PROTECTOR_HARNESS_REPOS"
 _REPOS_CONFIG_DIR = ".protector-harness"
@@ -67,6 +67,8 @@ _CODEX_EXECUTION_HEARTBEAT_SECONDS = 10.0
 _CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS = 60.0
 _CODEX_PROCESS_POLL_SECONDS = 0.1
 _CODEX_READER_JOIN_SECONDS = 1.0
+_CLI_SPINNER_INTERVAL_SECONDS = 0.1
+_CLI_SPINNER_FRAMES = ("|", "/", "-", "\\")
 _CODEX_TERMINATION_WAIT_SECONDS = 5.0
 _EXECUTOR_PREFLIGHT_BEGIN = "PROTECTOR_EXECUTOR_PREFLIGHT_BEGIN"
 _EXECUTOR_PREFLIGHT_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_OK"
@@ -150,7 +152,7 @@ class _LocalWorkspaceExecutor(Protocol):
     name: str
     repo: Path
 
-    def check_reliability(self) -> _ExecutorReliabilityReport:
+    def check_reliability(self, progress: Callable[[str], None] | None = None) -> _ExecutorReliabilityReport:
         """Verify the executor can read and mutate the local workspace."""
 
     def execute(self, prompt: str, *, timeout: float | None) -> _CodexExecutionResult:
@@ -393,6 +395,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     candidate_execute.add_argument("--output", type=Path, default=None, help="Optional file path for persisting raw Codex output.")
     candidate_execute.add_argument("--overwrite", action="store_true", help="Allow --output to replace an existing file.")
     candidate_execute.add_argument("--repo", default=None, help="Optional repository path or alias shown in the next candidate-outcome command.")
+    candidate_execute.add_argument("--no-spinner", action="store_true", help="Disable TTY progress spinner during executor preflight.")
     candidate_execute.add_argument(
         "--timeout",
         type=float,
@@ -417,6 +420,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
         default=_DEFAULT_CODEX_COMMAND,
         help=f"Codex command used by the codex_cli adapter. Default: {_DEFAULT_CODEX_COMMAND!r}.",
     )
+    executor_status.add_argument("--no-spinner", action="store_true", help="Disable TTY progress spinner during executor checks.")
 
     run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
     run.add_argument("repo", help="Repo alias/path to target.")
@@ -1005,7 +1009,7 @@ def _run_candidate_execute(args: argparse.Namespace, parser: argparse.ArgumentPa
     command = _parse_codex_command(args.codex_cmd, parser)
     repo = _resolve_candidate_execution_repo(args.repo, parser)
     executor = _build_local_executor(args.executor, command=command, repo=repo, parser=parser)
-    reliability = executor.check_reliability()
+    reliability = _check_executor_reliability_with_spinner(executor, no_spinner=args.no_spinner)
     if not reliability.ok:
         sys.stdout.write(_render_executor_reliability_report(reliability, candidate_blocked=True))
         return 1
@@ -1062,9 +1066,10 @@ class _CodexCliExecutor:
     repo: Path
     name: str = "codex_cli"
 
-    def check_reliability(self) -> _ExecutorReliabilityReport:
+    def check_reliability(self, progress: Callable[[str], None] | None = None) -> _ExecutorReliabilityReport:
         """Verify the Codex CLI can execute local workspace commands."""
         checks: list[_ExecutorReliabilityCheck] = []
+        _notify_progress(progress, "resolving executable")
         executable = _resolve_executor_executable(self.command)
         if executable is None:
             return _ExecutorReliabilityReport(
@@ -1090,13 +1095,15 @@ class _CodexCliExecutor:
                 detail=str(executable),
             )
         )
+        _notify_progress(progress, "checking version")
         version, version_check = _check_executor_version(executable)
         checks.append(version_check)
+        _notify_progress(progress, "checking CODEX_HOME")
         codex_home = _codex_home_path()
         checks.append(_check_codex_home(codex_home))
 
         if all(check.passed for check in checks):
-            checks.extend(_run_codex_workspace_preflight(self.command, self.repo))
+            checks.extend(_run_codex_workspace_preflight(self.command, self.repo, progress=progress))
 
         return _ExecutorReliabilityReport(
             executor=self.name,
@@ -1137,9 +1144,89 @@ def _run_executor_status(args: argparse.Namespace, parser: argparse.ArgumentPars
     command = _parse_codex_command(args.codex_cmd, parser)
     repo = _resolve_candidate_execution_repo(args.repo, parser)
     executor = _build_local_executor(args.executor, command=command, repo=repo, parser=parser)
-    report = executor.check_reliability()
+    report = _check_executor_reliability_with_spinner(executor, no_spinner=args.no_spinner)
     sys.stdout.write(_render_executor_reliability_report(report, candidate_blocked=False))
     return 0 if report.ok else 1
+
+
+def _check_executor_reliability_with_spinner(
+    executor: _LocalWorkspaceExecutor,
+    *,
+    no_spinner: bool,
+) -> _ExecutorReliabilityReport:
+    """Run executor reliability checks with optional TTY progress."""
+    with _CliSpinner(enabled=_cli_spinner_enabled(no_spinner=no_spinner), phase="starting executor checks") as spinner:
+        return executor.check_reliability(progress=spinner.update)
+
+
+def _cli_spinner_enabled(*, no_spinner: bool) -> bool:
+    """Return whether CLI progress should be visible for this output stream."""
+    if no_spinner:
+        return False
+    isatty = getattr(sys.stdout, "isatty", None)
+    return bool(isatty is not None and isatty())
+
+
+def _notify_progress(progress: Callable[[str], None] | None, phase: str) -> None:
+    """Notify a progress sink when one is active."""
+    if progress is not None:
+        progress(phase)
+
+
+class _CliSpinner:
+    """Lightweight stderr spinner for long foreground checks."""
+
+    def __init__(self, *, enabled: bool, phase: str) -> None:
+        self._enabled = enabled
+        self._phase = phase
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._last_width = 0
+
+    def __enter__(self) -> Self:
+        if self._enabled:
+            self._thread = threading.Thread(target=self._run, name="protector-cli-spinner", daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        _ = exc_type, exc, traceback
+        if not self._enabled:
+            return
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+        self._clear()
+
+    def update(self, phase: str) -> None:
+        """Update the visible spinner phase."""
+        if not self._enabled:
+            return
+        with self._lock:
+            self._phase = phase
+
+    def _run(self) -> None:
+        """Render spinner frames until stopped."""
+        index = 0
+        while not self._stop.wait(_CLI_SPINNER_INTERVAL_SECONDS):
+            with self._lock:
+                phase = self._phase
+            frame = _CLI_SPINNER_FRAMES[index % len(_CLI_SPINNER_FRAMES)]
+            index += 1
+            self._write(f"\r{frame} {phase}")
+
+    def _write(self, text: str) -> None:
+        """Write one spinner frame to stderr."""
+        self._last_width = max(self._last_width, len(text))
+        sys.stderr.write(text.ljust(self._last_width))
+        sys.stderr.flush()
+
+    def _clear(self) -> None:
+        """Clear the spinner line."""
+        if self._last_width:
+            sys.stderr.write("\r" + (" " * self._last_width) + "\r")
+            sys.stderr.flush()
 
 
 def _resolve_executor_executable(command: tuple[str, ...]) -> Path | None:
@@ -1218,11 +1305,17 @@ def _check_codex_home(path: Path) -> _ExecutorReliabilityCheck:
     )
 
 
-def _run_codex_workspace_preflight(command: tuple[str, ...], repo: Path) -> tuple[_ExecutorReliabilityCheck, ...]:
+def _run_codex_workspace_preflight(
+    command: tuple[str, ...],
+    repo: Path,
+    *,
+    progress: Callable[[str], None] | None,
+) -> tuple[_ExecutorReliabilityCheck, ...]:
     """Run the Codex CLI workspace reliability preflight."""
     proof = repo / ".protector-harness" / "executor-preflight.tmp"
     token = f"protector-executor-preflight-{os.getpid()}-{time.monotonic_ns()}"
     try:
+        _notify_progress(progress, "checking workspace command")
         result = _run_codex_once(
             command,
             _codex_workspace_preflight_prompt(token=token),
@@ -1231,7 +1324,9 @@ def _run_codex_workspace_preflight(command: tuple[str, ...], repo: Path) -> tupl
             cwd=repo,
             output_mode="capture",
         )
+        _notify_progress(progress, "checking workspace read")
         proof_text = _read_preflight_proof(proof)
+        _notify_progress(progress, "checking workspace write/delete")
         delete_result = _run_codex_once(
             command,
             _codex_workspace_delete_preflight_prompt(),

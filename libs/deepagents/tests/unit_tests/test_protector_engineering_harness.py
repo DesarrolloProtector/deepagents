@@ -34,7 +34,11 @@ def _build_repo(root: Path) -> Path:
 
 
 def _pass_executor_reliability(monkeypatch) -> None:
-    def pass_reliability(self: cli._CodexCliExecutor) -> cli._ExecutorReliabilityReport:
+    def pass_reliability(
+        self: cli._CodexCliExecutor,
+        progress=None,
+    ) -> cli._ExecutorReliabilityReport:
+        _ = progress
         return cli._ExecutorReliabilityReport(
             executor=self.name,
             repo=self.repo,
@@ -3589,7 +3593,11 @@ def test_cli_candidate_execute_blocks_before_candidate_prompt_when_preflight_fai
     candidate.write_text(json.dumps(payload), encoding="utf-8")
     approval_sha = engineering.automation_candidate_approval_sha(payload)
 
-    def fail_reliability(self: cli._CodexCliExecutor) -> cli._ExecutorReliabilityReport:
+    def fail_reliability(
+        self: cli._CodexCliExecutor,
+        progress=None,
+    ) -> cli._ExecutorReliabilityReport:
+        _ = progress
         return cli._ExecutorReliabilityReport(
             executor=self.name,
             repo=self.repo,
@@ -3640,33 +3648,98 @@ def test_cli_candidate_execute_blocks_before_candidate_prompt_when_preflight_fai
 def test_cli_executor_status_reports_actionable_diagnostics(tmp_path: Path, monkeypatch, capsys) -> None:
     repo = _build_repo(tmp_path / "repo")
 
-    def fail_reliability(self: cli._CodexCliExecutor) -> cli._ExecutorReliabilityReport:
-        return cli._ExecutorReliabilityReport(
-            executor=self.name,
-            repo=self.repo,
-            executable_path="(not found)",
-            version="(unknown)",
-            codex_home="C:/Users/test/.codex (default)",
-            checks=(
-                cli._ExecutorReliabilityCheck(
-                    name="active_executable",
-                    passed=False,
-                    detail="Unable to resolve executable from command: fake-codex",
-                    suggested_fix="Install Codex CLI or pass --codex-cmd.",
-                ),
+    report = cli._ExecutorReliabilityReport(
+        executor="codex_cli",
+        repo=repo,
+        executable_path="(not found)",
+        version="(unknown)",
+        codex_home="C:/Users/test/.codex (default)",
+        checks=(
+            cli._ExecutorReliabilityCheck(
+                name="active_executable",
+                passed=False,
+                detail="Unable to resolve executable from command: fake-codex",
+                suggested_fix="Install Codex CLI or pass --codex-cmd.",
             ),
-        )
+        ),
+    )
+
+    def fail_reliability(
+        self: cli._CodexCliExecutor,
+        progress=None,
+    ) -> cli._ExecutorReliabilityReport:
+        _ = self, progress
+        return report
 
     monkeypatch.setattr(cli._CodexCliExecutor, "check_reliability", fail_reliability)
 
     assert cli.main(["executor-status", "--repo", str(repo), "--codex-cmd", "fake-codex"]) == 1
 
-    stdout = capsys.readouterr().out
+    captured = capsys.readouterr()
+    stdout = captured.out
+    assert captured.err == ""
+    assert stdout == cli._render_executor_reliability_report(report, candidate_blocked=False)
     assert "Local Executor Status: FAIL" in stdout
     assert "active_executable_path: (not found)" in stdout
     assert "Failing checks:" in stdout
     assert "Suggested fix:" in stdout
     assert "Install Codex CLI" in stdout
+
+
+def test_cli_candidate_execute_preflight_spinner_disabled_for_non_tty_output(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+    report = cli._ExecutorReliabilityReport(
+        executor="codex_cli",
+        repo=repo,
+        executable_path="fake-codex",
+        version="codex-cli 0.0.0-test",
+        codex_home="C:/Users/test/.codex (default)",
+        checks=(
+            cli._ExecutorReliabilityCheck(
+                name="workspace_command",
+                passed=False,
+                detail="Preflight Codex command exited 1.",
+                suggested_fix="Fix local Codex workspace command execution before running candidate automation.",
+            ),
+        ),
+    )
+
+    def fail_reliability(
+        self: cli._CodexCliExecutor,
+        progress=None,
+    ) -> cli._ExecutorReliabilityReport:
+        _ = self, progress
+        return report
+
+    monkeypatch.setattr(cli._CodexCliExecutor, "check_reliability", fail_reliability)
+
+    assert (
+        cli.main(
+            [
+                "candidate-execute",
+                "--codex-cmd",
+                "fake-codex",
+                "--approve-sha",
+                approval_sha,
+                "--repo",
+                str(repo),
+                str(candidate),
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == cli._render_executor_reliability_report(report, candidate_blocked=True)
 
 
 def test_local_executor_interface_keeps_candidate_prompt_semantics(tmp_path: Path) -> None:
