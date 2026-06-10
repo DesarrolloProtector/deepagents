@@ -23,6 +23,7 @@ from deepagents.harnesses.protector._engineering import (
     RenderedOutput,
     append_outcome_history,
     build_read_only_agent,
+    render_automation_candidate_dry_run,
     render_codex_reviewer_prompt,
     render_controlled_execution_plan,
     render_outcome_history,
@@ -59,6 +60,7 @@ STABLE_ECC_PACK_COMMANDS = (
     "outcome",
     "outcome-history",
     "outcome-learning",
+    "candidate-dry-run",
     "benchmark",
     "ecc-status",
 )
@@ -267,6 +269,12 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     plan.add_argument("--overwrite", action="store_true", help="Allow --candidate-json to replace an existing file.")
     plan.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
     plan.add_argument("task", nargs="*", help="Task text to turn into a controlled execution plan.")
+
+    candidate_dry_run = subparsers.add_parser(
+        "candidate-dry-run",
+        help="Validate an exported automation candidate JSON without execution.",
+    )
+    candidate_dry_run.add_argument("candidate_json", type=Path, help="Exported automation candidate JSON to validate.")
 
     run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
     run.add_argument("repo", help="Repo alias/path to target.")
@@ -676,6 +684,20 @@ def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 0
 
 
+def _run_candidate_dry_run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph candidate-dry-run`."""
+    try:
+        payload = json.loads(args.candidate_json.read_text(encoding="utf-8"))
+    except OSError as exc:
+        parser.error(f"unable to read candidate JSON: {exc}")
+    except json.JSONDecodeError as exc:
+        parser.error(f"invalid candidate JSON at {args.candidate_json}: {exc.msg}")
+    rendered = render_automation_candidate_dry_run(payload, source=str(args.candidate_json.resolve()))
+    sys.stdout.write(rendered.text)
+    sys.stdout.write("\n")
+    return 0 if rendered.valid else 1
+
+
 def _write_json_output(path: Path, payload: dict[str, object], *, overwrite: bool) -> None:
     """Write a deterministic JSON payload with explicit overwrite protection."""
     target = path.resolve()
@@ -763,6 +785,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901, PLR0912  # ex
         result = _run_outcome_learning(args, parser)
     elif args.command == "plan":
         result = _run_plan(args, parser)
+    elif args.command == "candidate-dry-run":
+        result = _run_candidate_dry_run(args, parser)
     elif args.command == "run":
         result = _run_interactive(args, parser)
     elif args.command == "status":

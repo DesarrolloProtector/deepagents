@@ -291,6 +291,16 @@ _RUNTIME_GENERIC_FALLBACK_SKILLS = (
 )
 
 
+def available_prompt_skills() -> tuple[PromptSkill, ...]:
+    """Return all prompt skills that an exported candidate may reference."""
+    return (
+        BASE_PROMPT_QUALITY_SKILL,
+        *_PACK_SPECIALIZATION_SKILLS,
+        SPANISH_TASK_PRESERVATION_SKILL,
+        *_RUNTIME_GENERIC_FALLBACK_SKILLS,
+    )
+
+
 def select_prompt_skills(*, task_mode: str, task_tokens: frozenset[str], has_spanish_text: bool, task_text: str = "") -> tuple[PromptSkill, ...]:
     """Select pack-owned specialization skills first, then runtime generic fallback skills."""
     selected: list[PromptSkill] = [BASE_PROMPT_QUALITY_SKILL]

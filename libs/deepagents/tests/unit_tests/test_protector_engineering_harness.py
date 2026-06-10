@@ -445,6 +445,7 @@ def test_protector_platform_boundaries_are_explicit() -> None:
         "outcome",
         "outcome-history",
         "outcome-learning",
+        "candidate-dry-run",
         "benchmark",
         "ecc-status",
     )
@@ -956,6 +957,49 @@ def test_execution_plan_exposes_structured_automation_candidate(tmp_path: Path) 
         "autonomous_loops": False,
         "workflow_engine": False,
     }
+
+
+def test_automation_candidate_import_dry_run_validates_current_evidence(tmp_path: Path) -> None:
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+
+    rendered = engineering.render_automation_candidate_dry_run(candidate, source="candidate.json")
+
+    assert rendered.valid
+    assert rendered.decision == "would execute"
+    assert rendered.validation_errors == ()
+    assert rendered.text.startswith("ECC Candidate Import Dry Run\n")
+    assert "Schema validation: PASS" in rendered.text
+    assert "Decision: would execute" in rendered.text
+    assert "- Selected pack still valid: yes" in rendered.text
+    assert "- Selected skills still available: yes" in rendered.text
+    assert "- Benchmark coverage still valid: yes" in rendered.text
+    assert "- Readiness classification explainable: yes" in rendered.text
+    assert "Codex prompt preview:\nCodex Prompt:" in rendered.text
+    assert "Review contract summary:" in rendered.text
+    assert "Safety boundaries:" in rendered.text
+    assert "- Codex execution: disabled" in rendered.text
+    assert "- File edits: disabled by dry-run importer" in rendered.text
+
+
+def test_automation_candidate_import_dry_run_blocks_stale_skill(tmp_path: Path) -> None:
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate["selected_skills"] = (*candidate["selected_skills"], {"name": "removed_pack_skill", "source": "pack"})
+
+    rendered = engineering.render_automation_candidate_dry_run(candidate, source="candidate.json")
+
+    assert not rendered.valid
+    assert rendered.decision == "blocked"
+    assert "Selected skill unavailable: removed_pack_skill [pack]" in rendered.validation_errors
+    assert "Schema validation: FAIL" in rendered.text
+    assert "- Selected skills still available: no" in rendered.text
 
 
 def test_outcome_learning_signals_derive_recurring_patterns(tmp_path: Path) -> None:
@@ -2211,6 +2255,51 @@ def test_cli_plan_can_export_automation_candidate_json(tmp_path: Path, capsys) -
     assert payload["automation_readiness"]["classification"] == "supervised_only"
     assert payload["review_contract"]["pass_fail_criteria"]
     assert payload["proposed_codex_prompt"].startswith("Codex Prompt:")
+
+
+def test_cli_candidate_dry_run_imports_exported_candidate_json(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    output = tmp_path / "candidate.json"
+
+    assert (
+        cli.main(
+            [
+                "plan",
+                "--repo",
+                str(repo),
+                "--candidate-json",
+                str(output),
+                "Fix",
+                "legacy",
+                "onboarding",
+                "path",
+                "convergence",
+                "for",
+                "operator",
+                "UI",
+                "views",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert cli.main(["candidate-dry-run", str(output)]) == 0
+
+    stdout = capsys.readouterr().out
+    assert stdout.startswith("ECC Candidate Import Dry Run\n")
+    assert "Schema validation: PASS" in stdout
+    assert "Decision: would require supervision" in stdout
+    assert "- Selected pack still valid: yes" in stdout
+    assert "- Selected skills still available: yes" in stdout
+    assert "- Benchmark coverage still valid: yes" in stdout
+    assert "- Readiness classification explainable: yes" in stdout
+    assert "Codex prompt preview:\nCodex Prompt:" in stdout
+    assert "- Codex execution: disabled" in stdout
+    assert "- Model calls: disabled" in stdout
+    assert "- File edits: disabled by dry-run importer" in stdout
+    assert "- Autonomous loops: disabled" in stdout
+    assert "- Workflow engine: disabled" in stdout
 
 
 def test_cli_outcome_learning_lists_derived_signals(tmp_path: Path, capsys) -> None:

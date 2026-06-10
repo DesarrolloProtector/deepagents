@@ -18,7 +18,7 @@ from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.harnesses.protector._agentic import build_execution_plan, render_execution_plan as render_agentic_execution_plan
 from deepagents.harnesses.protector._ecc import discover_pack_prompt_skill_benchmark_coverage, discover_protector_pack
-from deepagents.harnesses.protector._prompt_skills import PromptSkill, select_prompt_skills
+from deepagents.harnesses.protector._prompt_skills import PromptSkill, available_prompt_skills, select_prompt_skills
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -35,6 +35,22 @@ OUTCOME_HISTORY_RELATIVE_PATH = Path(".protector-harness") / "outcome-history.js
 OUTCOME_HISTORY_SIGNAL_LIMIT = 5
 OUTCOME_LEARNING_SIGNAL_MIN_COUNT = 2
 OUTCOME_LEARNING_PATTERN_LIMIT = 140
+AUTOMATION_CANDIDATE_SCHEMA_VERSION = "ecc-automation-candidate-v1"
+AUTOMATION_CANDIDATE_DECISIONS = frozenset({"automation_ready", "supervised_only", "blocked"})
+AUTOMATION_CANDIDATE_REQUIRED_FIELDS = (
+    "schema_version",
+    "selected_pack",
+    "task",
+    "selected_knowledge",
+    "selected_skills",
+    "benchmark_coverage",
+    "review_contract",
+    "learning_signals",
+    "adaptive_adjustments",
+    "automation_readiness",
+    "proposed_codex_prompt",
+    "execution_boundaries",
+)
 FEATURE_HINTS = frozenset(
     {
         "api",
@@ -313,6 +329,15 @@ TaskMode = Literal[
     "ui_runtime_bug",
     "provider_api_bug",
 ]
+TASK_MODE_VALUES: tuple[str, ...] = (
+    "implementation_fix",
+    "review_only",
+    "planning_only",
+    "diagnostic_bootstrap",
+    "continuation_followup",
+    "ui_runtime_bug",
+    "provider_api_bug",
+)
 SCOPE_BOUNDARY_BY_MODE: dict[TaskMode, tuple[str, ...]] = {
     "implementation_fix": (
         "Inspect only enough code to locate the faulty condition, then fix surgically.",
@@ -455,6 +480,16 @@ class RenderedExecutionPlan:
     skills: tuple[str, ...]
     safety_gates: tuple[str, ...]
     selected_context_count: int
+
+
+@dataclass(frozen=True)
+class RenderedAutomationCandidateDryRun:
+    """Dry-run import result for one exported ECC automation candidate."""
+
+    text: str
+    valid: bool
+    decision: str
+    validation_errors: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -972,6 +1007,421 @@ def _automation_candidate_payload(
             "workflow_engine": False,
         },
     }
+
+
+def render_automation_candidate_dry_run(candidate: object, *, source: str) -> RenderedAutomationCandidateDryRun:
+    """Validate an exported automation candidate without executing Codex or models."""
+    schema_errors = _automation_candidate_schema_errors(candidate)
+    payload = candidate if isinstance(candidate, dict) else {}
+    pack = discover_protector_pack(include_benchmarks=True)
+    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    selected_skills, skill_errors = _candidate_selected_prompt_skills(payload)
+    selected_pack_skills = tuple(skill for skill in selected_skills if skill.source == "pack")
+    learning_signals = _candidate_string_sequence(_candidate_field(payload, "learning_signals"))
+    selected_knowledge = _candidate_dict_field(payload, "selected_knowledge")
+    has_knowledge = bool(
+        _candidate_string_sequence(selected_knowledge.get("paths")) or _candidate_string_sequence(selected_knowledge.get("facts"))
+    )
+    missing_coverage = tuple(skill.name for skill in selected_pack_skills if not coverage.get(skill.name))
+    candidate_readiness = _candidate_dict_field(payload, "automation_readiness")
+    candidate_classification = _candidate_string_field(candidate_readiness, "classification")
+    recomputed_classification = _automation_readiness_classification(
+        pack=pack,
+        missing_coverage=missing_coverage,
+        selected_pack_skills=selected_pack_skills,
+        has_knowledge=has_knowledge,
+        problem_signals=_problem_learning_signals(learning_signals),
+        task_mode=_candidate_task_mode(payload),
+    )
+    validation_errors = tuple(
+        _unique_preserve_order(
+            (
+                *schema_errors,
+                *_candidate_pack_validation_errors(payload, pack),
+                *skill_errors,
+                *_candidate_benchmark_coverage_errors(payload, coverage, selected_pack_skills),
+                *_candidate_readiness_validation_errors(
+                    payload,
+                    candidate_classification=candidate_classification,
+                    recomputed_classification=recomputed_classification,
+                ),
+                *_candidate_execution_boundary_errors(payload),
+            )
+        )
+    )
+    decision = _candidate_dry_run_decision(candidate_classification, validation_errors)
+    return RenderedAutomationCandidateDryRun(
+        text=_render_candidate_dry_run_text(
+            payload=payload,
+            source=source,
+            decision=decision,
+            validation_errors=validation_errors,
+            pack_valid=not _candidate_pack_validation_errors(payload, pack),
+            skills_available=not skill_errors,
+            coverage_valid=not _candidate_benchmark_coverage_errors(payload, coverage, selected_pack_skills),
+            readiness_explainable=not _candidate_readiness_validation_errors(
+                payload,
+                candidate_classification=candidate_classification,
+                recomputed_classification=recomputed_classification,
+            ),
+        ),
+        valid=not validation_errors,
+        decision=decision,
+        validation_errors=validation_errors,
+    )
+
+
+def _automation_candidate_schema_errors(candidate: object) -> tuple[str, ...]:
+    """Return schema errors for an imported automation candidate."""
+    if not isinstance(candidate, dict):
+        return ("Candidate JSON must be an object.",)
+
+    errors = [f"Candidate missing required field: {field}" for field in AUTOMATION_CANDIDATE_REQUIRED_FIELDS if field not in candidate]
+    if candidate.get("schema_version") != AUTOMATION_CANDIDATE_SCHEMA_VERSION:
+        errors.append(
+            f"Unsupported schema_version: {_candidate_display_value(candidate.get('schema_version'))}; "
+            f"expected {AUTOMATION_CANDIDATE_SCHEMA_VERSION}"
+        )
+    object_fields = (
+        "selected_pack",
+        "task",
+        "selected_knowledge",
+        "benchmark_coverage",
+        "review_contract",
+        "automation_readiness",
+        "execution_boundaries",
+    )
+    errors.extend(
+        f"Candidate field must be an object: {field}"
+        for field in object_fields
+        if field in candidate and not isinstance(candidate.get(field), dict)
+    )
+    sequence_fields = ("selected_skills", "learning_signals", "adaptive_adjustments")
+    errors.extend(
+        f"Candidate field must be a list: {field}"
+        for field in sequence_fields
+        if field in candidate and not _candidate_is_sequence(candidate.get(field))
+    )
+    if "proposed_codex_prompt" in candidate and not isinstance(candidate.get("proposed_codex_prompt"), str):
+        errors.append("Candidate field must be a string: proposed_codex_prompt")
+    errors.extend(_candidate_task_schema_errors(candidate))
+    errors.extend(_candidate_selected_skill_schema_errors(candidate))
+    errors.extend(_candidate_review_contract_schema_errors(candidate))
+    errors.extend(_candidate_boundary_schema_errors(candidate))
+    return tuple(errors)
+
+
+def _candidate_task_schema_errors(candidate: dict[object, object]) -> tuple[str, ...]:
+    """Return schema errors for the task block."""
+    task = _candidate_dict_field(candidate, "task")
+    if not task:
+        return ()
+    errors: list[str] = []
+    if not isinstance(task.get("summary"), str) or not task.get("summary"):
+        errors.append("Candidate task.summary must be a non-empty string.")
+    if _candidate_task_mode(candidate) not in TASK_MODE_VALUES:
+        errors.append(f"Candidate task.mode is unsupported: {_candidate_display_value(task.get('mode'))}")
+    return tuple(errors)
+
+
+def _candidate_selected_skill_schema_errors(candidate: dict[object, object]) -> tuple[str, ...]:
+    """Return schema errors for selected skill rows."""
+    value = candidate.get("selected_skills")
+    if not _candidate_is_sequence(value):
+        return ()
+    errors: list[str] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            errors.append(f"Candidate selected_skills[{index}] must be an object.")
+            continue
+        if not isinstance(item.get("name"), str) or not item.get("name"):
+            errors.append(f"Candidate selected_skills[{index}].name must be a non-empty string.")
+        if item.get("source") not in {"pack", "runtime_generic"}:
+            errors.append(f"Candidate selected_skills[{index}].source must be pack or runtime_generic.")
+    return tuple(errors)
+
+
+def _candidate_review_contract_schema_errors(candidate: dict[object, object]) -> tuple[str, ...]:
+    """Return schema errors for the review contract block."""
+    contract = _candidate_dict_field(candidate, "review_contract")
+    if not contract:
+        return ()
+    fields = (
+        "expected_implementation_areas",
+        "expected_files_likely_to_change",
+        "expected_validation_scope",
+        "benchmark_relevance",
+        "review_risks",
+        "anti_drift_checks",
+        "pass_fail_criteria",
+    )
+    return tuple(
+        f"Candidate review_contract.{field} must be a list of strings."
+        for field in fields
+        if not _candidate_is_string_sequence(contract.get(field))
+    )
+
+
+def _candidate_boundary_schema_errors(candidate: dict[object, object]) -> tuple[str, ...]:
+    """Return schema errors for execution boundaries."""
+    boundaries = _candidate_dict_field(candidate, "execution_boundaries")
+    if not boundaries:
+        return ()
+    return tuple(
+        f"Candidate execution_boundaries.{field} must be a boolean."
+        for field in ("codex_execution", "model_calls", "autonomous_loops", "workflow_engine")
+        if not isinstance(boundaries.get(field), bool)
+    )
+
+
+def _candidate_pack_validation_errors(candidate: dict[object, object], pack: object) -> tuple[str, ...]:
+    """Return errors when the selected pack no longer matches current evidence."""
+    selected_pack = _candidate_dict_field(candidate, "selected_pack")
+    if not selected_pack:
+        return ()
+    errors: list[str] = []
+    candidate_name = _candidate_string_field(selected_pack, "name")
+    if candidate_name != getattr(pack, "name", ""):
+        errors.append(f"Selected pack changed: candidate={candidate_name or '(missing)'}, current={getattr(pack, 'name', '(missing)')}")
+    for field in (
+        "validation_status",
+        "prompt_skills_validation_status",
+        "capabilities_validation_status",
+        "benchmark_validation_status",
+    ):
+        candidate_status = _candidate_string_field(selected_pack, field)
+        current_status = str(getattr(pack, field, ""))
+        if candidate_status and candidate_status != current_status:
+            errors.append(f"Selected pack {field} changed: candidate={candidate_status}, current={current_status}")
+    if not _pack_ready_for_automation(pack):
+        errors.append("Selected pack is not currently valid with passing benchmarks.")
+    return tuple(errors)
+
+
+def _candidate_selected_prompt_skills(candidate: dict[object, object]) -> tuple[tuple[PromptSkill, ...], tuple[str, ...]]:
+    """Return selected prompt skills if they are still available."""
+    available = {(skill.name, skill.source): skill for skill in available_prompt_skills()}
+    selected: list[PromptSkill] = []
+    errors: list[str] = []
+    value = candidate.get("selected_skills")
+    if not _candidate_is_sequence(value):
+        return (), ()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = _candidate_string_field(item, "name")
+        source = _candidate_string_field(item, "source")
+        skill = available.get((name, source))
+        if skill is None:
+            errors.append(f"Selected skill unavailable: {name or '(missing)'} [{source or '(missing)'}]")
+            continue
+        selected.append(skill)
+    return tuple(selected), tuple(errors)
+
+
+def _candidate_benchmark_coverage_errors(
+    candidate: dict[object, object],
+    coverage: dict[str, tuple[str, ...]],
+    selected_pack_skills: tuple[PromptSkill, ...],
+) -> tuple[str, ...]:
+    """Return errors when selected pack-skill coverage no longer matches."""
+    candidate_coverage = _candidate_dict_field(candidate, "benchmark_coverage")
+    errors: list[str] = []
+    for skill in selected_pack_skills:
+        current_cases = coverage.get(skill.name, ())
+        candidate_cases = _candidate_string_sequence(candidate_coverage.get(skill.name))
+        if not current_cases:
+            errors.append(f"Selected pack skill lacks current benchmark coverage: {skill.name}")
+            continue
+        if not candidate_cases:
+            errors.append(f"Candidate benchmark coverage missing selected pack skill: {skill.name}")
+            continue
+        if candidate_cases != current_cases:
+            errors.append(
+                f"Benchmark coverage changed for {skill.name}: candidate={_inline_or_none(candidate_cases)}, "
+                f"current={_inline_or_none(current_cases)}"
+            )
+    return tuple(errors)
+
+
+def _candidate_readiness_validation_errors(
+    candidate: dict[object, object],
+    *,
+    candidate_classification: str,
+    recomputed_classification: str,
+) -> tuple[str, ...]:
+    """Return errors when readiness classification is stale or unexplained."""
+    readiness = _candidate_dict_field(candidate, "automation_readiness")
+    if not readiness:
+        return ()
+    errors: list[str] = []
+    if candidate_classification not in AUTOMATION_CANDIDATE_DECISIONS:
+        errors.append(f"Candidate readiness classification is unsupported: {_candidate_display_value(candidate_classification)}")
+    elif candidate_classification != recomputed_classification:
+        errors.append(f"Readiness classification changed: candidate={candidate_classification}, current={recomputed_classification}")
+    if not _candidate_string_sequence(readiness.get("reasons")):
+        errors.append("Readiness reasons are missing.")
+    if not _candidate_string_field(readiness, "recommended_next_step"):
+        errors.append("Readiness recommended next step is missing.")
+    return tuple(errors)
+
+
+def _candidate_execution_boundary_errors(candidate: dict[object, object]) -> tuple[str, ...]:
+    """Return errors if an artifact asks the dry-run importer to execute."""
+    boundaries = _candidate_dict_field(candidate, "execution_boundaries")
+    if not boundaries:
+        return ()
+    return tuple(
+        f"Execution boundary must remain disabled: {field}"
+        for field in ("codex_execution", "model_calls", "autonomous_loops", "workflow_engine")
+        if boundaries.get(field) is True
+    )
+
+
+def _candidate_dry_run_decision(candidate_classification: str, validation_errors: tuple[str, ...]) -> str:
+    """Return the dry-run decision label."""
+    if validation_errors:
+        return "blocked"
+    if candidate_classification == "automation_ready":
+        return "would execute"
+    if candidate_classification == "supervised_only":
+        return "would require supervision"
+    return "blocked"
+
+
+def _render_candidate_dry_run_text(
+    *,
+    payload: dict[object, object],
+    source: str,
+    decision: str,
+    validation_errors: tuple[str, ...],
+    pack_valid: bool,
+    skills_available: bool,
+    coverage_valid: bool,
+    readiness_explainable: bool,
+) -> str:
+    """Render the candidate import dry-run summary."""
+    return f"""ECC Candidate Import Dry Run
+Source: {source}
+Schema: {_candidate_display_value(payload.get("schema_version"))}
+Schema validation: {"PASS" if not validation_errors else "FAIL"}
+Decision: {decision}
+Dry-run only: no Codex execution, model calls, file edits, autonomous loops, or workflow engine are performed.
+
+Current evidence:
+- Selected pack still valid: {_yes_no(value=pack_valid)}
+- Selected skills still available: {_yes_no(value=skills_available)}
+- Benchmark coverage still valid: {_yes_no(value=coverage_valid)}
+- Readiness classification explainable: {_yes_no(value=readiness_explainable)}
+
+Validation findings:
+{_one_line_list(validation_errors or ("(none)",))}
+
+Codex prompt preview:
+{_candidate_prompt_preview(_candidate_string_field(payload, "proposed_codex_prompt"))}
+
+Review contract summary:
+{_render_candidate_review_contract_summary(_candidate_dict_field(payload, "review_contract"))}
+
+Safety boundaries:
+{_render_candidate_safety_boundaries(_candidate_dict_field(payload, "execution_boundaries"))}"""
+
+
+def _render_candidate_review_contract_summary(contract: dict[object, object]) -> str:
+    """Render compact review-contract rows from an imported candidate."""
+    return _one_line_list(
+        (
+            f"Expected implementation areas: {_inline_or_none(_candidate_string_sequence(contract.get('expected_implementation_areas')))}",
+            f"Expected validation scope: {_inline_or_none(_candidate_string_sequence(contract.get('expected_validation_scope')))}",
+            f"Benchmark relevance: {_inline_or_none(_candidate_string_sequence(contract.get('benchmark_relevance')))}",
+            f"PASS/FAIL criteria: {_inline_or_none(_candidate_string_sequence(contract.get('pass_fail_criteria')))}",
+        )
+    )
+
+
+def _render_candidate_safety_boundaries(boundaries: dict[object, object]) -> str:
+    """Render enforced dry-run safety boundaries."""
+    boundary_rows = (
+        f"Codex execution: {_boundary_state(boundaries.get('codex_execution'))}",
+        f"Model calls: {_boundary_state(boundaries.get('model_calls'))}",
+        "File edits: disabled by dry-run importer",
+        f"Autonomous loops: {_boundary_state(boundaries.get('autonomous_loops'))}",
+        f"Workflow engine: {_boundary_state(boundaries.get('workflow_engine'))}",
+    )
+    return _one_line_list(boundary_rows)
+
+
+def _candidate_prompt_preview(prompt: str) -> str:
+    """Return a deterministic short preview of the proposed Codex prompt."""
+    lines = prompt.splitlines()
+    preview = tuple(lines[:12])
+    suffix = ("...",) if len(lines) > len(preview) else ()
+    return "\n".join((*preview, *suffix)) if preview else "(missing)"
+
+
+def _boundary_state(value: object) -> str:
+    """Render an execution boundary value."""
+    if value is False:
+        return "disabled"
+    if value is True:
+        return "enabled"
+    return "missing"
+
+
+def _candidate_task_mode(candidate: dict[object, object]) -> TaskMode:
+    """Return a candidate task mode, falling back to review-only for malformed artifacts."""
+    value = _candidate_dict_field(candidate, "task").get("mode")
+    if isinstance(value, str) and value in TASK_MODE_VALUES:
+        return cast("TaskMode", value)
+    return "review_only"
+
+
+def _candidate_field(candidate: dict[object, object], key: str) -> object:
+    """Read a candidate field without assuming a concrete JSON shape."""
+    return candidate.get(key)
+
+
+def _candidate_dict_field(candidate: dict[object, object], key: str) -> dict[object, object]:
+    """Read an object field from a candidate."""
+    value = candidate.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _candidate_string_field(candidate: dict[object, object], key: str) -> str:
+    """Read a string field from a candidate object."""
+    value = candidate.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _candidate_string_sequence(value: object) -> tuple[str, ...]:
+    """Read a string list from a candidate field."""
+    if not _candidate_is_string_sequence(value):
+        return ()
+    return tuple(cast("Sequence[str]", value))
+
+
+def _candidate_is_string_sequence(value: object) -> bool:
+    """Return whether a value is a JSON-like string sequence."""
+    return _candidate_is_sequence(value) and all(isinstance(item, str) for item in value)
+
+
+def _candidate_is_sequence(value: object) -> bool:
+    """Return whether a value is an imported JSON list or in-memory tuple."""
+    return isinstance(value, (list, tuple))
+
+
+def _candidate_display_value(value: object) -> str:
+    """Render a scalar candidate value for diagnostics."""
+    if isinstance(value, str) and value:
+        return value
+    if value is None or value == "":
+        return "(missing)"
+    return str(value)
+
+
+def _yes_no(*, value: bool) -> str:
+    """Render booleans for dry-run text."""
+    return "yes" if value else "no"
 
 
 def _automation_readiness_decision(
