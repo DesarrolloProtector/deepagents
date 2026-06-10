@@ -855,7 +855,28 @@ def _run_candidate_dry_run(args: argparse.Namespace, parser: argparse.ArgumentPa
     rendered = render_automation_candidate_dry_run(payload, source=str(args.candidate_json.resolve()))
     sys.stdout.write(rendered.text)
     sys.stdout.write("\n")
+    sys.stdout.write(_render_candidate_dry_run_approval(payload, candidate_path=args.candidate_json.resolve(), decision=rendered.decision))
+    sys.stdout.write("\n")
     return 0 if rendered.valid else 1
+
+
+def _render_candidate_dry_run_approval(candidate: object, *, candidate_path: Path, decision: str) -> str:
+    """Render approval SHA and the next execution command when eligible."""
+    approval_sha = automation_candidate_approval_sha(candidate)
+    if decision == "would execute":
+        execute = _powershell_command(("ph", "candidate-execute", "--approve-sha", approval_sha, str(candidate_path)))
+        return f"""Approval
+- Candidate approval SHA: {approval_sha}
+- Execution decision: would execute
+
+Next candidate-execute command:
+{execute}
+"""
+    return f"""Approval
+- Candidate approval SHA: {approval_sha}
+- Execution decision: {decision}
+- Execution blocked/not recommended; no candidate-execute command is emitted for this candidate.
+"""
 
 
 def _run_candidate_outcome(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:

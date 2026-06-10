@@ -83,6 +83,15 @@ def _missing_which(executable: str) -> str | None:
     return None
 
 
+def _extract_dry_run_approval_sha(output: str) -> str:
+    prefix = "- Candidate approval SHA: "
+    for line in output.splitlines():
+        if line.startswith(prefix):
+            return line.removeprefix(prefix)
+    msg = "candidate dry-run output did not include approval SHA"
+    raise AssertionError(msg)
+
+
 def _build_ecc_repo(root: Path) -> Path:
     _write(root / "agents" / "code-reviewer.md")
     _write(root / "agents" / "planner.md")
@@ -2841,9 +2850,13 @@ def test_cli_candidate_dry_run_imports_exported_candidate_json(tmp_path: Path, c
     assert cli.main(["candidate-dry-run", str(output)]) == 0
 
     stdout = capsys.readouterr().out
+    approval_sha = engineering.automation_candidate_approval_sha(json.loads(output.read_text(encoding="utf-8")))
     assert stdout.startswith("ECC Candidate Import Dry Run\n")
     assert "Schema validation: PASS" in stdout
     assert "Decision: would execute" in stdout
+    assert f"- Candidate approval SHA: {approval_sha}" in stdout
+    assert f"ph candidate-execute --approve-sha {approval_sha}" in stdout
+    assert str(output.resolve()) in stdout
     assert "Readiness Decision Record:" in stdout
     assert "automation_ready wins because required evidence is present" in stdout
     assert "- Selected pack still valid: yes" in stdout
@@ -2856,6 +2869,82 @@ def test_cli_candidate_dry_run_imports_exported_candidate_json(tmp_path: Path, c
     assert "- File edits: disabled by dry-run importer" in stdout
     assert "- Autonomous loops: disabled" in stdout
     assert "- Workflow engine: disabled" in stdout
+
+
+def test_cli_candidate_dry_run_printed_sha_is_accepted_by_candidate_execute(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    _pass_executor_reliability(monkeypatch)
+
+    assert cli.main(["candidate-dry-run", str(candidate)]) == 0
+    approval_sha = _extract_dry_run_approval_sha(capsys.readouterr().out)
+    received_prompts: list[str] = []
+
+    def fake_run_codex_once(
+        command: tuple[str, ...],
+        prompt: str,
+        **kwargs: object,
+    ) -> cli._CodexExecutionResult:
+        _ = command, kwargs
+        received_prompts.append(prompt)
+        return cli._CodexExecutionResult(returncode=0, output="accepted\n")
+
+    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
+
+    assert cli.main(["candidate-execute", "--codex-cmd", "fake-codex", "--approve-sha", approval_sha, str(candidate)]) == 0
+
+    assert received_prompts
+    assert "Next review command:" in capsys.readouterr().out
+
+
+def test_cli_candidate_dry_run_changed_candidate_produces_different_sha(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert cli.main(["candidate-dry-run", str(candidate)]) == 0
+    original_sha = _extract_dry_run_approval_sha(capsys.readouterr().out)
+
+    changed = json.loads(json.dumps(payload))
+    changed["task"]["summary"] = "Fix legacy onboarding path convergence for operator UI views with changed approval text"
+    candidate.write_text(json.dumps(changed), encoding="utf-8")
+
+    assert cli.main(["candidate-dry-run", str(candidate)]) == 0
+    changed_sha = _extract_dry_run_approval_sha(capsys.readouterr().out)
+
+    assert changed_sha != original_sha
+    assert changed_sha == engineering.automation_candidate_approval_sha(changed)
+
+
+def test_cli_candidate_dry_run_blocked_candidate_does_not_print_execute_ready_command(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Review payment implementation notes",
+        repo=repo,
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert cli.main(["candidate-dry-run", str(candidate)]) == 0
+
+    stdout = capsys.readouterr().out
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+    assert "- Execution decision: would require supervision" in stdout
+    assert f"- Candidate approval SHA: {approval_sha}" in stdout
+    assert "Execution blocked/not recommended" in stdout
+    assert "Next candidate-execute command:" not in stdout
+    assert "ph candidate-execute" not in stdout
 
 
 def test_cli_candidate_outcome_reviews_exported_candidate_and_saves_history(tmp_path: Path, capsys) -> None:
