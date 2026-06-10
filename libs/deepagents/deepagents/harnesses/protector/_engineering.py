@@ -477,12 +477,25 @@ class OutcomeReport:
 
 
 @dataclass(frozen=True)
+class ReadinessDecisionRecord:
+    """Evidence and rationale behind an automation-readiness classification."""
+
+    evidence: dict[str, object]
+    remaining_uncertainty: tuple[str, ...]
+    automation_rationale: tuple[str, ...]
+    supervision_rationale: tuple[str, ...]
+    blocking_rationale: tuple[str, ...]
+    decision: str
+
+
+@dataclass(frozen=True)
 class AutomationReadinessDecision:
     """Deterministic readiness decision for future supervised automation."""
 
     classification: str
     reasons: tuple[str, ...]
     recommendation: str
+    record: ReadinessDecisionRecord
 
 
 @dataclass(frozen=True)
@@ -969,6 +982,8 @@ def _render_automation_readiness(decision: AutomationReadinessDecision) -> str:
 Classification: {decision.classification}
 Decision reasons:
 {_one_line_list(decision.reasons)}
+Readiness Decision Record:
+{_render_readiness_decision_record(decision.record)}
 Recommended next step:
 - {decision.recommendation}
 Automation boundaries:
@@ -1031,6 +1046,7 @@ def _automation_candidate_payload(
             "classification": readiness.classification,
             "reasons": readiness.reasons,
             "recommended_next_step": readiness.recommendation,
+            "readiness_decision_record": _readiness_decision_record_payload(readiness.record),
         },
         "proposed_codex_prompt": codex_prompt,
         "execution_boundaries": {
@@ -1439,6 +1455,34 @@ def _candidate_readiness_validation_errors(
         errors.append("Readiness reasons are missing.")
     if not _candidate_string_field(readiness, "recommended_next_step"):
         errors.append("Readiness recommended next step is missing.")
+    errors.extend(_candidate_readiness_decision_record_errors(readiness, candidate_classification))
+    return tuple(errors)
+
+
+def _candidate_readiness_decision_record_errors(readiness: dict[object, object], classification: str) -> tuple[str, ...]:
+    """Return schema and explainability errors for an imported RDR."""
+    record = _candidate_dict_field(readiness, "readiness_decision_record")
+    if not record:
+        return ("Readiness Decision Record is missing.",)
+    errors: list[str] = []
+    if not _candidate_dict_field(record, "evidence"):
+        errors.append("Readiness Decision Record evidence is missing.")
+    errors.extend(
+        f"Readiness Decision Record {field} must be a list of strings."
+        for field in ("remaining_uncertainty", "automation_rationale", "supervision_rationale", "blocking_rationale")
+        if not _candidate_is_string_sequence(record.get(field))
+    )
+    decision = _candidate_string_field(record, "decision")
+    if not decision:
+        errors.append("Readiness Decision Record decision is missing.")
+    elif classification and not decision.startswith(classification):
+        errors.append("Readiness Decision Record decision does not explain the selected classification.")
+    if classification == "automation_ready" and not _candidate_string_sequence(record.get("automation_rationale")):
+        errors.append("automation_ready requires RDR automation rationale.")
+    if classification == "supervised_only" and not _candidate_string_sequence(record.get("remaining_uncertainty")):
+        errors.append("supervised_only requires concrete RDR remaining uncertainty.")
+    if classification == "blocked" and not _candidate_string_sequence(record.get("blocking_rationale")):
+        errors.append("blocked requires RDR missing evidence.")
     return tuple(errors)
 
 
@@ -1530,6 +1574,9 @@ Codex prompt preview:
 Review contract summary:
 {_render_candidate_review_contract_summary(_candidate_dict_field(payload, "review_contract"))}
 
+Readiness Decision Record:
+{_candidate_rdr_summary(_candidate_dict_field(payload, "automation_readiness"))}
+
 Safety boundaries:
 {_render_candidate_safety_boundaries(_candidate_dict_field(payload, "execution_boundaries"))}"""
 
@@ -1556,6 +1603,14 @@ def _candidate_vdr_summary(vdr: dict[object, object]) -> str:
     if not law and not fields:
         return "(missing)"
     return f"law={law or '(missing)'}; fields={_inline_or_none(fields)}"
+
+
+def _candidate_rdr_summary(readiness: dict[object, object]) -> str:
+    """Render compact RDR decision rows from an imported candidate."""
+    record = _candidate_dict_field(readiness, "readiness_decision_record")
+    if not record:
+        return "(missing)"
+    return _candidate_string_field(record, "decision") or "(missing)"
 
 
 def _render_candidate_safety_boundaries(boundaries: dict[object, object]) -> str:
@@ -1656,41 +1711,22 @@ def _automation_readiness_decision(
     selected_pack_skills = tuple(skill for skill in prompt_skills if skill.source == "pack")
     selected_runtime_skills = tuple(skill for skill in prompt_skills if skill.source != "pack")
     missing_coverage = tuple(skill.name for skill in selected_pack_skills if not coverage.get(skill.name))
-    reasons = list(_automation_pack_reasons(pack))
-    if selected_pack_skills:
-        reasons.append(f"Selected pack skills: {', '.join(skill.name for skill in selected_pack_skills)}.")
-    else:
-        reasons.append("No pack-owned specialization skill selected for this task.")
-    if selected_runtime_skills:
-        reasons.append(f"Runtime generic fallback selected: {', '.join(skill.name for skill in selected_runtime_skills)}.")
-    if missing_coverage:
-        reasons.append(f"Selected pack skills missing benchmark coverage: {', '.join(missing_coverage)}.")
-    else:
-        reasons.append("Selected pack skills have benchmark coverage.")
-    if selection.knowledge:
-        reasons.append(f"Repo knowledge selected: {len(selection.knowledge)} compact fact(s).")
-    else:
-        reasons.append("No repo knowledge selected for the planned task.")
     problem_signals = _problem_learning_signals(learning_signals)
-    if problem_signals:
-        reasons.extend(f"Historical signal considered: {signal}" for signal in problem_signals)
-    else:
-        reasons.append("No recurring validation, drift, coverage, follow-up, or file-mismatch learning signal found.")
-    if task_mode == "review_only":
-        reasons.append("Task mode is review_only; implementation automation is not appropriate.")
-
-    classification = _automation_readiness_classification(
+    record = _readiness_decision_record(
         pack=pack,
         missing_coverage=missing_coverage,
         selected_pack_skills=selected_pack_skills,
-        has_knowledge=bool(selection.knowledge),
+        selected_runtime_skills=selected_runtime_skills,
+        selected_knowledge=selection.knowledge,
         problem_signals=problem_signals,
         task_mode=task_mode,
     )
+    classification = _rdr_classification(record)
     return AutomationReadinessDecision(
         classification=classification,
-        reasons=tuple(_unique_preserve_order(reasons)),
-        recommendation=_automation_readiness_recommendation(classification, pack, missing_coverage, problem_signals, task_mode),
+        reasons=_readiness_summary_reasons(record),
+        recommendation=_automation_readiness_recommendation(classification, record),
+        record=record,
     )
 
 
@@ -1702,6 +1738,248 @@ def _automation_pack_reasons(pack: object) -> tuple[str, ...]:
         f"Pack capability validation: {getattr(pack, 'capabilities_validation_status', 'unknown')}.",
         f"Pack benchmark validation: {getattr(pack, 'benchmark_validation_status', 'unknown')}.",
     )
+
+
+def _readiness_decision_record_payload(record: ReadinessDecisionRecord) -> dict[str, object]:
+    """Return a JSON-ready Readiness Decision Record payload."""
+    return {
+        "evidence": record.evidence,
+        "remaining_uncertainty": record.remaining_uncertainty,
+        "automation_rationale": record.automation_rationale,
+        "supervision_rationale": record.supervision_rationale,
+        "blocking_rationale": record.blocking_rationale,
+        "decision": record.decision,
+    }
+
+
+def _render_readiness_decision_record(record: ReadinessDecisionRecord) -> str:
+    """Render an RDR for the human-readable automation readiness section."""
+    evidence = record.evidence
+    pack_state = _candidate_dict_field(evidence, "pack_validation_state")
+    evidence_rows = (
+        f"pack validation state: validation={_candidate_display_value(pack_state.get('validation'))}; "
+        f"prompt_skills={_candidate_display_value(pack_state.get('prompt_skills'))}; "
+        f"capabilities={_candidate_display_value(pack_state.get('capabilities'))}",
+        f"benchmark validation state: {_candidate_display_value(evidence.get('benchmark_validation_state'))}",
+        f"selected skills: {_inline_or_none(_candidate_skill_names(evidence.get('selected_skills')))}",
+        f"selected knowledge: {_inline_or_none(_candidate_string_sequence(evidence.get('selected_knowledge')))}",
+        f"learning signals used: {_inline_or_none(_candidate_string_sequence(evidence.get('learning_signals_used')))}",
+        f"scope characteristics: {_inline_or_none(_candidate_string_sequence(evidence.get('scope_characteristics')))}",
+    )
+    rows = [f"Evidence: {_inline_or_none(evidence_rows)}"]
+    rows.append(f"Remaining uncertainty: {_inline_or_none(record.remaining_uncertainty)}")
+    rows.append(f"Automation rationale: {_inline_or_none(record.automation_rationale)}")
+    rows.append(f"Supervision rationale: {_inline_or_none(record.supervision_rationale)}")
+    rows.append(f"Blocking rationale: {_inline_or_none(record.blocking_rationale)}")
+    rows.append(f"Decision: {record.decision}")
+    return _one_line_list(tuple(rows))
+
+
+def _candidate_skill_names(value: object) -> tuple[str, ...]:
+    """Return `name [source]` rows from JSON-like selected skill evidence."""
+    if not _candidate_is_sequence(value):
+        return ()
+    rows: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = _candidate_string_field(item, "name")
+        source = _candidate_string_field(item, "source")
+        if name:
+            rows.append(f"{name} [{source or 'unknown'}]")
+    return tuple(rows)
+
+
+def _readiness_decision_record(
+    *,
+    pack: object,
+    missing_coverage: tuple[str, ...],
+    selected_pack_skills: tuple[PromptSkill, ...],
+    selected_runtime_skills: tuple[PromptSkill, ...],
+    selected_knowledge: tuple[str, ...],
+    problem_signals: tuple[str, ...],
+    task_mode: TaskMode,
+) -> ReadinessDecisionRecord:
+    """Build the operational decision record behind automation readiness."""
+    scope = _readiness_scope_characteristics(task_mode, selected_pack_skills, selected_runtime_skills)
+    automation_rationale = _readiness_automation_rationale(
+        pack=pack,
+        missing_coverage=missing_coverage,
+        selected_pack_skills=selected_pack_skills,
+        selected_runtime_skills=selected_runtime_skills,
+        selected_knowledge=selected_knowledge,
+        problem_signals=problem_signals,
+        task_mode=task_mode,
+    )
+    supervision_rationale = _readiness_supervision_rationale(task_mode=task_mode, problem_signals=problem_signals)
+    blocking_rationale = _readiness_blocking_rationale(pack=pack, missing_coverage=missing_coverage, problem_signals=problem_signals)
+    uncertainty = _readiness_remaining_uncertainty(task_mode=task_mode, problem_signals=problem_signals)
+    evidence: dict[str, object] = {
+        "pack_validation_state": {
+            "validation": getattr(pack, "validation_status", "unknown"),
+            "prompt_skills": getattr(pack, "prompt_skills_validation_status", "unknown"),
+            "capabilities": getattr(pack, "capabilities_validation_status", "unknown"),
+        },
+        "benchmark_validation_state": getattr(pack, "benchmark_validation_status", "unknown"),
+        "selected_skills": tuple(
+            {"name": skill.name, "source": skill.source} for skill in (*selected_pack_skills, *selected_runtime_skills)
+        ),
+        "selected_knowledge": selected_knowledge,
+        "learning_signals_used": problem_signals or ("No negative learning signals used.",),
+        "scope_characteristics": scope,
+    }
+    classification = _readiness_record_classification(blocking_rationale, supervision_rationale)
+    return ReadinessDecisionRecord(
+        evidence=evidence,
+        remaining_uncertainty=uncertainty,
+        automation_rationale=automation_rationale,
+        supervision_rationale=supervision_rationale,
+        blocking_rationale=blocking_rationale,
+        decision=_readiness_decision_text(classification, automation_rationale, supervision_rationale, blocking_rationale),
+    )
+
+
+def _readiness_scope_characteristics(
+    task_mode: TaskMode,
+    selected_pack_skills: tuple[PromptSkill, ...],
+    selected_runtime_skills: tuple[PromptSkill, ...],
+) -> tuple[str, ...]:
+    """Return deterministic scope characteristics for RDR evidence."""
+    rows = [f"Task mode: {task_mode}."]
+    if task_mode in {"implementation_fix", "ui_runtime_bug", "continuation_followup", "provider_api_bug"}:
+        rows.append("Implementation scope is bounded by the proposed task and review contract.")
+    if task_mode in {"review_only", "planning_only", "diagnostic_bootstrap"}:
+        rows.append("Task mode requires human supervision before any candidate-backed execution.")
+    if selected_pack_skills:
+        rows.append(f"Pack specialization selected: {', '.join(skill.name for skill in selected_pack_skills)}.")
+    if selected_runtime_skills:
+        rows.append(f"Runtime generic skill selected: {', '.join(skill.name for skill in selected_runtime_skills)}.")
+    return tuple(rows)
+
+
+def _readiness_automation_rationale(
+    *,
+    pack: object,
+    missing_coverage: tuple[str, ...],
+    selected_pack_skills: tuple[PromptSkill, ...],
+    selected_runtime_skills: tuple[PromptSkill, ...],
+    selected_knowledge: tuple[str, ...],
+    problem_signals: tuple[str, ...],
+    task_mode: TaskMode,
+) -> tuple[str, ...]:
+    """Return reasons that support candidate-backed execution after approval."""
+    rows: list[str] = []
+    if _pack_ready_for_automation(pack):
+        rows.append("Pack, prompt-skill, capability, and benchmark validation are passing.")
+    if selected_pack_skills and not missing_coverage:
+        rows.append(f"Selected pack skills have benchmark coverage: {', '.join(skill.name for skill in selected_pack_skills)}.")
+    if not selected_pack_skills and selected_runtime_skills:
+        rows.append("No pack specialization was selected; generic runtime skills are acceptable because no pack-specific evidence is required.")
+    if selected_knowledge:
+        rows.append(f"Selected knowledge provides {len(selected_knowledge)} compact fact(s).")
+    else:
+        rows.append("No selected knowledge is required by the current narrow task evidence.")
+    if not problem_signals:
+        rows.append("No negative learning signals were found.")
+    if task_mode in {"implementation_fix", "ui_runtime_bug", "continuation_followup", "provider_api_bug"}:
+        rows.append("Task mode is compatible with a single candidate-backed execution after explicit human approval.")
+    rows.append("automation_ready means candidate-backed execution after explicit approval, not autonomous execution.")
+    return tuple(_unique_preserve_order(rows))
+
+
+def _readiness_supervision_rationale(*, task_mode: TaskMode, problem_signals: tuple[str, ...]) -> tuple[str, ...]:
+    """Return concrete reasons supporting supervised_only."""
+    rows: list[str] = []
+    if task_mode == "review_only":
+        rows.append("Review-only task has no approved implementation intent for candidate execution.")
+    if task_mode == "planning_only":
+        rows.append("Planning-only task must settle the implementation target before candidate execution.")
+    if task_mode == "diagnostic_bootstrap":
+        rows.append("Diagnostic/bootstrap task may touch external or runtime state and needs human supervision before execution.")
+    rows.extend(f"Negative learning signal must be resolved before automation_ready: {signal}" for signal in problem_signals)
+    return tuple(_unique_preserve_order(rows))
+
+
+def _readiness_blocking_rationale(
+    *,
+    pack: object,
+    missing_coverage: tuple[str, ...],
+    problem_signals: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return concrete missing evidence that blocks candidate-backed execution."""
+    rows: list[str] = []
+    if getattr(pack, "validation_status", "") != "valid":
+        rows.append(f"Pack validation is missing or invalid: {getattr(pack, 'validation_status', 'unknown')}.")
+    if getattr(pack, "prompt_skills_validation_status", "") != "valid":
+        rows.append(f"Prompt-skill validation is missing or invalid: {getattr(pack, 'prompt_skills_validation_status', 'unknown')}.")
+    if getattr(pack, "capabilities_validation_status", "") != "valid":
+        rows.append(f"Capability validation is missing or invalid: {getattr(pack, 'capabilities_validation_status', 'unknown')}.")
+    if getattr(pack, "benchmark_validation_status", "") != "passing":
+        rows.append(f"Benchmark validation is missing or not passing: {getattr(pack, 'benchmark_validation_status', 'unknown')}.")
+    if missing_coverage:
+        rows.append(f"Selected pack skills missing benchmark coverage: {', '.join(missing_coverage)}.")
+    rows.extend(signal for signal in problem_signals if signal.startswith("Skill repeatedly lacks benchmark coverage:"))
+    return tuple(_unique_preserve_order(rows))
+
+
+def _readiness_remaining_uncertainty(*, task_mode: TaskMode, problem_signals: tuple[str, ...]) -> tuple[str, ...]:
+    """Return concrete unresolved uncertainties for non-ready decisions."""
+    rows: list[str] = []
+    if task_mode == "review_only":
+        rows.append("Implementation intent is unresolved because the task asks for review output only.")
+    if task_mode == "planning_only":
+        rows.append("Implementation target is unresolved because the task asks for planning/design output only.")
+    if task_mode == "diagnostic_bootstrap":
+        rows.append("Runtime/configuration impact is unresolved until a human approves diagnostic execution boundaries.")
+    rows.extend(f"Historical failure must be falsified by a clean supervised outcome: {signal}" for signal in problem_signals)
+    return tuple(_unique_preserve_order(rows))
+
+
+def _readiness_record_classification(blocking_rationale: tuple[str, ...], supervision_rationale: tuple[str, ...]) -> str:
+    """Return the classification implied by RDR rationale."""
+    if blocking_rationale:
+        return "blocked"
+    if supervision_rationale:
+        return "supervised_only"
+    return "automation_ready"
+
+
+def _rdr_classification(record: ReadinessDecisionRecord) -> str:
+    """Return the classification encoded by a readiness decision record."""
+    return _readiness_record_classification(record.blocking_rationale, record.supervision_rationale)
+
+
+def _readiness_decision_text(
+    classification: str,
+    automation_rationale: tuple[str, ...],
+    supervision_rationale: tuple[str, ...],
+    blocking_rationale: tuple[str, ...],
+) -> str:
+    """Return the RDR decision explanation."""
+    if classification == "blocked":
+        return f"blocked wins because required evidence is missing: {_inline_or_none(blocking_rationale)}"
+    if classification == "supervised_only":
+        return f"supervised_only wins because concrete uncertainty remains: {_inline_or_none(supervision_rationale)}"
+    return f"automation_ready wins because required evidence is present: {_inline_or_none(automation_rationale)}"
+
+
+def _readiness_summary_reasons(record: ReadinessDecisionRecord) -> tuple[str, ...]:
+    """Return compact readiness reasons from the RDR."""
+    evidence = record.evidence
+    pack_state = _candidate_dict_field(evidence, "pack_validation_state")
+    selected_skills = _candidate_skill_names(evidence.get("selected_skills"))
+    rows = [
+        f"Pack validation: {_candidate_display_value(pack_state.get('validation'))}.",
+        f"Pack prompt-skill validation: {_candidate_display_value(pack_state.get('prompt_skills'))}.",
+        f"Pack capability validation: {_candidate_display_value(pack_state.get('capabilities'))}.",
+        f"Pack benchmark validation: {_candidate_display_value(evidence.get('benchmark_validation_state'))}.",
+        f"Selected skills: {_inline_or_none(selected_skills)}.",
+    ]
+    rows.extend(record.blocking_rationale)
+    rows.extend(record.supervision_rationale)
+    if not record.blocking_rationale:
+        rows.extend(record.automation_rationale)
+    return tuple(_unique_preserve_order(rows))
 
 
 def _automation_readiness_classification(
@@ -1718,8 +1996,9 @@ def _automation_readiness_classification(
         return "blocked"
     if missing_coverage or any(signal.startswith("Skill repeatedly lacks benchmark coverage:") for signal in problem_signals):
         return "blocked"
-    if task_mode == "review_only" or not selected_pack_skills or not has_knowledge or problem_signals:
+    if task_mode in {"review_only", "planning_only", "diagnostic_bootstrap"} or problem_signals:
         return "supervised_only"
+    _ = (selected_pack_skills, has_knowledge)
     return "automation_ready"
 
 
@@ -1735,21 +2014,14 @@ def _pack_ready_for_automation(pack: object) -> bool:
 
 def _automation_readiness_recommendation(
     classification: str,
-    pack: object,
-    missing_coverage: tuple[str, ...],
-    problem_signals: tuple[str, ...],
-    task_mode: TaskMode,
+    record: ReadinessDecisionRecord,
 ) -> str:
     """Return the next supervised step for the readiness decision."""
     if classification == "automation_ready":
-        return "proceed supervised; the task is ready for a future automation pilot gate but Codex execution remains disabled here."
-    if classification == "blocked" and not _pack_ready_for_automation(pack):
-        return "block until pack validation passes."
-    if classification == "blocked" and (missing_coverage or any("benchmark coverage" in signal for signal in problem_signals)):
-        return "add benchmark first."
-    if task_mode == "review_only":
-        return "proceed supervised; keep this as a review contract rather than an implementation automation candidate."
-    return "tighten prompt/review contract."
+        return "proceed with candidate-backed execution only after explicit human approval; autonomous execution remains disabled."
+    if classification == "blocked":
+        return f"restore missing readiness evidence first: {_inline_or_none(record.blocking_rationale)}"
+    return f"resolve RDR uncertainty before automation_ready: {_inline_or_none(record.remaining_uncertainty)}"
 
 
 def _problem_learning_signals(learning_signals: tuple[str, ...]) -> tuple[str, ...]:

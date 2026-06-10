@@ -970,10 +970,46 @@ def test_automation_readiness_marks_verified_covered_plan_ready(tmp_path: Path) 
     assert "Automation Readiness:" in rendered.text
     assert "Classification: automation_ready" in rendered.text
     assert "Pack benchmark validation: passing." in rendered.text
-    assert "Selected pack skills have benchmark coverage." in rendered.text
-    assert "Repo knowledge selected:" in rendered.text
-    assert "No recurring validation, drift, coverage, follow-up, or file-mismatch learning signal found." in rendered.text
-    assert "proceed supervised; the task is ready for a future automation pilot gate" in rendered.text
+    assert "Readiness Decision Record:" in rendered.text
+    assert "Selected pack skills have benchmark coverage: navigation_surface_convergence." in rendered.text
+    assert "Selected knowledge provides 6 compact fact(s)." in rendered.text
+    assert "No negative learning signals were found." in rendered.text
+    assert "Remaining uncertainty: (none)" in rendered.text
+    assert "Decision: automation_ready wins because required evidence is present" in rendered.text
+    assert "automation_ready means candidate-backed execution after explicit approval, not autonomous execution." in rendered.text
+    assert "proceed with candidate-backed execution only after explicit human approval" in rendered.text
+
+
+def test_automation_readiness_supervised_only_has_concrete_uncertainty(tmp_path: Path) -> None:
+    rendered = engineering.render_controlled_execution_plan(
+        task="Review payment implementation notes",
+        repo=_build_repo(tmp_path / "repo"),
+    )
+    record = rendered.automation_candidate["automation_readiness"]["readiness_decision_record"]
+
+    assert rendered.automation_candidate["automation_readiness"]["classification"] == "supervised_only"
+    assert "Remaining uncertainty: Implementation intent is unresolved because the task asks for review output only." in rendered.text
+    assert "Supervision rationale: Review-only task has no approved implementation intent for candidate execution." in rendered.text
+    assert "Decision: supervised_only wins because concrete uncertainty remains" in rendered.text
+    assert record["remaining_uncertainty"] == ("Implementation intent is unresolved because the task asks for review output only.",)
+    assert record["supervision_rationale"] == ("Review-only task has no approved implementation intent for candidate execution.",)
+
+
+def test_automation_readiness_allows_generic_only_narrow_visual_task(tmp_path: Path) -> None:
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix Razor CSS visual alignment",
+        repo=_build_repo(tmp_path / "repo"),
+    )
+    selected_skills = rendered.automation_candidate["selected_skills"]
+    record = rendered.automation_candidate["automation_readiness"]["readiness_decision_record"]
+
+    assert all(skill["source"] == "runtime_generic" for skill in selected_skills)
+    assert rendered.automation_candidate["automation_readiness"]["classification"] == "automation_ready"
+    assert (
+        "No pack specialization was selected; generic runtime skills are acceptable because no pack-specific evidence is required."
+        in rendered.text
+    )
+    assert "automation_ready wins because required evidence is present" in record["decision"]
 
 
 def test_execution_plan_exposes_structured_automation_candidate(tmp_path: Path) -> None:
@@ -1010,7 +1046,11 @@ def test_execution_plan_exposes_structured_automation_candidate(tmp_path: Path) 
         "escalation_reason",
     }
     assert candidate["automation_readiness"]["classification"] == "automation_ready"
-    assert "Selected pack skills have benchmark coverage." in candidate["automation_readiness"]["reasons"]
+    assert "Selected pack skills have benchmark coverage: navigation_surface_convergence." in candidate["automation_readiness"]["reasons"]
+    readiness_record = candidate["automation_readiness"]["readiness_decision_record"]
+    assert readiness_record["decision"].startswith("automation_ready wins because required evidence is present")
+    assert readiness_record["remaining_uncertainty"] == ()
+    assert "Pack, prompt-skill, capability, and benchmark validation are passing." in readiness_record["automation_rationale"]
     assert candidate["proposed_codex_prompt"].startswith("Codex Prompt:")
     assert candidate["execution_boundaries"] == {
         "codex_execution": False,
@@ -1042,6 +1082,8 @@ def test_automation_candidate_import_dry_run_validates_current_evidence(tmp_path
     assert "Codex prompt preview:\nCodex Prompt:" in rendered.text
     assert "Review contract summary:" in rendered.text
     assert "Validation Decision Record: law=Choose the cheapest credible falsifier first" in rendered.text
+    assert "Readiness Decision Record:" in rendered.text
+    assert "automation_ready wins because required evidence is present" in rendered.text
     assert "Safety boundaries:" in rendered.text
     assert "- Codex execution: disabled" in rendered.text
     assert "- File edits: disabled by dry-run importer" in rendered.text
@@ -1242,8 +1284,12 @@ def test_plan_with_history_surfaces_recurring_learning_signals(tmp_path: Path) -
     assert "Recommendation: state the anti-drift constraint explicitly before Codex runs." in rendered.text
     assert "Automation Readiness:" in rendered.text
     assert "Classification: supervised_only" in rendered.text
-    assert "Historical signal considered: Recurring failed validation: not run (2 outcomes)." in rendered.text
-    assert "Recommended next step:\n- tighten prompt/review contract." in rendered.text
+    assert "Negative learning signal must be resolved before automation_ready: Recurring failed validation: not run (2 outcomes)." in rendered.text
+    assert (
+        "Remaining uncertainty: Historical failure must be falsified by a clean supervised outcome: "
+        "Recurring failed validation: not run (2 outcomes)." in rendered.text
+    )
+    assert "Recommended next step:\n- resolve RDR uncertainty before automation_ready:" in rendered.text
 
 
 def test_plan_with_history_applies_explainable_adaptive_adjustments(tmp_path: Path) -> None:
@@ -1297,7 +1343,12 @@ def test_automation_readiness_blocks_missing_pack_skill_coverage(tmp_path: Path,
     assert "Automation Readiness:" in rendered.text
     assert "Classification: blocked" in rendered.text
     assert "Selected pack skills missing benchmark coverage: navigation_surface_convergence." in rendered.text
-    assert "Recommended next step:\n- add benchmark first." in rendered.text
+    assert "Blocking rationale: Selected pack skills missing benchmark coverage: navigation_surface_convergence." in rendered.text
+    assert "Decision: blocked wins because required evidence is missing" in rendered.text
+    assert (
+        "Recommended next step:\n- restore missing readiness evidence first: "
+        "Selected pack skills missing benchmark coverage: navigation_surface_convergence." in rendered.text
+    )
 
 
 def test_fix_task_generates_surgical_implementation_prompt(tmp_path: Path) -> None:
@@ -2454,7 +2505,10 @@ def test_cli_plan_can_export_automation_candidate_json(tmp_path: Path, capsys) -
     assert payload["schema_version"] == "ecc-automation-candidate-v1"
     assert payload["selected_pack"]["benchmark_validation_status"] == "passing"
     assert payload["task"]["mode"] == "ui_runtime_bug"
-    assert payload["automation_readiness"]["classification"] == "supervised_only"
+    assert payload["automation_readiness"]["classification"] == "automation_ready"
+    assert payload["automation_readiness"]["readiness_decision_record"]["decision"].startswith(
+        "automation_ready wins because required evidence is present"
+    )
     assert payload["review_contract"]["pass_fail_criteria"]
     assert payload["proposed_codex_prompt"].startswith("Codex Prompt:")
 
@@ -2491,7 +2545,9 @@ def test_cli_candidate_dry_run_imports_exported_candidate_json(tmp_path: Path, c
     stdout = capsys.readouterr().out
     assert stdout.startswith("ECC Candidate Import Dry Run\n")
     assert "Schema validation: PASS" in stdout
-    assert "Decision: would require supervision" in stdout
+    assert "Decision: would execute" in stdout
+    assert "Readiness Decision Record:" in stdout
+    assert "automation_ready wins because required evidence is present" in stdout
     assert "- Selected pack still valid: yes" in stdout
     assert "- Selected skills still available: yes" in stdout
     assert "- Benchmark coverage still valid: yes" in stdout
@@ -2569,7 +2625,7 @@ PASS
     assert stdout.startswith("ECC Supervised Outcome Report\n")
     assert "Status: accepted" in stdout
     assert "Candidate source:\n-" in stdout
-    assert "Automation readiness:\n- Classification: supervised_only" in stdout
+    assert "Automation readiness:\n- Classification: automation_ready" in stdout
     assert "Outcome history saved:" in stdout
     history_path = repo / ".protector-harness" / "outcome-history.jsonl"
     payload = json.loads(history_path.read_text(encoding="utf-8").strip())
@@ -2624,7 +2680,7 @@ def test_cli_candidate_execute_refuses_non_automation_ready_candidate(tmp_path: 
     repo = _build_repo(tmp_path / "repo")
     candidate = tmp_path / "candidate.json"
     payload = engineering.render_controlled_execution_plan(
-        task="Fix legacy onboarding path convergence for operator UI views",
+        task="Review payment implementation notes",
         repo=repo,
     ).automation_candidate
     candidate.write_text(json.dumps(payload), encoding="utf-8")
