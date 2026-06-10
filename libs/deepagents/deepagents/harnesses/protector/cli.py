@@ -134,6 +134,9 @@ class _ExecutorReliabilityReport:
     version: str
     codex_home: str
     checks: tuple[_ExecutorReliabilityCheck, ...]
+    sandbox_mode: str = "(unknown)"
+    execution_strategy: str = "(unknown)"
+    command_line: str = "(unknown)"
 
     @property
     def ok(self) -> bool:
@@ -1107,6 +1110,9 @@ class _CodexCliExecutor:
                         suggested_fix="Install Codex CLI or pass --codex-cmd with the intended Codex executable on PATH.",
                     ),
                 ),
+                sandbox_mode=_codex_sandbox_mode(self.command),
+                execution_strategy=_codex_execution_strategy(self.repo),
+                command_line=_powershell_command(self.command),
             )
 
         checks.append(
@@ -1133,6 +1139,9 @@ class _CodexCliExecutor:
             version=version,
             codex_home=_format_codex_home(codex_home),
             checks=tuple(checks),
+            sandbox_mode=_codex_sandbox_mode(self.command),
+            execution_strategy=_codex_execution_strategy(self.repo),
+            command_line=_powershell_command(self.command),
         )
 
     def execute(self, prompt: str, *, timeout: float | None) -> _CodexExecutionResult:
@@ -1192,6 +1201,21 @@ def _notify_progress(progress: Callable[[str], None] | None, phase: str) -> None
     """Notify a progress sink when one is active."""
     if progress is not None:
         progress(phase)
+
+
+def _codex_sandbox_mode(command: tuple[str, ...]) -> str:
+    """Return the effective sandbox mode declared by the Codex command."""
+    for index, part in enumerate(command):
+        if part == "--sandbox" and index + 1 < len(command):
+            return command[index + 1]
+        if part.startswith("--sandbox="):
+            return part.split("=", maxsplit=1)[1]
+    return "codex default"
+
+
+def _codex_execution_strategy(repo: Path) -> str:
+    """Return a compact description of the local execution strategy."""
+    return f"foreground codex_cli process; cwd={repo}; local workspace only; connector fallback disabled"
 
 
 class _CliSpinner:
@@ -1337,24 +1361,18 @@ def _run_codex_workspace_preflight(
     token = f"protector-executor-preflight-{os.getpid()}-{time.monotonic_ns()}"
     try:
         _notify_progress(progress, "checking workspace command")
-        result = _run_codex_once(
+        result = _run_codex_candidate_probe_once(
             command,
             _codex_workspace_preflight_prompt(token=token),
-            timeout=_CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS,
-            heartbeat_interval=0,
-            cwd=repo,
-            output_mode="capture",
+            repo=repo,
         )
         _notify_progress(progress, "checking workspace read")
         proof_text = _read_preflight_proof(proof)
         _notify_progress(progress, "checking workspace write/delete")
-        delete_result = _run_codex_once(
+        delete_result = _run_codex_candidate_probe_once(
             command,
             _codex_workspace_delete_preflight_prompt(),
-            timeout=_CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS,
-            heartbeat_interval=0,
-            cwd=repo,
-            output_mode="capture",
+            repo=repo,
         )
     except OSError as exc:
         if proof.exists():
@@ -1379,6 +1397,18 @@ def _run_codex_workspace_preflight(
         with contextlib.suppress(OSError):
             proof.unlink()
     return checks
+
+
+def _run_codex_candidate_probe_once(command: tuple[str, ...], prompt: str, *, repo: Path) -> _CodexExecutionResult:
+    """Run a preflight prompt through the same wrapper used for candidate execution."""
+    return _run_codex_once(
+        command,
+        _local_executor_candidate_prompt(prompt),
+        timeout=_CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS,
+        heartbeat_interval=0,
+        cwd=repo,
+        output_mode="capture",
+    )
 
 
 def _codex_workspace_preflight_checks(
@@ -1482,7 +1512,8 @@ def _workspace_preflight_detail(result: _CodexExecutionResult, marker: str) -> s
 
 def _codex_workspace_preflight_prompt(*, token: str) -> str:
     """Return the local workspace reliability prompt for Codex CLI."""
-    return f"""Local executor reliability preflight.
+    return f"""Codex Prompt:
+Local executor reliability preflight.
 
 You must use local workspace shell execution only. Do not inspect GitHub, connectors, remote repositories, or browser resources.
 If local shell execution is unavailable, stop immediately and report LOCAL_EXECUTOR_UNAVAILABLE.
@@ -1503,7 +1534,8 @@ Do not edit any other file. Do not continue if a local workspace command fails.
 
 def _codex_workspace_delete_preflight_prompt() -> str:
     """Return the local workspace delete proof prompt for Codex CLI."""
-    return f"""Local executor delete preflight.
+    return f"""Codex Prompt:
+Local executor delete preflight.
 
 You must use local workspace shell execution only. Do not inspect GitHub, connectors, remote repositories, or browser resources.
 Delete .protector-harness/executor-preflight.tmp in the current workspace.
@@ -1536,6 +1568,9 @@ def _render_executor_reliability_report(report: _ExecutorReliabilityReport, *, c
 executor: {report.executor}
 repo: {report.repo}
 active_executable_path: {report.executable_path}
+effective_command: {report.command_line}
+sandbox_mode: {report.sandbox_mode}
+execution_strategy: {report.execution_strategy}
 version: {report.version}
 CODEX_HOME: {report.codex_home}
 
