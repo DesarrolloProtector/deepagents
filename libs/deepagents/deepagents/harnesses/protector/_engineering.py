@@ -4395,12 +4395,25 @@ def _candidate_executor_failed(output: str) -> bool:
     if _codex_transcript_contains_only_user_prompt(output):
         return True
     review_text = _codex_output_after_prompt_contract(output)
+    if _completed_codex_result_present(review_text):
+        return False
     lowered = (review_text if "Codex Prompt:" in output else output).lower()
     if "local_executor_unavailable" in lowered:
         return True
     if "failure: executor failure" in lowered:
         return True
     return "candidate execution status: failure" in lowered and "process tree status: process_tree_terminated" in lowered
+
+
+def _completed_codex_result_present(output: str) -> bool:
+    """Return whether the transcript includes a real assistant implementation result."""
+    if not output.strip():
+        return False
+    if _output_section_items(output, "Files changed"):
+        return True
+    if _output_section_items(output, "Validation"):
+        return True
+    return _status_token(output) is not None
 
 
 def _codex_transcript_contains_only_user_prompt(output: str) -> bool:
@@ -4469,12 +4482,13 @@ def _is_actual_output_section_header(line: str) -> bool:
 
 
 def _section_start_index(lines: list[str], section: str) -> int | None:
-    """Return the index of a section header line."""
+    """Return the last index of a section header line."""
     pattern = re.compile(rf"^\s*-?\s*{re.escape(section)}\s*:?\s*$", flags=re.IGNORECASE)
+    found: int | None = None
     for index, line in enumerate(lines):
         if pattern.match(line):
-            return index
-    return None
+            found = index
+    return found
 
 
 def _is_known_output_section_header(line: str) -> bool:
@@ -4489,12 +4503,13 @@ def _has_pass_or_fail(text: str) -> bool:
 
 
 def _status_token(text: str) -> str | None:
-    """Return the first standalone PASS/FAIL verdict line found."""
+    """Return the last standalone PASS/FAIL verdict line found."""
+    verdict: str | None = None
     for line in text.splitlines():
         match = re.fullmatch(r"\s*(?:[-*]\s*)?(PASS|FAIL)\s*:?\s*", line, flags=re.IGNORECASE)
         if match is not None:
-            return match.group(1).upper()
-    return None
+            verdict = match.group(1).upper()
+    return verdict
 
 
 def _validation_evidence_present(text: str) -> bool:

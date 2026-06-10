@@ -3224,6 +3224,80 @@ PASS
     assert "governance mentioned without task scope" not in report.text
 
 
+def test_candidate_outcome_prefers_completed_result_over_stale_executor_markers(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    target = repo / "Components" / "Pages" / "Clients" / "NewClient.razor"
+    target.parent.mkdir(parents=True)
+    target.write_text('<button class="btn btn-danger">Delete</button>\n', encoding="utf-8")
+    candidate = engineering.render_controlled_execution_plan(
+        task="Change the delete action icon on Clients/NewClient receipts table to match the Tailwind trash icon used elsewhere.",
+        repo=repo,
+    ).automation_candidate
+    codex_output = f"""OpenAI Codex v0.139.0
+--------
+workdir: {repo}
+--------
+user
+{candidate["proposed_codex_prompt"]}
+
+Local executor policy:
+- Use only local workspace shell/file execution for repository inspection and edits.
+- Connector-only or remote repository fallback is explicitly disallowed for candidate-execute.
+- If local workspace execution becomes unavailable, stop immediately and report LOCAL_EXECUTOR_UNAVAILABLE.
+
+assistant
+I inspected the targeted Razor file and the existing trash icon pattern.
+
+exec
+pwsh.exe Get-Content Components/Pages/Clients/NewClient.razor
+
+LOCAL_EXECUTOR_UNAVAILABLE
+Candidate execution status: failure
+Failure: executor failure
+
+Files changed
+- (none)
+
+Validation
+- (none)
+
+Files read
+- Components/Pages/Clients/NewClient.razor
+
+Files changed
+- Components/Pages/Clients/NewClient.razor
+
+Summary
+- Updated only the delete action icon styling to match the Tailwind trash icon pattern while preserving delete behavior.
+
+Validation
+- Reviewed the static Razor markup diff and ran dotnet build; build check passed.
+
+PASS
+
+Candidate execution status: failure
+Failure: executor failure
+LOCAL_EXECUTOR_UNAVAILABLE
+"""
+
+    report = engineering.render_candidate_outcome_report(
+        candidate=candidate,
+        candidate_source="candidate.json",
+        codex_output=codex_output,
+        codex_output_source="candidate.codex-output.txt",
+    )
+
+    assert report.status == "accepted"
+    assert report.summary.status == "accepted"
+    assert report.summary.changed_files == ("Components/Pages/Clients/NewClient.razor",)
+    assert report.summary.executed_validations == ("Reviewed the static Razor markup diff and ran dotnet build; build check passed.",)
+    assert "Status: executor_failed" not in report.text
+    assert "Status: accepted" in report.text
+    assert "Actual files changed:\n- Components/Pages/Clients/NewClient.razor" in report.text
+    assert "Executed validation:\n- Reviewed the static Razor markup diff and ran dotnet build; build check passed." in report.text
+    assert "Validation gaps:\n- (none)" in report.text
+
+
 def test_candidate_outcome_prompt_pass_fail_criteria_do_not_claim_pass(tmp_path: Path) -> None:
     repo = _build_repo(tmp_path / "repo")
     candidate = engineering.render_controlled_execution_plan(
