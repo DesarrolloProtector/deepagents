@@ -726,6 +726,11 @@ def test_sample_task_produces_controlled_execution_plan(tmp_path: Path) -> None:
     assert "Route, menu, index, dashboard, or promoted operator-view entry points." in rendered.text
     assert "Expected files likely to change:" in rendered.text
     assert "Expected validation scope:" in rendered.text
+    assert "Validation Decision Record:" in rendered.text
+    assert "Global Validation Law: Choose the cheapest credible falsifier first" in rendered.text
+    assert "VDR uncertainty:" in rendered.text
+    assert "VDR cheapest_falsifier:" in rendered.text
+    assert "VDR escalation_reason:" in rendered.text
     assert "Benchmark relevance:" in rendered.text
     assert "navigation_surface_convergence: legacy-onboarding-path-convergence, navigation-convergence" in rendered.text
     assert "Review risks:" in rendered.text
@@ -800,6 +805,34 @@ PASS
     assert "Codex claimed PASS but deterministic review found unresolved gaps." in report.text
     assert "Reported validation lacks build/test/smoke/check evidence." in report.text
     assert "Follow-up prompt:\n- Revise or justify the Codex result" in report.text
+
+
+def test_supervised_outcome_report_flags_validation_escalation_without_vdr(tmp_path: Path) -> None:
+    report = engineering.render_supervised_outcome_report(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+        codex_output="""Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build check passed, UI workflow route smoke check passed, then ran end-to-end integration validation against an external service.
+
+PASS
+""",
+        source="codex-output.txt",
+    )
+
+    assert report.status == "needs review"
+    assert "Validation escalated without VDR evidence: missing uncertainty, cheapest_falsifier, escalation_reason." in report.text
+    assert "Codex claimed PASS but deterministic review found unresolved gaps." in report.text
 
 
 def test_supervised_outcome_report_marks_reported_fail_as_failed(tmp_path: Path) -> None:
@@ -950,6 +983,13 @@ def test_execution_plan_exposes_structured_automation_candidate(tmp_path: Path) 
     review_contract = candidate["review_contract"]
     assert "Route, menu, index, dashboard, or promoted operator-view entry points." in review_contract["expected_implementation_areas"]
     assert "Verify the affected navigation entries land on the intended operational view." in review_contract["expected_validation_scope"]
+    assert review_contract["validation_decision_record"]["global_validation_law"].startswith("Choose the cheapest credible falsifier first")
+    assert set(review_contract["validation_decision_record"]) == {
+        "global_validation_law",
+        "uncertainty",
+        "cheapest_falsifier",
+        "escalation_reason",
+    }
     assert candidate["automation_readiness"]["classification"] == "automation_ready"
     assert "Selected pack skills have benchmark coverage." in candidate["automation_readiness"]["reasons"]
     assert candidate["proposed_codex_prompt"].startswith("Codex Prompt:")
@@ -982,6 +1022,7 @@ def test_automation_candidate_import_dry_run_validates_current_evidence(tmp_path
     assert "- Readiness classification explainable: yes" in rendered.text
     assert "Codex prompt preview:\nCodex Prompt:" in rendered.text
     assert "Review contract summary:" in rendered.text
+    assert "Validation Decision Record: law=Choose the cheapest credible falsifier first" in rendered.text
     assert "Safety boundaries:" in rendered.text
     assert "- Codex execution: disabled" in rendered.text
     assert "- File edits: disabled by dry-run importer" in rendered.text
@@ -1095,6 +1136,39 @@ PASS
     assert "memory mentioned without task scope" in report.text
     assert "Codex claimed PASS but deterministic review found unresolved gaps." in report.text
     assert "Reported validation lacks build/test/smoke/check evidence." in report.text
+
+
+def test_candidate_outcome_report_flags_validation_escalation_without_vdr(tmp_path: Path) -> None:
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+
+    report = engineering.render_candidate_outcome_report(
+        candidate=candidate,
+        candidate_source="candidate.json",
+        codex_output="""Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build check passed, UI workflow route smoke check passed, then ran end-to-end integration validation against an external service.
+
+PASS
+""",
+        codex_output_source="codex-output.txt",
+    )
+
+    assert report.status == "needs review"
+    assert "Validation escalated without VDR evidence: missing uncertainty, cheapest_falsifier, escalation_reason." in report.text
+    assert "Codex claimed PASS but deterministic review found unresolved gaps." in report.text
 
 
 def test_outcome_learning_signals_derive_recurring_patterns(tmp_path: Path) -> None:

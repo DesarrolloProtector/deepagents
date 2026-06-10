@@ -119,6 +119,29 @@ VALIDATION_NEGATION_TERMS = (
     "wasn't run",
     "were not run",
 )
+GLOBAL_VALIDATION_LAW = (
+    "Choose the cheapest credible falsifier first; escalate validation only when uncertainty remains "
+    "and record why."
+)
+VDR_REQUIRED_FIELDS = ("uncertainty", "cheapest_falsifier", "escalation_reason")
+VALIDATION_ESCALATION_TERMS = (
+    "container",
+    "deployment",
+    "e2e",
+    "end-to-end",
+    "environment",
+    "external service",
+    "full suite",
+    "integration",
+    "network",
+    "provider",
+    "service",
+)
+VDR_FIELD_EVIDENCE_TERMS = {
+    "uncertainty": ("uncertain", "uncertainty", "unknown", "assumption", "risk"),
+    "cheapest_falsifier": ("cheapest falsifier", "smallest", "minimal", "narrowest", "focused", "falsifier", "disprove"),
+    "escalation_reason": ("escalation reason", "escalate", "escalation", "because", "needed", "required", "why"),
+}
 IMPLEMENTATION_INTENT_TERMS = frozenset(
     {
         "arreglar",
@@ -920,6 +943,9 @@ Expected files likely to change:
 Expected validation scope:
 {_one_line_list(_expected_review_validation_scope(task, task_mode, prompt_skills))}
 
+Validation Decision Record:
+{_one_line_list(_validation_decision_record_rows())}
+
 Benchmark relevance:
 {_one_line_list(_benchmark_relevance_rows(selected_pack_skills, coverage))}
 
@@ -988,6 +1014,7 @@ def _automation_candidate_payload(
             "expected_implementation_areas": _expected_implementation_areas(prompt_skills, task_mode),
             "expected_files_likely_to_change": _expected_files_likely_to_change(selected_paths),
             "expected_validation_scope": _expected_review_validation_scope(task, task_mode, prompt_skills),
+            "validation_decision_record": _validation_decision_record_payload(),
             "benchmark_relevance": _benchmark_relevance_rows(selected_pack_skills, coverage),
             "review_risks": _review_risk_rows(task_mode, selected_pack_skills, selected_runtime_skills),
             "anti_drift_checks": _anti_drift_checks(selection, selected_pack_skills),
@@ -1106,10 +1133,11 @@ def render_candidate_outcome_report(
     readiness_deviations = _candidate_outcome_readiness_deviations(payload)
     file_deviations = _changed_file_deviations(expected_files, actual_changed_files)
     validation_gaps = _outcome_validation_gaps(expected_validation, actual_validation, review.validation_warnings)
-    pass_fail_gaps = _pass_fail_consistency_gaps(codex_output, review)
-    deviations = _unique_preserve_order(
-        [*file_deviations, *selected_skill_deviations, *blocker_deviations, *readiness_deviations, *review.drift_warnings, *pass_fail_gaps]
+    preliminary_deviations = _unique_preserve_order(
+        [*file_deviations, *selected_skill_deviations, *blocker_deviations, *readiness_deviations, *review.drift_warnings]
     )
+    pass_fail_gaps = _pass_fail_consistency_gaps(codex_output, review, deviations=tuple(preliminary_deviations), validation_gaps=validation_gaps)
+    deviations = _unique_preserve_order([*preliminary_deviations, *pass_fail_gaps])
     status = _outcome_status(review, deviations=tuple(deviations), validation_gaps=validation_gaps)
     follow_up = _outcome_follow_up_prompt(task, deviations=tuple(deviations), validation_gaps=validation_gaps, status=status)
     benchmark_additions = _suggested_benchmark_additions(selected_pack_skills, coverage, codex_output, deviations)
@@ -1286,11 +1314,21 @@ def _candidate_review_contract_schema_errors(candidate: dict[object, object]) ->
         "anti_drift_checks",
         "pass_fail_criteria",
     )
-    return tuple(
+    errors = [
         f"Candidate review_contract.{field} must be a list of strings."
         for field in fields
         if not _candidate_is_string_sequence(contract.get(field))
-    )
+    ]
+    vdr = contract.get("validation_decision_record")
+    if not isinstance(vdr, dict):
+        errors.append("Candidate review_contract.validation_decision_record must be an object.")
+    else:
+        errors.extend(
+            f"Candidate review_contract.validation_decision_record.{field} must be a non-empty string."
+            for field in ("global_validation_law", *VDR_REQUIRED_FIELDS)
+            if not isinstance(vdr.get(field), str) or not vdr.get(field)
+        )
+    return tuple(errors)
 
 
 def _candidate_boundary_schema_errors(candidate: dict[object, object]) -> tuple[str, ...]:
@@ -1495,10 +1533,22 @@ def _render_candidate_review_contract_summary(contract: dict[object, object]) ->
         (
             f"Expected implementation areas: {_inline_or_none(_candidate_string_sequence(contract.get('expected_implementation_areas')))}",
             f"Expected validation scope: {_inline_or_none(_candidate_string_sequence(contract.get('expected_validation_scope')))}",
+            f"Validation Decision Record: {_candidate_vdr_summary(_candidate_dict_field(contract, 'validation_decision_record'))}",
             f"Benchmark relevance: {_inline_or_none(_candidate_string_sequence(contract.get('benchmark_relevance')))}",
             f"PASS/FAIL criteria: {_inline_or_none(_candidate_string_sequence(contract.get('pass_fail_criteria')))}",
         )
     )
+
+
+def _candidate_vdr_summary(vdr: dict[object, object]) -> str:
+    """Render compact VDR requirements from an imported candidate."""
+    if not vdr:
+        return "(missing)"
+    fields = tuple(field for field in VDR_REQUIRED_FIELDS if _candidate_string_field(vdr, field))
+    law = _candidate_string_field(vdr, "global_validation_law")
+    if not law and not fields:
+        return "(missing)"
+    return f"law={law or '(missing)'}; fields={_inline_or_none(fields)}"
 
 
 def _render_candidate_safety_boundaries(boundaries: dict[object, object]) -> str:
@@ -1744,6 +1794,28 @@ def _expected_review_validation_scope(task: str, task_mode: TaskMode, skills: tu
     return tuple(_unique_preserve_order(rows))
 
 
+def _validation_decision_record_payload() -> dict[str, str]:
+    """Return the required Validation Decision Record fields for candidates."""
+    return {
+        "global_validation_law": GLOBAL_VALIDATION_LAW,
+        "uncertainty": "State what remains uncertain before choosing validation.",
+        "cheapest_falsifier": "Name the smallest credible check that could disprove the change.",
+        "escalation_reason": "Explain why heavier validation is necessary when escalating beyond the cheapest falsifier.",
+    }
+
+
+def _validation_decision_record_rows() -> tuple[str, ...]:
+    """Return review-contract rows for the Validation Decision Record."""
+    record = _validation_decision_record_payload()
+    return (
+        f"Global Validation Law: {record['global_validation_law']}",
+        f"VDR uncertainty: {record['uncertainty']}",
+        f"VDR cheapest_falsifier: {record['cheapest_falsifier']}",
+        f"VDR escalation_reason: {record['escalation_reason']}",
+        "Reject validation escalation that lacks VDR evidence.",
+    )
+
+
 def _benchmark_relevance_rows(selected_pack_skills: tuple[PromptSkill, ...], coverage: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
     """Return benchmark relevance rows for selected pack skills."""
     if not selected_pack_skills:
@@ -1793,6 +1865,7 @@ def _review_pass_fail_criteria(task_mode: TaskMode, selected_pack_skills: tuple[
     criteria = [
         "PASS only if the Codex output addresses the proposed task and respects every selected pack-skill restriction.",
         "PASS only if validation evidence is concrete, scoped, and matches the claimed behavior.",
+        "PASS only if escalated validation includes VDR uncertainty, cheapest_falsifier, and escalation_reason evidence.",
         "FAIL if Codex executes autonomous loops, creates background sessions, or introduces unrelated framework/platform pieces.",
         "FAIL if changed files or behavior drift beyond the task without explicit justification.",
     ]
@@ -2090,8 +2163,9 @@ def render_supervised_outcome_report(
     blocker_deviations = _outcome_blocker_deviations(pack, selected_pack_skills, coverage)
     file_deviations = _changed_file_deviations(expected_files, actual_changed_files)
     validation_gaps = _outcome_validation_gaps(expected_validation, actual_validation, review.validation_warnings)
-    pass_fail_gaps = _pass_fail_consistency_gaps(codex_output, review)
-    deviations = _unique_preserve_order([*file_deviations, *selected_skill_deviations, *blocker_deviations, *review.drift_warnings, *pass_fail_gaps])
+    preliminary_deviations = _unique_preserve_order([*file_deviations, *selected_skill_deviations, *blocker_deviations, *review.drift_warnings])
+    pass_fail_gaps = _pass_fail_consistency_gaps(codex_output, review, deviations=tuple(preliminary_deviations), validation_gaps=validation_gaps)
+    deviations = _unique_preserve_order([*preliminary_deviations, *pass_fail_gaps])
     status = _outcome_status(review, deviations=tuple(deviations), validation_gaps=validation_gaps)
     follow_up = _outcome_follow_up_prompt(task, deviations=tuple(deviations), validation_gaps=validation_gaps, status=status)
     benchmark_additions = _suggested_benchmark_additions(selected_pack_skills, coverage, codex_output, deviations)
@@ -3329,7 +3403,23 @@ def _outcome_validation_gaps(
     missing_terms = tuple(sorted((expected_tokens & {"build", "check", "smoke", "test", "verified", "workflow", "ui"}) - actual_tokens))
     if missing_terms:
         gaps.append(f"Validation may not cover expected scope terms: {', '.join(missing_terms)}.")
+    gaps.extend(_validation_decision_record_gaps(actual_validation))
     return tuple(_unique_preserve_order(gaps))
+
+
+def _validation_decision_record_gaps(actual_validation: tuple[str, ...]) -> tuple[str, ...]:
+    """Return VDR gaps when validation escalates without recorded decision evidence."""
+    text = " ".join(actual_validation).lower()
+    if not text or not any(term in text for term in VALIDATION_ESCALATION_TERMS):
+        return ()
+    missing = tuple(
+        field
+        for field, evidence_terms in VDR_FIELD_EVIDENCE_TERMS.items()
+        if not any(term in text for term in evidence_terms)
+    )
+    if not missing:
+        return ()
+    return (f"Validation escalated without VDR evidence: missing {', '.join(missing)}.",)
 
 
 def _selected_skill_behavior_deviations(
@@ -3360,12 +3450,18 @@ def _outcome_blocker_deviations(
     return tuple(item for item in blockers if item != "None for read-only supervised planning.")
 
 
-def _pass_fail_consistency_gaps(output: str, review: _ReviewResult) -> tuple[str, ...]:
+def _pass_fail_consistency_gaps(
+    output: str,
+    review: _ReviewResult,
+    *,
+    deviations: tuple[str, ...],
+    validation_gaps: tuple[str, ...],
+) -> tuple[str, ...]:
     """Return PASS/FAIL consistency findings."""
     verdict = _status_token(output)
     if verdict is None:
         return ("Codex output did not include PASS or FAIL.",)
-    if verdict == "PASS" and review.status != "PASS":
+    if verdict == "PASS" and (review.status != "PASS" or deviations or validation_gaps):
         return ("Codex claimed PASS but deterministic review found unresolved gaps.",)
     if verdict == "FAIL" and review.status == "FAIL":
         return ("Codex reported FAIL; outcome cannot be accepted.",)
