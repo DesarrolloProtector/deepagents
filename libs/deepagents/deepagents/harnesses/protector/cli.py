@@ -273,6 +273,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     plan.add_argument("--repo", default=None, help="Explicit target repository path.")
     plan.add_argument("--with-history", action="store_true", help="Include recent repo-scoped supervised outcome signals.")
     plan.add_argument("--refine-task", action="store_true", help="Normalize rough operator task text before candidate generation.")
+    plan.add_argument("--evidence", type=Path, action="append", default=[], help="Evidence file path reference to attach; repeat for multiple files.")
     plan.add_argument("--candidate-json", type=Path, default=None, help="Optional path for writing a structured automation candidate JSON.")
     plan.add_argument("--overwrite", action="store_true", help="Allow --candidate-json to replace an existing file.")
     plan.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
@@ -711,6 +712,7 @@ def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         repo_alias=repo_alias,
         include_history=args.with_history,
         refine_task=args.refine_task,
+        evidence_paths=tuple(str(path) for path in args.evidence),
     )
     candidate_path: Path | None = None
     if args.candidate_json is not None:
@@ -782,6 +784,12 @@ def _render_candidate_execution_guide(candidate_path: Path, *, repo: Path | None
     task_payload = candidate.get("task")
     intake = task_payload.get("intake_refinement") if isinstance(task_payload, dict) else None
     refine_args = ("--refine-task",) if isinstance(intake, dict) and intake.get("enabled") is True else ()
+    evidence = task_payload.get("evidence_paths") if isinstance(task_payload, dict) else ()
+    evidence_args: list[str] = []
+    if isinstance(evidence, list):
+        for path in evidence:
+            if isinstance(path, str):
+                evidence_args.extend(("--evidence", path))
     generate = _powershell_command(
         (
             "ph",
@@ -789,6 +797,7 @@ def _render_candidate_execution_guide(candidate_path: Path, *, repo: Path | None
             "--repo",
             repo_text,
             *refine_args,
+            *evidence_args,
             "--candidate-json",
             str(candidate_path),
             task,

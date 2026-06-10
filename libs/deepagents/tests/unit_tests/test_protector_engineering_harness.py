@@ -799,6 +799,116 @@ def test_task_refinement_ambiguous_task_needs_clarification(tmp_path: Path) -> N
     assert "Which target surface, route, view, table, or component should change?" in rendered.text
 
 
+def test_cli_plan_refine_task_preserves_evidence_references(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    evidence = tmp_path / "screenshot.png"
+    evidence.write_text("IMAGE CONTENT SHOULD NOT BE READ", encoding="utf-8")
+    output = tmp_path / "candidate.json"
+
+    assert (
+        cli.main(
+            [
+                "plan",
+                "--repo",
+                str(repo),
+                "--refine-task",
+                "--evidence",
+                str(evidence),
+                "--candidate-json",
+                str(output),
+                "Change",
+                "the",
+                "delete",
+                "action",
+                "icon",
+                "on",
+                "Clients/New",
+                "Client",
+                "table",
+                "of",
+                "receipts",
+                "all",
+                "other",
+                "views",
+                "use",
+                "taildwind",
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    evidence_path = str(evidence)
+    intake = payload["task"]["intake_refinement"]
+    contract = payload["review_contract"]
+
+    assert evidence_path in intake["evidence_paths"]
+    assert evidence_path in payload["task"]["evidence_paths"]
+    assert evidence_path in contract["evidence_references"]
+    assert "Evidence references:" in stdout
+    assert evidence_path in stdout
+    assert "Evidence paths are references only; no OCR, image analysis, or file parsing was performed." in stdout
+    assert "Codex/reviewer must consider these references when validating observed UI or file state." in contract["evidence_handling"]
+    assert "IMAGE CONTENT SHOULD NOT BE READ" not in stdout
+    assert "IMAGE CONTENT SHOULD NOT BE READ" not in output.read_text(encoding="utf-8")
+    assert "Evidence references are available but not analyzed" in payload["proposed_codex_prompt"]
+
+
+def test_candidate_dry_run_renders_evidence_references(tmp_path: Path) -> None:
+    evidence = tmp_path / "screenshot.png"
+    evidence.write_text("DO NOT INVENT THIS CONTENT", encoding="utf-8")
+    candidate = engineering.render_controlled_execution_plan(
+        task="Change the delete action icon on Clients/New Client table of receipts, all other views use taildwind",
+        repo=_build_repo(tmp_path / "repo"),
+        refine_task=True,
+        evidence_paths=(str(evidence),),
+    ).automation_candidate
+
+    rendered = engineering.render_automation_candidate_dry_run(candidate, source="candidate.json")
+
+    assert rendered.valid
+    assert "Evidence references:" in rendered.text
+    assert str(evidence) in rendered.text
+    assert "Evidence handling: Treat evidence paths as operator-provided references only." in rendered.text
+    assert "DO NOT INVENT THIS CONTENT" not in rendered.text
+
+
+def test_candidate_outcome_includes_evidence_references(tmp_path: Path) -> None:
+    evidence = tmp_path / "screenshot.png"
+    evidence.write_text("UNREAD IMAGE CONTENT", encoding="utf-8")
+    candidate = engineering.render_controlled_execution_plan(
+        task="Change the delete action icon on Clients/New Client table of receipts, all other views use taildwind",
+        repo=_build_repo(tmp_path / "repo"),
+        refine_task=True,
+        evidence_paths=(str(evidence),),
+    ).automation_candidate
+
+    report = engineering.render_candidate_outcome_report(
+        candidate=candidate,
+        candidate_source="candidate.json",
+        codex_output="""Files read
+- AGENTS.md
+
+Files changed
+- Views/Clients/NewClient.cshtml
+
+Summary
+- Updated delete action icon styling only.
+
+Validation
+- Build check passed and focused UI smoke check passed.
+
+PASS
+""",
+        codex_output_source="codex-output.txt",
+    )
+
+    assert "Evidence references:\n-" in report.text
+    assert str(evidence) in report.text
+    assert "UNREAD IMAGE CONTENT" not in report.text
+
+
 def test_supervised_outcome_report_accepts_plan_consistent_codex_output(tmp_path: Path) -> None:
     report = engineering.render_supervised_outcome_report(
         task="Fix legacy onboarding path convergence for operator UI views",
