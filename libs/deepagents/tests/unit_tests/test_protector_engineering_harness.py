@@ -46,13 +46,14 @@ def _pass_executor_reliability(monkeypatch) -> None:
             version="codex-cli 0.0.0-test",
             codex_home="CODEX_HOME: test",
             checks=(
-                cli._ExecutorReliabilityCheck(name="active_executable", passed=True, detail="fake-codex"),
+                cli._ExecutorReliabilityCheck(name="codex_cli_available", passed=True, detail="fake-codex"),
                 cli._ExecutorReliabilityCheck(name="version", passed=True, detail="codex-cli 0.0.0-test"),
                 cli._ExecutorReliabilityCheck(name="codex_home", passed=True, detail="test"),
-                cli._ExecutorReliabilityCheck(name="workspace_command", passed=True, detail="ok"),
+                cli._ExecutorReliabilityCheck(name="ph_local_workspace_check", passed=True, detail="ok"),
                 cli._ExecutorReliabilityCheck(name="workspace_read", passed=True, detail="ok"),
                 cli._ExecutorReliabilityCheck(name="workspace_write_delete", passed=True, detail="ok"),
-                cli._ExecutorReliabilityCheck(name="sandbox_helper", passed=True, detail="ok"),
+                cli._ExecutorReliabilityCheck(name="codex_sandbox_helper_available", passed=True, detail="ok"),
+                cli._ExecutorReliabilityCheck(name="codex_model_execution_available", passed=True, detail="not checked"),
             ),
         )
 
@@ -70,7 +71,7 @@ def _pass_executor_reliability(monkeypatch) -> None:
             npm_package_location="test",
             sandbox_helper_path="test",
             runtime_path_prefix="test",
-            sandbox_helper_check=cli._ExecutorReliabilityCheck(name="sandbox_helper", passed=True, detail="test"),
+            sandbox_helper_check=cli._ExecutorReliabilityCheck(name="codex_sandbox_helper_available", passed=True, detail="test"),
         )
 
     monkeypatch.setattr(cli, "_resolve_executor_executable", fake_resolve_executable)
@@ -537,6 +538,7 @@ def test_protector_platform_boundaries_are_explicit() -> None:
         "candidate-dry-run",
         "candidate-outcome",
         "candidate-execute",
+        "executor-status",
         "benchmark",
         "ecc-status",
     )
@@ -3535,49 +3537,40 @@ def test_cli_candidate_execute_passes_no_timeout_when_omitted(tmp_path: Path, mo
     assert "Next review command:" in capsys.readouterr().out
 
 
-def test_codex_cli_executor_preflight_success_allows_execution(tmp_path: Path, monkeypatch) -> None:
+def test_codex_cli_executor_preflight_success_uses_deterministic_workspace_checks(tmp_path: Path, monkeypatch) -> None:
     repo = _build_repo(tmp_path / "repo")
     codex_home = tmp_path / ".codex"
     codex_home.mkdir()
     proof = repo / ".protector-harness" / "executor-preflight.tmp"
-    calls: list[dict[str, object]] = []
 
+    monkeypatch.setattr(cli.sys, "platform", "win32")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
     _write_fake_sandbox_helper(tmp_path)
 
-    def fake_run_codex_once(
-        command: tuple[str, ...],
-        prompt: str,
-        **kwargs: object,
-    ) -> cli._CodexExecutionResult:
-        calls.append({"command": command, "prompt": prompt, "kwargs": kwargs})
-        if "delete preflight" in prompt:
-            proof.unlink()
-            return cli._CodexExecutionResult(returncode=0, output=f"{cli._EXECUTOR_PREFLIGHT_DELETE_OK}\n")
-        token = prompt.split("exactly this text: ", maxsplit=1)[1].splitlines()[0]
-        proof.parent.mkdir(parents=True, exist_ok=True)
-        proof.write_text(token, encoding="utf-8")
-        return cli._CodexExecutionResult(
-            returncode=0,
-            output=(
-                f"{cli._EXECUTOR_PREFLIGHT_BEGIN}\n"
-                f"{cli._EXECUTOR_PREFLIGHT_READ_OK}\n"
-                f"{cli._EXECUTOR_PREFLIGHT_WRITE_OK}\n"
-                f"{cli._EXECUTOR_PREFLIGHT_OK}\n"
-            ),
-        )
+    def fail_run_codex_once(*args: object, **kwargs: object) -> cli._CodexExecutionResult:
+        _ = args, kwargs
+        msg = "deterministic executor preflight must not launch a model session"
+        raise AssertionError(msg)
 
-    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
+    monkeypatch.setattr(cli, "_run_codex_once", fail_run_codex_once)
 
     report = cli._CodexCliExecutor(command=("fake-codex", "exec", "-"), repo=repo).check_reliability()
 
     assert report.ok
-    assert [call["kwargs"]["cwd"] for call in calls] == [repo, repo]
-    assert [call["kwargs"]["output_mode"] for call in calls] == ["capture", "capture"]
-    assert all(str(call["prompt"]).startswith("Codex Prompt:\n") for call in calls)
-    assert all("Connector-only or remote repository fallback is explicitly disallowed" in str(call["prompt"]) for call in calls)
+    assert [check.name for check in report.checks] == [
+        "codex_cli_available",
+        "codex_sandbox_helper_available",
+        "version",
+        "codex_home",
+        "ph_local_workspace_check",
+        "workspace_read",
+        "workspace_write_delete",
+        "codex_model_execution_available",
+    ]
+    assert report.sandbox_helper_path.endswith(cli._CODEX_WINDOWS_SANDBOX_HELPER)
+    assert "not checked by deterministic preflight" in report.checks[-1].detail
     assert not proof.exists()
 
 
@@ -3589,7 +3582,7 @@ def test_codex_cli_executor_preflight_reports_missing_executable(tmp_path: Path,
 
     assert not report.ok
     assert report.executable_path == "(not found)"
-    assert report.failing_checks[0].name == "active_executable"
+    assert report.failing_checks[0].name == "codex_cli_available"
     assert "Install Codex CLI" in (report.failing_checks[0].suggested_fix or "")
 
 
@@ -3614,61 +3607,49 @@ def test_codex_cli_executor_preflight_reports_wrong_codex_home(tmp_path: Path, m
     assert "Set CODEX_HOME" in (report.failing_checks[0].suggested_fix or "")
 
 
-def test_codex_cli_executor_preflight_reports_workspace_read_failure(tmp_path: Path, monkeypatch) -> None:
+def test_codex_cli_executor_preflight_reports_local_workspace_read_failure(tmp_path: Path, monkeypatch) -> None:
     repo = _build_repo(tmp_path / "repo")
     codex_home = tmp_path / ".codex"
     codex_home.mkdir()
-    proof = repo / ".protector-harness" / "executor-preflight.tmp"
+    (repo / "AGENTS.md").unlink()
+    monkeypatch.setattr(cli.sys, "platform", "win32")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
     _write_fake_sandbox_helper(tmp_path)
 
-    def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
-        _ = command, kwargs
-        if "delete preflight" in prompt:
-            proof.unlink(missing_ok=True)
-            return cli._CodexExecutionResult(returncode=0, output=f"{cli._EXECUTOR_PREFLIGHT_DELETE_OK}\n")
-        token = prompt.split("exactly this text: ", maxsplit=1)[1].splitlines()[0]
-        proof.parent.mkdir(parents=True, exist_ok=True)
-        proof.write_text(token, encoding="utf-8")
-        return cli._CodexExecutionResult(
-            returncode=0,
-            output=f"{cli._EXECUTOR_PREFLIGHT_BEGIN}\n{cli._EXECUTOR_PREFLIGHT_WRITE_OK}\n{cli._EXECUTOR_PREFLIGHT_OK}\n",
-        )
+    def fail_run_codex_once(*args: object, **kwargs: object) -> cli._CodexExecutionResult:
+        _ = args, kwargs
+        msg = "workspace read failure must be detected before Codex model execution"
+        raise AssertionError(msg)
 
-    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
+    monkeypatch.setattr(cli, "_run_codex_once", fail_run_codex_once)
 
     report = cli._CodexCliExecutor(command=("fake-codex",), repo=repo).check_reliability()
 
     assert not report.ok
     assert "workspace_read" in [check.name for check in report.failing_checks]
+    assert "workspace_write_delete" in [check.name for check in report.failing_checks]
 
 
-def test_codex_cli_executor_preflight_reports_workspace_write_delete_failure(tmp_path: Path, monkeypatch) -> None:
+def test_codex_cli_executor_preflight_reports_local_workspace_write_delete_failure(tmp_path: Path, monkeypatch) -> None:
     repo = _build_repo(tmp_path / "repo")
     codex_home = tmp_path / ".codex"
     codex_home.mkdir()
+    monkeypatch.setattr(cli.sys, "platform", "win32")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
     _write_fake_sandbox_helper(tmp_path)
+    original_write_text = Path.write_text
 
-    def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
-        _ = command, kwargs
-        if "delete preflight" in prompt:
-            return cli._CodexExecutionResult(returncode=0, output=f"{cli._EXECUTOR_PREFLIGHT_DELETE_OK}\n")
-        return cli._CodexExecutionResult(
-            returncode=0,
-            output=(
-                f"{cli._EXECUTOR_PREFLIGHT_BEGIN}\n"
-                f"{cli._EXECUTOR_PREFLIGHT_READ_OK}\n"
-                f"{cli._EXECUTOR_PREFLIGHT_WRITE_OK}\n"
-                f"{cli._EXECUTOR_PREFLIGHT_OK}\n"
-            ),
-        )
+    def fail_preflight_write(self: Path, data: str, *args: object, **kwargs: object) -> int:
+        if self.name == "executor-preflight.tmp":
+            msg = "write denied"
+            raise OSError(msg)
+        return original_write_text(self, data, *args, **kwargs)
 
-    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
+    monkeypatch.setattr(Path, "write_text", fail_preflight_write)
 
     report = cli._CodexCliExecutor(command=("fake-codex",), repo=repo).check_reliability()
 
@@ -3680,29 +3661,34 @@ def test_codex_cli_executor_preflight_reports_sandbox_helper_failure(tmp_path: P
     repo = _build_repo(tmp_path / "repo")
     codex_home = tmp_path / ".codex"
     codex_home.mkdir()
+    monkeypatch.setattr(cli.sys, "platform", "win32")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
-    _write_fake_sandbox_helper(tmp_path)
-
-    def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
-        _ = command, prompt, kwargs
-        return cli._CodexExecutionResult(returncode=1, output="codex-windows-sandbox-setup.exe program not found\n")
-
-    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
 
     report = cli._CodexCliExecutor(command=("fake-codex",), repo=repo).check_reliability()
 
     assert not report.ok
-    assert "sandbox_helper" in [check.name for check in report.failing_checks]
-    sandbox_check = next(check for check in report.failing_checks if check.name == "sandbox_helper")
+    assert "codex_sandbox_helper_available" in [check.name for check in report.failing_checks]
+    sandbox_check = next(check for check in report.failing_checks if check.name == "codex_sandbox_helper_available")
     assert "codex-windows-sandbox-setup.exe" in sandbox_check.detail
 
 
-def test_executor_status_detects_candidate_execution_path_sandbox_failure(tmp_path: Path, monkeypatch) -> None:
+def test_candidate_execute_no_longer_blocks_on_model_preflight_markers(tmp_path: Path, monkeypatch, capsys) -> None:
     repo = _build_repo(tmp_path / "repo")
     codex_home = tmp_path / ".codex"
     codex_home.mkdir()
+    candidate = tmp_path / "candidate.json"
+    payload = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=repo,
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    approval_sha = engineering.automation_candidate_approval_sha(payload)
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli.sys, "platform", "win32")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
@@ -3710,85 +3696,33 @@ def test_executor_status_detects_candidate_execution_path_sandbox_failure(tmp_pa
 
     def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
         _ = command, kwargs
-        if "Connector-only or remote repository fallback is explicitly disallowed" in prompt:
-            return cli._CodexExecutionResult(returncode=1, output="codex-windows-sandbox-setup.exe program not found\n")
-        return cli._CodexExecutionResult(
-            returncode=0,
-            output=(
-                f"{cli._EXECUTOR_PREFLIGHT_BEGIN}\n"
-                f"{cli._EXECUTOR_PREFLIGHT_READ_OK}\n"
-                f"{cli._EXECUTOR_PREFLIGHT_WRITE_OK}\n"
-                f"{cli._EXECUTOR_PREFLIGHT_OK}\n"
-            ),
+        calls.append(prompt)
+        return cli._CodexExecutionResult(returncode=0, output="candidate output\n")
+
+    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
+
+    assert (
+        cli.main(
+            [
+                "candidate-execute",
+                "--codex-cmd",
+                "fake-codex",
+                "--approve-sha",
+                approval_sha,
+                "--repo",
+                str(repo),
+                str(candidate),
+            ]
         )
-
-    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
-
-    report = cli._CodexCliExecutor(command=("fake-codex", "exec", "-", "--sandbox", "workspace-write"), repo=repo).check_reliability()
-
-    assert not report.ok
-    assert report.sandbox_mode == "workspace-write"
-    assert "sandbox_helper" in [check.name for check in report.failing_checks]
-    assert "codex-windows-sandbox-setup.exe" in "\n".join(check.detail for check in report.failing_checks)
-
-
-def test_executor_status_preflight_exit_one_reports_bounded_stderr(tmp_path: Path, monkeypatch, capsys) -> None:
-    repo = _build_repo(tmp_path / "repo")
-    codex_home = tmp_path / ".codex"
-    codex_home.mkdir()
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
-    monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
-    _write_fake_sandbox_helper(tmp_path)
-    long_output = "stderr: workspace sandbox denied\n" + ("x" * (cli._CODEX_PREFLIGHT_DIAGNOSTIC_OUTPUT_LIMIT + 50))
-
-    def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
-        _ = command, kwargs
-        if "delete preflight" in prompt:
-            return cli._CodexExecutionResult(returncode=0, output=f"{cli._EXECUTOR_PREFLIGHT_DELETE_OK}\n")
-        return cli._CodexExecutionResult(returncode=1, output=long_output)
-
-    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
-
-    assert cli.main(["executor-status", "--repo", str(repo), "--codex-cmd", "fake-codex"]) == 1
+        == 0
+    )
 
     stdout = capsys.readouterr().out
-    assert "workspace_command: Preflight Codex command exited 1." in stdout
-    assert "preflight_command: fake-codex" in stdout
-    assert "preflight_prompt:" in stdout
-    assert "preflight_stdout_stderr:" in stdout
-    assert "stderr: workspace sandbox denied" in stdout
-    assert "... <truncated " in stdout
-
-
-def test_executor_status_preflight_diagnostics_redact_obvious_secrets(tmp_path: Path, monkeypatch, capsys) -> None:
-    repo = _build_repo(tmp_path / "repo")
-    codex_home = tmp_path / ".codex"
-    codex_home.mkdir()
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
-    monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
-    _write_fake_sandbox_helper(tmp_path)
-
-    def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
-        _ = command, kwargs
-        if "delete preflight" in prompt:
-            return cli._CodexExecutionResult(returncode=0, output=f"{cli._EXECUTOR_PREFLIGHT_DELETE_OK}\n")
-        return cli._CodexExecutionResult(
-            returncode=1,
-            output="OPENAI_API_KEY=sk-secretsecret Authorization: Bearer secret-token token=my-secret-token\n",
-        )
-
-    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
-
-    assert cli.main(["executor-status", "--repo", str(repo), "--codex-cmd", "fake-codex"]) == 1
-
-    stdout = capsys.readouterr().out
-    assert "OPENAI_API_KEY=<redacted>" in stdout
-    assert "Authorization: Bearer <redacted>" in stdout
-    assert "token=<redacted>" in stdout
-    assert "sk-secretsecret" not in stdout
-    assert "my-secret-token" not in stdout
+    assert "Next review command:" in stdout
+    assert len(calls) == 1
+    assert "Local executor reliability preflight" not in calls[0]
+    assert "Connector-only or remote repository fallback is explicitly disallowed" in calls[0]
+    assert "Fix legacy onboarding path convergence" in calls[0]
 
 
 def test_executor_status_reports_effective_execution_path(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -3799,7 +3733,7 @@ def test_executor_status_reports_effective_execution_path(tmp_path: Path, monkey
         executable_path="C:/codex/codex.exe",
         version="codex-cli 0.139.0",
         codex_home="C:/Users/test/.codex (env)",
-        checks=(cli._ExecutorReliabilityCheck(name="workspace_command", passed=True, detail="ok"),),
+        checks=(cli._ExecutorReliabilityCheck(name="ph_local_workspace_check", passed=True, detail="ok"),),
         sandbox_mode="workspace-write",
         execution_strategy=cli._codex_execution_strategy(repo),
         command_line="codex exec - --sandbox workspace-write",
@@ -3824,91 +3758,20 @@ def test_executor_status_reports_effective_execution_path(tmp_path: Path, monkey
     assert "CODEX_HOME: C:/Users/test/.codex (env)" in stdout
 
 
-def test_candidate_execute_preflight_failure_reports_diagnostics_without_candidate_prompt(
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-) -> None:
-    repo = _build_repo(tmp_path / "repo")
-    codex_home = tmp_path / ".codex"
-    codex_home.mkdir()
-    candidate = tmp_path / "candidate.json"
-    payload = engineering.render_controlled_execution_plan(
-        task="Fix legacy onboarding path convergence for operator UI views",
-        repo=repo,
-        repo_alias="FinanciacionCore",
-    ).automation_candidate
-    candidate.write_text(json.dumps(payload), encoding="utf-8")
-    approval_sha = engineering.automation_candidate_approval_sha(payload)
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
-    monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
-    _write_fake_sandbox_helper(tmp_path)
-
-    def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
-        _ = command, kwargs
-        if "Fix legacy onboarding path convergence" in prompt:
-            msg = "candidate prompt must not be sent after preflight failure"
-            raise AssertionError(msg)
-        if "delete preflight" in prompt:
-            return cli._CodexExecutionResult(returncode=0, output=f"{cli._EXECUTOR_PREFLIGHT_DELETE_OK}\n")
-        return cli._CodexExecutionResult(returncode=1, output="stderr: codex auth missing\n")
-
-    monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
-
-    assert (
-        cli.main(
-            [
-                "candidate-execute",
-                "--codex-cmd",
-                "fake-codex",
-                "--approve-sha",
-                approval_sha,
-                "--repo",
-                str(repo),
-                str(candidate),
-            ]
-        )
-        == 1
-    )
-
-    stdout = capsys.readouterr().out
-    assert "Candidate execution refused: local executor reliability preflight failed." in stdout
-    assert "workspace_command: Preflight Codex command exited 1." in stdout
-    assert "stderr: codex auth missing" in stdout
-    assert "preflight_prompt:" in stdout
-
-
 def test_executor_status_and_candidate_execute_use_identical_environment_resolution(tmp_path: Path, monkeypatch) -> None:
     repo = _build_repo(tmp_path / "repo")
     codex_home = tmp_path / ".codex"
     codex_home.mkdir()
     helper = _write_fake_sandbox_helper(tmp_path)
     calls: list[dict[str, object]] = []
-    proof = repo / ".protector-harness" / "executor-preflight.tmp"
 
+    monkeypatch.setattr(cli.sys, "platform", "win32")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
 
     def fake_run_codex_once(command: tuple[str, ...], prompt: str, **kwargs: object) -> cli._CodexExecutionResult:
         calls.append({"command": command, "prompt": prompt, "kwargs": kwargs})
-        if "delete preflight" in prompt:
-            proof.unlink(missing_ok=True)
-            return cli._CodexExecutionResult(returncode=0, output=f"{cli._EXECUTOR_PREFLIGHT_DELETE_OK}\n")
-        if "exactly this text: " in prompt:
-            token = prompt.split("exactly this text: ", maxsplit=1)[1].splitlines()[0]
-            proof.parent.mkdir(parents=True, exist_ok=True)
-            proof.write_text(token, encoding="utf-8")
-            return cli._CodexExecutionResult(
-                returncode=0,
-                output=(
-                    f"{cli._EXECUTOR_PREFLIGHT_BEGIN}\n"
-                    f"{cli._EXECUTOR_PREFLIGHT_READ_OK}\n"
-                    f"{cli._EXECUTOR_PREFLIGHT_WRITE_OK}\n"
-                    f"{cli._EXECUTOR_PREFLIGHT_OK}\n"
-                ),
-            )
         return cli._CodexExecutionResult(returncode=0, output="candidate output\n")
 
     monkeypatch.setattr(cli, "_run_codex_once", fake_run_codex_once)
@@ -3919,12 +3782,10 @@ def test_executor_status_and_candidate_execute_use_identical_environment_resolut
 
     assert report.ok
     assert result.returncode == 0
-    preflight_env = calls[0]["kwargs"]["env"]
-    execute_env = calls[-1]["kwargs"]["env"]
-    assert preflight_env["PATH"] == execute_env["PATH"]
-    assert str(helper.parent) == str(preflight_env["PATH"]).split(";")[0]
+    assert len(calls) == 1
+    execute_env = calls[0]["kwargs"]["env"]
+    assert execute_env["PATH"].split(";")[0] == report.runtime_path_prefix == str(helper.parent)
     assert calls[0]["kwargs"]["cwd"] == repo
-    assert calls[-1]["kwargs"]["cwd"] == repo
 
 
 def test_cli_candidate_execute_missing_sandbox_helper_blocks_before_prompt(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -3939,6 +3800,7 @@ def test_cli_candidate_execute_missing_sandbox_helper_blocks_before_prompt(tmp_p
     ).automation_candidate
     candidate.write_text(json.dumps(payload), encoding="utf-8")
     approval_sha = engineering.automation_candidate_approval_sha(payload)
+    monkeypatch.setattr(cli.sys, "platform", "win32")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setattr(cli.shutil, "which", _fake_codex_which(tmp_path))
     monkeypatch.setattr(cli.subprocess, "run", _fake_completed_run)
@@ -4000,7 +3862,7 @@ def test_cli_candidate_execute_blocks_before_candidate_prompt_when_preflight_fai
             codex_home="C:/bad/.codex (env)",
             checks=(
                 cli._ExecutorReliabilityCheck(
-                    name="sandbox_helper",
+                    name="codex_sandbox_helper_available",
                     passed=False,
                     detail="codex-windows-sandbox-setup.exe program not found",
                     suggested_fix="Reinstall or update Codex CLI.",
@@ -4034,7 +3896,7 @@ def test_cli_candidate_execute_blocks_before_candidate_prompt_when_preflight_fai
 
     stdout = capsys.readouterr().out
     assert "Candidate execution refused: local executor reliability preflight failed." in stdout
-    assert "sandbox_helper: codex-windows-sandbox-setup.exe program not found" in stdout
+    assert "codex_sandbox_helper_available: codex-windows-sandbox-setup.exe program not found" in stdout
     assert "active_executable_path: C:/nvm4w/nodejs/codex.cmd" in stdout
     assert "CODEX_HOME: C:/bad/.codex (env)" in stdout
 
@@ -4050,7 +3912,7 @@ def test_cli_executor_status_reports_actionable_diagnostics(tmp_path: Path, monk
         codex_home="C:/Users/test/.codex (default)",
         checks=(
             cli._ExecutorReliabilityCheck(
-                name="active_executable",
+                name="codex_cli_available",
                 passed=False,
                 detail="Unable to resolve executable from command: fake-codex",
                 suggested_fix="Install Codex CLI or pass --codex-cmd.",
@@ -4098,10 +3960,10 @@ def test_cli_candidate_execute_preflight_spinner_disabled_for_non_tty_output(tmp
         codex_home="C:/Users/test/.codex (default)",
         checks=(
             cli._ExecutorReliabilityCheck(
-                name="workspace_command",
+                name="ph_local_workspace_check",
                 passed=False,
-                detail="Preflight Codex command exited 1.",
-                suggested_fix="Fix local Codex workspace command execution before running candidate automation.",
+                detail="ph direct local filesystem check failed.",
+                suggested_fix="Fix local workspace access before running candidate automation.",
             ),
         ),
     )

@@ -8,7 +8,6 @@ import ctypes
 import json
 import os
 import queue
-import re
 import shlex
 import shutil
 import signal
@@ -65,32 +64,18 @@ _GMEM_MOVEABLE = 0x0002
 _CF_UNICODETEXT = 13
 _DEFAULT_CODEX_COMMAND = "codex exec -"
 _CODEX_EXECUTION_HEARTBEAT_SECONDS = 10.0
-_CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS = 60.0
-_CODEX_PREFLIGHT_DIAGNOSTIC_OUTPUT_LIMIT = 2000
 _CODEX_PROCESS_POLL_SECONDS = 0.1
 _CODEX_READER_JOIN_SECONDS = 1.0
 _CLI_SPINNER_INTERVAL_SECONDS = 0.1
 _CLI_SPINNER_FRAMES = ("|", "/", "-", "\\")
 _CODEX_TERMINATION_WAIT_SECONDS = 5.0
 _CODEX_WINDOWS_SANDBOX_HELPER = "codex-windows-sandbox-setup.exe"
-_EXECUTOR_PREFLIGHT_BEGIN = "PROTECTOR_EXECUTOR_PREFLIGHT_BEGIN"
-_EXECUTOR_PREFLIGHT_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_OK"
-_EXECUTOR_PREFLIGHT_WRITE_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_WRITE_OK"
-_EXECUTOR_PREFLIGHT_DELETE_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_DELETE_OK"
-_EXECUTOR_PREFLIGHT_READ_OK = "PROTECTOR_EXECUTOR_PREFLIGHT_READ_OK"
-_EXECUTOR_SANDBOX_FAILURE_PATTERNS = (
-    f"{_CODEX_WINDOWS_SANDBOX_HELPER} program not found",
-    "sandbox helper",
-    "sandbox setup",
-    "helper unavailable",
-)
 _CODEX_TERMINAL_EXECUTOR_FAILURE_PATTERNS = (
     "LOCAL_EXECUTOR_UNAVAILABLE",
     f"{_CODEX_WINDOWS_SANDBOX_HELPER} program not found",
     "executor failure",
     "local executor unavailable",
 )
-_SECRET_VALUE_GROUP_INDEX = 2
 STABLE_ECC_PACK_COMMANDS = (
     "task",
     "review",
@@ -1130,7 +1115,7 @@ class _CodexCliExecutor:
                 codex_home=_format_codex_home(_codex_home_path()),
                 checks=(
                     _ExecutorReliabilityCheck(
-                        name="active_executable",
+                        name="codex_cli_available",
                         passed=False,
                         detail=f"Unable to resolve executable from command: {self.command[0]}",
                         suggested_fix="Install Codex CLI or pass --codex-cmd with the intended Codex executable on PATH.",
@@ -1144,7 +1129,7 @@ class _CodexCliExecutor:
         runtime = _resolve_codex_runtime_environment(executable)
         checks.append(
             _ExecutorReliabilityCheck(
-                name="active_executable",
+                name="codex_cli_available",
                 passed=True,
                 detail=str(executable),
             )
@@ -1158,7 +1143,8 @@ class _CodexCliExecutor:
         checks.append(_check_codex_home(codex_home))
 
         if all(check.passed for check in checks):
-            checks.extend(_run_codex_workspace_preflight(self.command, self.repo, runtime=runtime, progress=progress))
+            checks.extend(_run_deterministic_local_workspace_checks(self.repo, progress=progress))
+            checks.append(_codex_model_execution_available_check())
 
         return _ExecutorReliabilityReport(
             executor=self.name,
@@ -1390,18 +1376,18 @@ def _codex_sandbox_helper_check(helper: Path | None) -> _ExecutorReliabilityChec
     """Return a preflight check for the Codex Windows sandbox helper."""
     if sys.platform != "win32":
         return _ExecutorReliabilityCheck(
-            name="sandbox_helper",
+            name="codex_sandbox_helper_available",
             passed=True,
             detail="Windows sandbox helper is not required on this platform.",
         )
     if helper is not None:
         return _ExecutorReliabilityCheck(
-            name="sandbox_helper",
+            name="codex_sandbox_helper_available",
             passed=True,
             detail=str(helper),
         )
     return _ExecutorReliabilityCheck(
-        name="sandbox_helper",
+        name="codex_sandbox_helper_available",
         passed=False,
         detail=f"{_CODEX_WINDOWS_SANDBOX_HELPER} could not be resolved for the active Codex executable.",
         suggested_fix="Use the Codex install whose platform package includes codex-resources, or reinstall/update the active Codex CLI.",
@@ -1474,342 +1460,98 @@ def _check_codex_home(path: Path) -> _ExecutorReliabilityCheck:
     )
 
 
-def _run_codex_workspace_preflight(
-    command: tuple[str, ...],
+def _run_deterministic_local_workspace_checks(
     repo: Path,
     *,
-    runtime: _CodexRuntimeEnvironment,
     progress: Callable[[str], None] | None,
 ) -> tuple[_ExecutorReliabilityCheck, ...]:
-    """Run the Codex CLI workspace reliability preflight."""
+    """Verify local workspace read/write/delete without asking a model to run commands."""
+    _notify_progress(progress, "checking workspace command")
+    command = _ExecutorReliabilityCheck(
+        name="ph_local_workspace_check",
+        passed=True,
+        detail=f"ph direct local filesystem check running in {repo}",
+    )
+    _notify_progress(progress, "checking workspace read")
+    read = _local_workspace_read_check(repo)
+    write_delete = _ExecutorReliabilityCheck(
+        name="workspace_write_delete",
+        passed=False,
+        detail="Skipped because workspace read failed.",
+        suggested_fix="Fix local repository read access before checking write/delete.",
+    )
+    if read.passed:
+        _notify_progress(progress, "checking workspace write/delete")
+        write_delete = _local_workspace_write_delete_check(repo)
+    return (command, read, write_delete)
+
+
+def _local_workspace_read_check(repo: Path) -> _ExecutorReliabilityCheck:
+    """Verify the target repo can be read directly by `ph`."""
+    target = repo / "AGENTS.md"
+    try:
+        target.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _ExecutorReliabilityCheck(
+            name="workspace_read",
+            passed=False,
+            detail=f"ph could not read {target}: {exc}",
+            suggested_fix="Fix local repo path or filesystem permissions before candidate execution.",
+        )
+    return _ExecutorReliabilityCheck(
+        name="workspace_read",
+        passed=True,
+        detail=f"ph read {target}",
+    )
+
+
+def _local_workspace_write_delete_check(repo: Path) -> _ExecutorReliabilityCheck:
+    """Verify the target repo can be written and cleaned up directly by `ph`."""
     proof = repo / ".protector-harness" / "executor-preflight.tmp"
     token = f"protector-executor-preflight-{os.getpid()}-{time.monotonic_ns()}"
-    preflight_prompt = _codex_workspace_preflight_prompt(token=token)
-    delete_prompt = _codex_workspace_delete_preflight_prompt()
     try:
-        _notify_progress(progress, "checking workspace command")
-        result = _run_codex_candidate_probe_once(
-            command,
-            preflight_prompt,
-            repo=repo,
-            env=runtime.env,
-        )
-        _notify_progress(progress, "checking workspace read")
-        proof_text = _read_preflight_proof(proof)
-        _notify_progress(progress, "checking workspace write/delete")
-        delete_result = _run_codex_candidate_probe_once(
-            command,
-            delete_prompt,
-            repo=repo,
-            env=runtime.env,
-        )
-    except OSError as exc:
+        proof.parent.mkdir(parents=True, exist_ok=True)
+        proof.write_text(token, encoding="utf-8")
+        actual = proof.read_text(encoding="utf-8")
+        if actual != token:
+            return _ExecutorReliabilityCheck(
+                name="workspace_write_delete",
+                passed=False,
+                detail=f"ph read back unexpected content from {proof}",
+                suggested_fix="Fix local filesystem consistency before candidate execution.",
+            )
+        proof.unlink()
         if proof.exists():
-            with contextlib.suppress(OSError):
-                proof.unlink()
-        return (
-            _ExecutorReliabilityCheck(
-                name="workspace_command",
+            return _ExecutorReliabilityCheck(
+                name="workspace_write_delete",
                 passed=False,
-                detail=str(exc),
-                suggested_fix="Fix the Codex CLI installation or PATH before launching candidate execution.",
-            ),
-        )
-    checks = _codex_workspace_preflight_checks(
-        result,
-        delete_result=delete_result,
-        command=command,
-        preflight_prompt=preflight_prompt,
-        delete_prompt=delete_prompt,
-        proof=proof,
-        proof_text=proof_text,
-        token=token,
-    )
-    if proof.exists():
+                detail=f"ph deleted {proof}, but it still exists",
+                suggested_fix="Fix local filesystem delete behavior before candidate execution.",
+            )
+    except OSError as exc:
         with contextlib.suppress(OSError):
-            proof.unlink()
-    return checks
-
-
-def _run_codex_candidate_probe_once(
-    command: tuple[str, ...],
-    prompt: str,
-    *,
-    repo: Path,
-    env: dict[str, str],
-) -> _CodexExecutionResult:
-    """Run a preflight prompt through the same wrapper used for candidate execution."""
-    return _run_codex_once(
-        command,
-        _local_executor_candidate_prompt(prompt),
-        timeout=_CODEX_EXECUTOR_PREFLIGHT_TIMEOUT_SECONDS,
-        heartbeat_interval=0,
-        cwd=repo,
-        env=env,
-        output_mode="capture",
-    )
-
-
-def _codex_workspace_preflight_checks(
-    result: _CodexExecutionResult,
-    *,
-    delete_result: _CodexExecutionResult,
-    command: tuple[str, ...],
-    preflight_prompt: str,
-    delete_prompt: str,
-    proof: Path,
-    proof_text: str | None,
-    token: str,
-) -> tuple[_ExecutorReliabilityCheck, ...]:
-    """Classify the Codex CLI workspace preflight result."""
-    output = result.output
-    delete_output = delete_result.output
-    normalized = output.lower()
-    delete_normalized = delete_output.lower()
-    sandbox_failure = any(pattern in normalized or pattern in delete_normalized for pattern in _EXECUTOR_SANDBOX_FAILURE_PATTERNS)
-    write_proved = _EXECUTOR_PREFLIGHT_WRITE_OK in output and proof_text == token
-    delete_proved = _EXECUTOR_PREFLIGHT_DELETE_OK in delete_output and not proof.exists()
-    checks = [
-        _ExecutorReliabilityCheck(
-            name="sandbox_helper",
-            passed=not sandbox_failure,
-            detail=(
-                "No sandbox/helper failure was reported." if not sandbox_failure else _first_matching_pattern(f"{normalized}\n{delete_normalized}")
-            ),
-            suggested_fix=None
-            if not sandbox_failure
-            else (
-                "Reinstall or update Codex CLI so codex-windows-sandbox-setup.exe is installed with the active executable, "
-                "or fix PATH so candidate-execute uses the intended Codex binary."
-            ),
-        ),
-        _ExecutorReliabilityCheck(
-            name="workspace_command",
-            passed=result.returncode == 0 and _EXECUTOR_PREFLIGHT_BEGIN in output and _EXECUTOR_PREFLIGHT_OK in output,
-            detail=_workspace_preflight_detail(
-                result,
-                _EXECUTOR_PREFLIGHT_OK,
-                command=command,
-                prompt=preflight_prompt,
-                redactions=(token,),
-            ),
-            suggested_fix=None
-            if result.returncode == 0 and _EXECUTOR_PREFLIGHT_BEGIN in output and _EXECUTOR_PREFLIGHT_OK in output
-            else "Fix local Codex workspace command execution before running candidate automation.",
-        ),
-        _ExecutorReliabilityCheck(
-            name="workspace_read",
-            passed=_EXECUTOR_PREFLIGHT_READ_OK in output,
-            detail=(
-                "Codex read AGENTS.md in the target repo." if _EXECUTOR_PREFLIGHT_READ_OK in output else "Codex did not prove target repo file read."
-            ),
-            suggested_fix=(
-                None if _EXECUTOR_PREFLIGHT_READ_OK in output else "Ensure Codex can run local shell commands and read files in the target repo."
-            ),
-        ),
-        _ExecutorReliabilityCheck(
+            if proof.exists():
+                proof.unlink()
+        return _ExecutorReliabilityCheck(
             name="workspace_write_delete",
-            passed=write_proved and delete_proved,
-            detail=(
-                "Codex wrote .protector-harness/executor-preflight.tmp with the expected token and deleted it."
-                if write_proved and delete_proved
-                else _workspace_write_delete_detail(
-                    write_proved=write_proved,
-                    delete_proved=delete_proved,
-                    delete_result=delete_result,
-                    command=command,
-                    delete_prompt=delete_prompt,
-                )
-            ),
-            suggested_fix=None
-            if write_proved and delete_proved
-            else "Ensure Codex can write and delete files under .protector-harness in the target repo.",
-        ),
-    ]
-    termination_report = result.termination_report or delete_result.termination_report
-    if termination_report is not None:
-        checks.append(
-            _ExecutorReliabilityCheck(
-                name="workspace_process_cleanup",
-                passed=False,
-                detail=_render_process_termination_report(termination_report).strip(),
-                suggested_fix="Fix the local executor so the preflight can complete without interruption or timeout.",
-            )
+            passed=False,
+            detail=f"ph could not write/read/delete {proof}: {exc}",
+            suggested_fix="Fix local repo write/delete permissions before candidate execution.",
         )
-    return tuple(checks)
-
-
-def _read_preflight_proof(proof: Path) -> str | None:
-    """Read the preflight proof file without letting diagnostics crash."""
-    try:
-        return proof.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-
-
-def _first_matching_pattern(output: str) -> str:
-    """Return the first known sandbox failure found in preflight output."""
-    for pattern in _EXECUTOR_SANDBOX_FAILURE_PATTERNS:
-        if pattern in output:
-            return pattern
-    return "sandbox/helper failure"
-
-
-def _workspace_preflight_detail(
-    result: _CodexExecutionResult,
-    marker: str,
-    *,
-    command: tuple[str, ...],
-    prompt: str,
-    redactions: tuple[str, ...],
-) -> str:
-    """Render concise workspace preflight detail."""
-    if result.returncode != 0:
-        return _render_preflight_failure_diagnostics(
-            exit_code=result.returncode,
-            command=command,
-            prompt=prompt,
-            output=result.output,
-            redactions=redactions,
-        )
-    if marker not in result.output:
-        return (
-            f"Preflight output did not include marker {marker}.\n"
-            + _render_preflight_command_shape(command=command, prompt=prompt, redactions=redactions)
-            + "\n"
-            + _render_bounded_preflight_output(result.output, redactions=redactions)
-        )
-    return "Codex local workspace command completed with expected markers."
-
-
-def _workspace_write_delete_detail(
-    *,
-    write_proved: bool,
-    delete_proved: bool,
-    delete_result: _CodexExecutionResult,
-    command: tuple[str, ...],
-    delete_prompt: str,
-) -> str:
-    """Render write/delete failure detail with bounded diagnostics when delete failed."""
-    rows = [
-        "Codex did not prove temporary workspace write/delete with a verifiable token.",
-        f"write_proved: {_yes_no_bool(value=write_proved)}",
-        f"delete_proved: {_yes_no_bool(value=delete_proved)}",
-    ]
-    if delete_result.returncode != 0:
-        rows.append(
-            _render_preflight_failure_diagnostics(
-                exit_code=delete_result.returncode,
-                command=command,
-                prompt=delete_prompt,
-                output=delete_result.output,
-                redactions=(),
-            )
-        )
-    return "\n".join(rows)
-
-
-def _render_preflight_failure_diagnostics(
-    *,
-    exit_code: int,
-    command: tuple[str, ...],
-    prompt: str,
-    output: str,
-    redactions: tuple[str, ...],
-) -> str:
-    """Render bounded, redacted Codex preflight failure diagnostics."""
-    return "\n".join(
-        (
-            f"Preflight Codex command exited {exit_code}.",
-            _render_preflight_command_shape(command=command, prompt=prompt, redactions=redactions),
-            _render_bounded_preflight_output(output, redactions=redactions),
-        )
+    return _ExecutorReliabilityCheck(
+        name="workspace_write_delete",
+        passed=True,
+        detail=f"ph wrote, read, and deleted {proof}",
     )
 
 
-def _render_preflight_command_shape(
-    *,
-    command: tuple[str, ...],
-    prompt: str,
-    redactions: tuple[str, ...],
-) -> str:
-    """Render the exact preflight command and sanitized prompt shape."""
-    sanitized_prompt = _redact_preflight_text(prompt, redactions=redactions).strip()
-    return f"preflight_command: {_powershell_command(command)}\npreflight_prompt:\n{sanitized_prompt}"
-
-
-def _render_bounded_preflight_output(output: str, *, redactions: tuple[str, ...]) -> str:
-    """Render bounded, redacted preflight stdout/stderr."""
-    text = _redact_preflight_text(output, redactions=redactions).strip()
-    if not text:
-        text = "(no output captured)"
-    if len(text) > _CODEX_PREFLIGHT_DIAGNOSTIC_OUTPUT_LIMIT:
-        omitted = len(text) - _CODEX_PREFLIGHT_DIAGNOSTIC_OUTPUT_LIMIT
-        text = f"{text[:_CODEX_PREFLIGHT_DIAGNOSTIC_OUTPUT_LIMIT]}\n... <truncated {omitted} chars>"
-    return f"preflight_stdout_stderr:\n{text}"
-
-
-def _redact_preflight_text(text: str, *, redactions: tuple[str, ...]) -> str:
-    """Redact obvious secrets from preflight diagnostics."""
-    redacted = text
-    for secret in redactions:
-        if secret:
-            redacted = redacted.replace(secret, "<redacted>")
-    patterns = (
-        r"(?i)(api[_-]?key\s*[:=]\s*)([^\s,;]+)",
-        r"(?i)(token\s*[:=]\s*)([^\s,;]+)",
-        r"(?i)(authorization\s*:\s*bearer\s+)([^\s,;]+)",
-        r"\bsk-[A-Za-z0-9_-]{8,}\b",
+def _codex_model_execution_available_check() -> _ExecutorReliabilityCheck:
+    """Report that model execution is intentionally not part of reliability gating."""
+    return _ExecutorReliabilityCheck(
+        name="codex_model_execution_available",
+        passed=True,
+        detail="not checked by deterministic preflight; candidate-execute is the first model execution",
     )
-    for pattern in patterns:
-        redacted = re.sub(pattern, _redact_secret_match, redacted)
-    return redacted
-
-
-def _redact_secret_match(match: re.Match[str]) -> str:
-    """Return a redacted regex replacement while preserving labels."""
-    if match.lastindex and match.lastindex >= _SECRET_VALUE_GROUP_INDEX:
-        return f"{match.group(1)}<redacted>"
-    return "<redacted>"
-
-
-def _yes_no_bool(*, value: bool) -> str:
-    """Render a boolean as yes/no for diagnostics."""
-    return "yes" if value else "no"
-
-
-def _codex_workspace_preflight_prompt(*, token: str) -> str:
-    """Return the local workspace reliability prompt for Codex CLI."""
-    return f"""Codex Prompt:
-Local executor reliability preflight.
-
-You must use local workspace shell execution only. Do not inspect GitHub, connectors, remote repositories, or browser resources.
-If local shell execution is unavailable, stop immediately and report LOCAL_EXECUTOR_UNAVAILABLE.
-
-Run one local PowerShell command in the current workspace that performs these exact checks:
-1. Print {_EXECUTOR_PREFLIGHT_BEGIN}.
-2. Print the current working directory.
-3. Read AGENTS.md from the current workspace and print {_EXECUTOR_PREFLIGHT_READ_OK}.
-4. Create .protector-harness if needed.
-5. Write .protector-harness/executor-preflight.tmp with exactly this text: {token}
-6. Read the file back.
-7. Print {_EXECUTOR_PREFLIGHT_WRITE_OK}.
-8. Print {_EXECUTOR_PREFLIGHT_OK}.
-
-Do not edit any other file. Do not continue if a local workspace command fails.
-"""
-
-
-def _codex_workspace_delete_preflight_prompt() -> str:
-    """Return the local workspace delete proof prompt for Codex CLI."""
-    return f"""Codex Prompt:
-Local executor delete preflight.
-
-You must use local workspace shell execution only. Do not inspect GitHub, connectors, remote repositories, or browser resources.
-Delete .protector-harness/executor-preflight.tmp in the current workspace.
-Verify the file no longer exists and print {_EXECUTOR_PREFLIGHT_DELETE_OK}.
-Do not edit any other file. Do not continue if a local workspace command fails.
-"""
 
 
 def _local_executor_candidate_prompt(prompt: str) -> str:
