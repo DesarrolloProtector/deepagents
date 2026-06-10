@@ -759,6 +759,46 @@ def test_expected_files_do_not_use_selected_guidance_context(tmp_path: Path) -> 
     assert ".codex/agent-workflow/feature-contract-template.md" not in expected_files_section
 
 
+def test_task_refinement_normalizes_rough_ui_task_for_candidate_generation(tmp_path: Path) -> None:
+    raw_task = "Change the delete action icon on Clients/New Client table of receipts, all other views use taildwind"
+
+    rendered = engineering.render_controlled_execution_plan(
+        task=raw_task,
+        repo=_build_repo(tmp_path / "repo"),
+        refine_task=True,
+    )
+    candidate = rendered.automation_candidate
+    intake = candidate["task"]["intake_refinement"]
+
+    assert "Task Intake Refinement:" in rendered.text
+    assert "Status: ready" in rendered.text
+    assert intake["status"] == "ready"
+    assert intake["target_surface"] == "Clients/NewClient receipts table"
+    assert intake["requested_change"] == "Update only the delete action icon/button styling to match the existing Tailwind-style delete actions."
+    assert candidate["task"]["raw_operator_task"] == raw_task
+    assert candidate["task"]["summary"].startswith("Update only the delete action icon/button styling")
+    assert "Update only the delete action icon/button styling" in candidate["proposed_codex_prompt"]
+    assert "Preserve routes, handlers, forms, table data, delete behavior, and all non-delete UI." not in candidate["proposed_codex_prompt"]
+    assert "Do not change delete behavior." in candidate["proposed_codex_prompt"]
+    assert "Unknown until code inspection" in candidate["review_contract"]["expected_files_likely_to_change"]
+
+
+def test_task_refinement_ambiguous_task_needs_clarification(tmp_path: Path) -> None:
+    rendered = engineering.render_controlled_execution_plan(
+        task="Fix it",
+        repo=_build_repo(tmp_path / "repo"),
+        refine_task=True,
+    )
+    readiness = rendered.automation_candidate["automation_readiness"]
+    intake = rendered.automation_candidate["task"]["intake_refinement"]
+
+    assert intake["status"] == "needs_clarification"
+    assert "Which target surface, route, view, table, or component should change?" in intake["missing_details"]
+    assert readiness["classification"] == "supervised_only"
+    assert "Task intake needs clarification:" in rendered.text
+    assert "Which target surface, route, view, table, or component should change?" in rendered.text
+
+
 def test_supervised_outcome_report_accepts_plan_consistent_codex_output(tmp_path: Path) -> None:
     report = engineering.render_supervised_outcome_report(
         task="Fix legacy onboarding path convergence for operator UI views",
@@ -1024,10 +1064,9 @@ def test_execution_plan_exposes_structured_automation_candidate(tmp_path: Path) 
     assert candidate["schema_version"] == "ecc-automation-candidate-v1"
     assert candidate["selected_pack"]["name"] == "protector-financiacioncore"
     assert candidate["selected_pack"]["validation_status"] == "valid"
-    assert candidate["task"] == {
-        "summary": "Fix legacy onboarding path convergence for operator UI views",
-        "mode": "ui_runtime_bug",
-    }
+    assert candidate["task"]["summary"] == "Fix legacy onboarding path convergence for operator UI views"
+    assert candidate["task"]["mode"] == "ui_runtime_bug"
+    assert candidate["task"]["raw_operator_task"] == "Fix legacy onboarding path convergence for operator UI views"
     assert "AGENTS.md" in candidate["selected_context_paths"]
     assert "contract-first company and financer onboarding" in " ".join(candidate["selected_knowledge"]["facts"])
     assert {"name": "navigation_surface_convergence", "source": "pack"} in candidate["selected_skills"]

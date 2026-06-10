@@ -425,6 +425,21 @@ class HarnessUsageError(ValueError):
 
 
 @dataclass(frozen=True)
+class TaskIntakeRefinement:
+    """Deterministic task intake normalization for rough operator text."""
+
+    raw_task: str
+    status: str
+    normalized_task: str
+    target_surface: str
+    requested_change: str
+    explicit_non_goals: tuple[str, ...]
+    preserved_behavior: tuple[str, ...]
+    suspected_risk_level: str
+    missing_details: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class RenderedOutput:
     """Console payload plus the exact prompt section available for file output."""
 
@@ -768,26 +783,208 @@ def render_prompt_benchmark_report(results: tuple[PromptBenchmarkResult, ...]) -
     return "\n".join(rows)
 
 
+def refine_operator_task(raw_task: str) -> TaskIntakeRefinement:
+    """Normalize rough operator task text into bounded deterministic intent."""
+    task = " ".join(raw_task.split())
+    tokens = _tokens(task)
+    target_surface = _task_intake_target_surface(task, tokens)
+    requested_change = _task_intake_requested_change(task, tokens)
+    missing = _task_intake_missing_details(target_surface, requested_change, tokens)
+    status = "needs_clarification" if missing else "ready"
+    non_goals = _task_intake_non_goals(tokens)
+    preserved = _task_intake_preserved_behavior(tokens)
+    risk = _task_intake_risk_level(tokens)
+    normalized = _task_intake_normalized_task(
+        target_surface=target_surface,
+        requested_change=requested_change,
+        non_goals=non_goals,
+        preserved_behavior=preserved,
+    )
+    return TaskIntakeRefinement(
+        raw_task=task,
+        status=status,
+        normalized_task=normalized,
+        target_surface=target_surface,
+        requested_change=requested_change,
+        explicit_non_goals=non_goals,
+        preserved_behavior=preserved,
+        suspected_risk_level=risk,
+        missing_details=missing,
+    )
+
+
+def _effective_task_for_plan(raw_task: str, refinement: TaskIntakeRefinement | None) -> str:
+    """Return the task text used for prompt/candidate generation."""
+    if refinement is None or refinement.status != "ready":
+        return raw_task
+    return refinement.normalized_task
+
+
+def _task_intake_target_surface(task: str, tokens: frozenset[str]) -> str:
+    """Infer a bounded target surface without inventing files."""
+    surface = ""
+    slash_match = re.search(r"\b([A-Z][A-Za-z0-9]+)/([A-Z][A-Za-z0-9]+)(?:\s+([A-Z][A-Za-z0-9]+))?", task)
+    if slash_match:
+        suffix = slash_match.group(3) or ""
+        surface = f"{slash_match.group(1)}/{slash_match.group(2)}{suffix}"
+        if tokens & {"receipt", "receipts"}:
+            surface = f"{surface} receipts table"
+    elif tokens & {"receipt", "receipts"} and tokens & {"table", "tabla"}:
+        surface = "receipts table"
+    elif tokens & {"client", "clients"} and tokens & {"table", "tabla"}:
+        surface = "clients table"
+    elif tokens & {"ui", "view", "views", "razor", "css", "button", "icon"}:
+        surface = "targeted UI surface"
+    elif " on " in task.lower() or " in " in task.lower():
+        surface = "named operator surface from task text"
+    return surface
+
+
+def _task_intake_requested_change(task: str, tokens: frozenset[str]) -> str:
+    """Infer the requested change without broadening scope."""
+    lowered = task.lower()
+    if tokens & {"delete"} and tokens & {"icon", "button", "action"}:
+        if "taildwind" in lowered or "tailwind" in lowered:
+            return "Update only the delete action icon/button styling to match the existing Tailwind-style delete actions."
+        return "Update only the delete action icon/button styling."
+    if tokens & {"css", "style", "styles", "visual"}:
+        return "Update only the requested visual styling."
+    if tokens & {"icon"}:
+        return "Update only the requested icon styling."
+    if _has_implementation_intent(task):
+        return _task_objective(task)
+    return ""
+
+
+def _task_intake_missing_details(target_surface: str, requested_change: str, tokens: frozenset[str]) -> tuple[str, ...]:
+    """Return clarification questions for essential missing intent."""
+    missing: list[str] = []
+    if not target_surface:
+        missing.append("Which target surface, route, view, table, or component should change?")
+    if not requested_change:
+        missing.append("What specific change should be made?")
+    if tokens & {"every", "global"} and not tokens & {"only", "specific", "targeted"}:
+        missing.append("Should this apply globally or only to named surfaces?")
+    return tuple(missing)
+
+
+def _task_intake_non_goals(tokens: frozenset[str]) -> tuple[str, ...]:
+    """Return explicit non-goals for a normalized intake task."""
+    non_goals = [
+        "Do not change routes.",
+        "Do not change handlers.",
+        "Do not change forms.",
+        "Do not change table data.",
+    ]
+    if tokens & {"delete"}:
+        non_goals.append("Do not change delete behavior.")
+    non_goals.append("Do not change non-target UI.")
+    return tuple(non_goals)
+
+
+def _task_intake_preserved_behavior(tokens: frozenset[str]) -> tuple[str, ...]:
+    """Return behavior that must be preserved by the normalized task."""
+    preserved = ["Existing navigation, data binding, and submitted actions must keep working."]
+    if tokens & {"delete"}:
+        preserved.append("Delete action semantics, confirmation, authorization, and handlers must remain unchanged.")
+    if tokens & {"table", "tabla", "receipt", "receipts"}:
+        preserved.append("Existing table rows, columns, and data values must remain unchanged.")
+    return tuple(preserved)
+
+
+def _task_intake_risk_level(tokens: frozenset[str]) -> str:
+    """Return a deterministic suspected risk level."""
+    if tokens & {"provider", "api", "database", "migration", "auth", "security"}:
+        return "high"
+    if tokens & {"route", "workflow", "delete", "form"}:
+        return "medium"
+    return "low"
+
+
+def _task_intake_normalized_task(
+    *,
+    target_surface: str,
+    requested_change: str,
+    non_goals: tuple[str, ...],
+    preserved_behavior: tuple[str, ...],
+) -> str:
+    """Render the normalized bounded task text."""
+    target = target_surface or "the target surface that the operator must clarify"
+    change = requested_change or "Clarify the requested change before implementation."
+    non_goal_text = " ".join(non_goals)
+    preserved_text = " ".join(preserved_behavior)
+    return f"{change} Target surface: {target}. {non_goal_text} Preserve: {preserved_text}"
+
+
+def _task_intake_refinement_payload(refinement: TaskIntakeRefinement | None) -> dict[str, object]:
+    """Return a JSON-ready task intake refinement payload."""
+    if refinement is None:
+        return {
+            "enabled": False,
+            "status": "not_requested",
+        }
+    return {
+        "enabled": True,
+        "status": refinement.status,
+        "normalized_task": refinement.normalized_task,
+        "target_surface": refinement.target_surface,
+        "requested_change": refinement.requested_change,
+        "explicit_non_goals": refinement.explicit_non_goals,
+        "preserved_behavior": refinement.preserved_behavior,
+        "suspected_risk_level": refinement.suspected_risk_level,
+        "missing_details": refinement.missing_details,
+    }
+
+
+def _render_task_intake_refinement(refinement: TaskIntakeRefinement | None) -> str:
+    """Render optional task-intake normalization for `ph plan`."""
+    if refinement is None:
+        return ""
+    return f"""Task Intake Refinement:
+Status: {refinement.status}
+Raw operator task:
+- {refinement.raw_task}
+Normalized task intent:
+- {refinement.normalized_task}
+Target surface:
+- {refinement.target_surface or "(missing)"}
+Requested change:
+- {refinement.requested_change or "(missing)"}
+Explicit non-goals:
+{_one_line_list(refinement.explicit_non_goals)}
+Preserved behavior:
+{_one_line_list(refinement.preserved_behavior)}
+Suspected risk level:
+- {refinement.suspected_risk_level}
+Missing details/questions:
+{_one_line_list(refinement.missing_details)}
+"""
+
+
 def render_controlled_execution_plan(
     *,
     task: str,
     repo: Path | None,
     repo_alias: str | None = None,
     include_history: bool = False,
+    refine_task: bool = False,
 ) -> RenderedExecutionPlan:
     """Render a controlled multi-agent execution plan without invoking Codex."""
-    selection = _select_context(repo, task, repo_alias=repo_alias)
-    task_mode = _classify_task_mode(task)
-    prompt_skills = _selected_prompt_skills(task, task_mode)
+    task_refinement = refine_operator_task(task) if refine_task else None
+    effective_task = _effective_task_for_plan(task, task_refinement)
+    selection = _select_context(repo, effective_task, repo_alias=repo_alias)
+    task_mode = _classify_task_mode(effective_task)
+    prompt_skills = _selected_prompt_skills(effective_task, task_mode)
     plan = build_execution_plan(task_mode=task_mode, prompt_skills=prompt_skills)
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
-    codex_prompt = _render_codex_prompt(task, selection)
+    codex_prompt = _render_codex_prompt(effective_task, selection)
     learning_signals = _outcome_learning_signals(repo, prompt_skills)
     readiness = _automation_readiness_decision(
         selection=selection,
         prompt_skills=prompt_skills,
         task_mode=task_mode,
         learning_signals=learning_signals,
+        task_refinement=task_refinement,
     )
     history_signals = _recent_outcome_signals(repo, prompt_skills) if include_history else ()
     planning_adaptations = _adaptive_planning_adjustments(learning_signals)
@@ -806,7 +1003,9 @@ Adaptive planning adjustments:
         else ""
     )
     automation_candidate = _automation_candidate_payload(
-        task=task,
+        task=effective_task,
+        raw_task=task,
+        task_refinement=task_refinement,
         task_mode=task_mode,
         selection=selection,
         prompt_skills=prompt_skills,
@@ -819,6 +1018,7 @@ Adaptive planning adjustments:
     text = f"""{render_agentic_execution_plan(plan)}
 
 Task mode: {task_mode}
+{_render_task_intake_refinement(task_refinement)}
 Selected context paths:
 {_one_line_list(selected_paths)}
 
@@ -827,7 +1027,7 @@ Knowledge gates:
 
 {
         _render_ecc_supervised_automation_pilot(
-            task=task,
+            task=effective_task,
             task_mode=task_mode,
             selection=selection,
             prompt_skills=prompt_skills,
@@ -995,6 +1195,8 @@ Automation boundaries:
 def _automation_candidate_payload(
     *,
     task: str,
+    raw_task: str,
+    task_refinement: TaskIntakeRefinement | None,
     task_mode: TaskMode,
     selection: _ContextSelection,
     prompt_skills: tuple[PromptSkill, ...],
@@ -1021,7 +1223,9 @@ def _automation_candidate_payload(
         },
         "task": {
             "summary": _task_objective(task),
+            "raw_operator_task": raw_task,
             "mode": task_mode,
+            "intake_refinement": _task_intake_refinement_payload(task_refinement),
         },
         "selected_context_paths": selected_paths,
         "selected_knowledge": {
@@ -1081,6 +1285,7 @@ def render_automation_candidate_dry_run(candidate: object, *, source: str) -> Re
         has_knowledge=has_knowledge,
         problem_signals=_problem_learning_signals(learning_signals),
         task_mode=_candidate_task_mode(payload),
+        task_refinement=_candidate_task_refinement(payload),
     )
     validation_errors = tuple(
         _unique_preserve_order(
@@ -1303,6 +1508,51 @@ def _candidate_task_schema_errors(candidate: dict[object, object]) -> tuple[str,
         errors.append("Candidate task.summary must be a non-empty string.")
     if not isinstance(task.get("mode"), str) or task.get("mode") not in TASK_MODE_VALUES:
         errors.append(f"Candidate task.mode is unsupported: {_candidate_display_value(task.get('mode'))}")
+    errors.extend(_candidate_task_intake_schema_errors(task))
+    return tuple(errors)
+
+
+def _candidate_task_intake_schema_errors(task: dict[object, object]) -> tuple[str, ...]:
+    """Return schema errors for optional task intake refinement metadata."""
+    refinement = task.get("intake_refinement")
+    if refinement is None:
+        return ()
+    if not isinstance(refinement, dict):
+        return ("Candidate task.intake_refinement must be an object.")
+    errors: list[str] = []
+    if not isinstance(refinement.get("enabled"), bool):
+        errors.append("Candidate task.intake_refinement.enabled must be a boolean.")
+    if refinement.get("enabled") is not True:
+        return tuple(errors)
+    errors.extend(_candidate_enabled_task_intake_schema_errors(task, refinement))
+    return tuple(errors)
+
+
+def _candidate_enabled_task_intake_schema_errors(
+    task: dict[object, object],
+    refinement: dict[object, object],
+) -> tuple[str, ...]:
+    """Return schema errors for enabled task intake refinement metadata."""
+    errors: list[str] = []
+    if refinement.get("status") not in {"ready", "needs_clarification"}:
+        errors.append("Candidate task.intake_refinement.status must be ready or needs_clarification.")
+    errors.extend(
+        f"Candidate task.intake_refinement.{field} must be a non-empty string."
+        for field in ("normalized_task", "suspected_risk_level")
+        if not isinstance(refinement.get(field), str) or not refinement.get(field)
+    )
+    errors.extend(
+        f"Candidate task.intake_refinement.{field} must be a string."
+        for field in ("target_surface", "requested_change")
+        if not isinstance(refinement.get(field), str)
+    )
+    errors.extend(
+        f"Candidate task.intake_refinement.{field} must be a list of strings."
+        for field in ("explicit_non_goals", "preserved_behavior", "missing_details")
+        if not _candidate_is_string_sequence(refinement.get(field))
+    )
+    if not isinstance(task.get("raw_operator_task"), str) or not task.get("raw_operator_task"):
+        errors.append("Candidate task.raw_operator_task must be a non-empty string when intake refinement is enabled.")
     return tuple(errors)
 
 
@@ -1650,6 +1900,25 @@ def _candidate_task_mode(candidate: dict[object, object]) -> TaskMode:
     return "review_only"
 
 
+def _candidate_task_refinement(candidate: dict[object, object]) -> TaskIntakeRefinement | None:
+    """Return imported task-refinement metadata when present."""
+    task = _candidate_dict_field(candidate, "task")
+    refinement = _candidate_dict_field(task, "intake_refinement")
+    if refinement.get("enabled") is not True:
+        return None
+    return TaskIntakeRefinement(
+        raw_task=_candidate_string_field(task, "raw_operator_task"),
+        status=_candidate_string_field(refinement, "status") or "needs_clarification",
+        normalized_task=_candidate_string_field(refinement, "normalized_task"),
+        target_surface=_candidate_string_field(refinement, "target_surface"),
+        requested_change=_candidate_string_field(refinement, "requested_change"),
+        explicit_non_goals=_candidate_string_sequence(refinement.get("explicit_non_goals")),
+        preserved_behavior=_candidate_string_sequence(refinement.get("preserved_behavior")),
+        suspected_risk_level=_candidate_string_field(refinement, "suspected_risk_level"),
+        missing_details=_candidate_string_sequence(refinement.get("missing_details")),
+    )
+
+
 def _candidate_field(candidate: dict[object, object], key: str) -> object:
     """Read a candidate field without assuming a concrete JSON shape."""
     return candidate.get(key)
@@ -1704,6 +1973,7 @@ def _automation_readiness_decision(
     prompt_skills: tuple[PromptSkill, ...],
     task_mode: TaskMode,
     learning_signals: tuple[str, ...],
+    task_refinement: TaskIntakeRefinement | None = None,
 ) -> AutomationReadinessDecision:
     """Classify whether a planned task is ready for future automation."""
     pack = discover_protector_pack(include_benchmarks=True)
@@ -1720,6 +1990,7 @@ def _automation_readiness_decision(
         selected_knowledge=selection.knowledge,
         problem_signals=problem_signals,
         task_mode=task_mode,
+        task_refinement=task_refinement,
     )
     classification = _rdr_classification(record)
     return AutomationReadinessDecision(
@@ -1799,9 +2070,10 @@ def _readiness_decision_record(
     selected_knowledge: tuple[str, ...],
     problem_signals: tuple[str, ...],
     task_mode: TaskMode,
+    task_refinement: TaskIntakeRefinement | None,
 ) -> ReadinessDecisionRecord:
     """Build the operational decision record behind automation readiness."""
-    scope = _readiness_scope_characteristics(task_mode, selected_pack_skills, selected_runtime_skills)
+    scope = _readiness_scope_characteristics(task_mode, selected_pack_skills, selected_runtime_skills, task_refinement)
     automation_rationale = _readiness_automation_rationale(
         pack=pack,
         missing_coverage=missing_coverage,
@@ -1811,9 +2083,13 @@ def _readiness_decision_record(
         problem_signals=problem_signals,
         task_mode=task_mode,
     )
-    supervision_rationale = _readiness_supervision_rationale(task_mode=task_mode, problem_signals=problem_signals)
+    supervision_rationale = _readiness_supervision_rationale(
+        task_mode=task_mode,
+        problem_signals=problem_signals,
+        task_refinement=task_refinement,
+    )
     blocking_rationale = _readiness_blocking_rationale(pack=pack, missing_coverage=missing_coverage, problem_signals=problem_signals)
-    uncertainty = _readiness_remaining_uncertainty(task_mode=task_mode, problem_signals=problem_signals)
+    uncertainty = _readiness_remaining_uncertainty(task_mode=task_mode, problem_signals=problem_signals, task_refinement=task_refinement)
     evidence: dict[str, object] = {
         "pack_validation_state": {
             "validation": getattr(pack, "validation_status", "unknown"),
@@ -1843,6 +2119,7 @@ def _readiness_scope_characteristics(
     task_mode: TaskMode,
     selected_pack_skills: tuple[PromptSkill, ...],
     selected_runtime_skills: tuple[PromptSkill, ...],
+    task_refinement: TaskIntakeRefinement | None,
 ) -> tuple[str, ...]:
     """Return deterministic scope characteristics for RDR evidence."""
     rows = [f"Task mode: {task_mode}."]
@@ -1854,6 +2131,9 @@ def _readiness_scope_characteristics(
         rows.append(f"Pack specialization selected: {', '.join(skill.name for skill in selected_pack_skills)}.")
     if selected_runtime_skills:
         rows.append(f"Runtime generic skill selected: {', '.join(skill.name for skill in selected_runtime_skills)}.")
+    if task_refinement is not None:
+        rows.append(f"Task intake refinement status: {task_refinement.status}.")
+        rows.append(f"Suspected risk level: {task_refinement.suspected_risk_level}.")
     return tuple(rows)
 
 
@@ -1887,9 +2167,16 @@ def _readiness_automation_rationale(
     return tuple(_unique_preserve_order(rows))
 
 
-def _readiness_supervision_rationale(*, task_mode: TaskMode, problem_signals: tuple[str, ...]) -> tuple[str, ...]:
+def _readiness_supervision_rationale(
+    *,
+    task_mode: TaskMode,
+    problem_signals: tuple[str, ...],
+    task_refinement: TaskIntakeRefinement | None,
+) -> tuple[str, ...]:
     """Return concrete reasons supporting supervised_only."""
     rows: list[str] = []
+    if task_refinement is not None and task_refinement.status == "needs_clarification":
+        rows.append(f"Task intake needs clarification: {_inline_or_none(task_refinement.missing_details)}")
     if task_mode == "review_only":
         rows.append("Review-only task has no approved implementation intent for candidate execution.")
     if task_mode == "planning_only":
@@ -1922,9 +2209,16 @@ def _readiness_blocking_rationale(
     return tuple(_unique_preserve_order(rows))
 
 
-def _readiness_remaining_uncertainty(*, task_mode: TaskMode, problem_signals: tuple[str, ...]) -> tuple[str, ...]:
+def _readiness_remaining_uncertainty(
+    *,
+    task_mode: TaskMode,
+    problem_signals: tuple[str, ...],
+    task_refinement: TaskIntakeRefinement | None,
+) -> tuple[str, ...]:
     """Return concrete unresolved uncertainties for non-ready decisions."""
     rows: list[str] = []
+    if task_refinement is not None and task_refinement.status == "needs_clarification":
+        rows.extend(task_refinement.missing_details)
     if task_mode == "review_only":
         rows.append("Implementation intent is unresolved because the task asks for review output only.")
     if task_mode == "planning_only":
@@ -1990,12 +2284,15 @@ def _automation_readiness_classification(
     has_knowledge: bool,
     problem_signals: tuple[str, ...],
     task_mode: TaskMode,
+    task_refinement: TaskIntakeRefinement | None = None,
 ) -> str:
     """Return automation_ready, supervised_only, or blocked."""
     if not _pack_ready_for_automation(pack):
         return "blocked"
     if missing_coverage or any(signal.startswith("Skill repeatedly lacks benchmark coverage:") for signal in problem_signals):
         return "blocked"
+    if task_refinement is not None and task_refinement.status == "needs_clarification":
+        return "supervised_only"
     if task_mode in {"review_only", "planning_only", "diagnostic_bootstrap"} or problem_signals:
         return "supervised_only"
     _ = (selected_pack_skills, has_knowledge)

@@ -272,6 +272,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
     )
     plan.add_argument("--repo", default=None, help="Explicit target repository path.")
     plan.add_argument("--with-history", action="store_true", help="Include recent repo-scoped supervised outcome signals.")
+    plan.add_argument("--refine-task", action="store_true", help="Normalize rough operator task text before candidate generation.")
     plan.add_argument("--candidate-json", type=Path, default=None, help="Optional path for writing a structured automation candidate JSON.")
     plan.add_argument("--overwrite", action="store_true", help="Allow --candidate-json to replace an existing file.")
     plan.add_argument("repo_or_task", help="Repo alias/path, or the first task word when --repo is used.")
@@ -704,7 +705,13 @@ def _run_outcome_learning(args: argparse.Namespace, parser: argparse.ArgumentPar
 def _run_plan(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Run the deprecated `ph plan` compatibility view."""
     repo, repo_alias, task = _resolve_repo_and_task(explicit_repo=args.repo, positional=[args.repo_or_task, *args.task], parser=parser)
-    rendered = render_controlled_execution_plan(task=task, repo=repo, repo_alias=repo_alias, include_history=args.with_history)
+    rendered = render_controlled_execution_plan(
+        task=task,
+        repo=repo,
+        repo_alias=repo_alias,
+        include_history=args.with_history,
+        refine_task=args.refine_task,
+    )
     candidate_path: Path | None = None
     if args.candidate_json is not None:
         try:
@@ -772,12 +779,16 @@ def _render_candidate_execution_guide(candidate_path: Path, *, repo: Path | None
     approval_sha = automation_candidate_approval_sha(candidate)
     output = candidate_path.with_suffix(".codex-output.txt")
     repo_text = str(repo.resolve()) if repo is not None else "<repo>"
+    task_payload = candidate.get("task")
+    intake = task_payload.get("intake_refinement") if isinstance(task_payload, dict) else None
+    refine_args = ("--refine-task",) if isinstance(intake, dict) and intake.get("enabled") is True else ()
     generate = _powershell_command(
         (
             "ph",
             "plan",
             "--repo",
             repo_text,
+            *refine_args,
             "--candidate-json",
             str(candidate_path),
             task,
