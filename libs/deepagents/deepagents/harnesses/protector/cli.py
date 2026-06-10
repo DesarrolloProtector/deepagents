@@ -24,6 +24,7 @@ from deepagents.harnesses.protector._engineering import (
     append_outcome_history,
     build_read_only_agent,
     render_automation_candidate_dry_run,
+    render_candidate_outcome_report,
     render_codex_reviewer_prompt,
     render_controlled_execution_plan,
     render_outcome_history,
@@ -61,6 +62,7 @@ STABLE_ECC_PACK_COMMANDS = (
     "outcome-history",
     "outcome-learning",
     "candidate-dry-run",
+    "candidate-outcome",
     "benchmark",
     "ecc-status",
 )
@@ -275,6 +277,15 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915  # explicit sub
         help="Validate an exported automation candidate JSON without execution.",
     )
     candidate_dry_run.add_argument("candidate_json", type=Path, help="Exported automation candidate JSON to validate.")
+
+    candidate_outcome = subparsers.add_parser(
+        "candidate-outcome",
+        help="Review Codex output against an exported automation candidate JSON.",
+    )
+    candidate_outcome.add_argument("--repo", default=None, help="Optional repository path or alias for --save-history.")
+    candidate_outcome.add_argument("--codex-output", type=Path, required=True, help="Text file containing Codex implementation output to review.")
+    candidate_outcome.add_argument("--save-history", action="store_true", help="Append a structured outcome summary to repo-local ECC history.")
+    candidate_outcome.add_argument("candidate_json", type=Path, help="Exported automation candidate JSON to use as the review contract.")
 
     run = subparsers.add_parser("run", help="Run the interactive prompt/review workflow without invoking Codex.")
     run.add_argument("repo", help="Repo alias/path to target.")
@@ -698,6 +709,38 @@ def _run_candidate_dry_run(args: argparse.Namespace, parser: argparse.ArgumentPa
     return 0 if rendered.valid else 1
 
 
+def _run_candidate_outcome(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Run `ph candidate-outcome`."""
+    try:
+        payload = json.loads(args.candidate_json.read_text(encoding="utf-8"))
+    except OSError as exc:
+        parser.error(f"unable to read candidate JSON: {exc}")
+    except json.JSONDecodeError as exc:
+        parser.error(f"invalid candidate JSON at {args.candidate_json}: {exc.msg}")
+    try:
+        codex_output = args.codex_output.read_text(encoding="utf-8")
+    except OSError as exc:
+        parser.error(f"unable to read Codex output: {exc}")
+    try:
+        report = render_candidate_outcome_report(
+            candidate=payload,
+            candidate_source=str(args.candidate_json.resolve()),
+            codex_output=codex_output,
+            codex_output_source=str(args.codex_output.resolve()),
+        )
+    except HarnessUsageError as exc:
+        parser.error(str(exc))
+    sys.stdout.write(report.text)
+    sys.stdout.write("\n")
+    if args.save_history:
+        if args.repo is None:
+            parser.error("--save-history requires --repo for candidate-outcome")
+        repo = _resolve_positional_repo(args.repo, parser)
+        path = append_outcome_history(repo, report)
+        sys.stdout.write(f"Outcome history saved: {path}\n")
+    return 0
+
+
 def _write_json_output(path: Path, payload: dict[str, object], *, overwrite: bool) -> None:
     """Write a deterministic JSON payload with explicit overwrite protection."""
     target = path.resolve()
@@ -787,6 +830,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901, PLR0912  # ex
         result = _run_plan(args, parser)
     elif args.command == "candidate-dry-run":
         result = _run_candidate_dry_run(args, parser)
+    elif args.command == "candidate-outcome":
+        result = _run_candidate_outcome(args, parser)
     elif args.command == "run":
         result = _run_interactive(args, parser)
     elif args.command == "status":

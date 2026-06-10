@@ -446,6 +446,7 @@ def test_protector_platform_boundaries_are_explicit() -> None:
         "outcome-history",
         "outcome-learning",
         "candidate-dry-run",
+        "candidate-outcome",
         "benchmark",
         "ecc-status",
     )
@@ -1000,6 +1001,99 @@ def test_automation_candidate_import_dry_run_blocks_stale_skill(tmp_path: Path) 
     assert "Selected skill unavailable: removed_pack_skill [pack]" in rendered.validation_errors
     assert "Schema validation: FAIL" in rendered.text
     assert "- Selected skills still available: no" in rendered.text
+
+
+def test_candidate_outcome_report_accepts_candidate_consistent_codex_output(tmp_path: Path) -> None:
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+
+    report = engineering.render_candidate_outcome_report(
+        candidate=candidate,
+        candidate_source="candidate.json",
+        codex_output="""Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build verified and UI workflow route smoke test check passed.
+
+PASS
+""",
+        codex_output_source="codex-output.txt",
+    )
+
+    assert report.status == "accepted"
+    assert report.follow_up is None
+    assert "ECC Supervised Outcome Report" in report.text
+    assert "Status: accepted" in report.text
+    assert "Candidate source:\n- candidate.json" in report.text
+    assert "Automation readiness:\n- Classification: automation_ready" in report.text
+    assert "Knowledge used:" in report.text
+    assert "contract-first company and financer onboarding" in report.text
+    assert "Actual files changed:\n- Views/Operator/Index.cshtml" in report.text
+    assert "Deviations from plan:\n- (none)" in report.text
+    assert "Validation gaps:\n- (none)" in report.text
+    assert "PASS/FAIL consistency:\n- (none)" in report.text
+    assert report.summary.selected_pack == "protector-financiacioncore"
+    assert {"name": "navigation_surface_convergence", "source": "pack"} in [
+        {"name": skill.name, "source": skill.source} for skill in report.summary.selected_skills
+    ]
+
+
+def test_candidate_outcome_report_rejects_invalid_candidate_before_review(tmp_path: Path) -> None:
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+    candidate["execution_boundaries"] = {**candidate["execution_boundaries"], "codex_execution": True}
+
+    with pytest.raises(engineering.HarnessUsageError, match="candidate validation failed"):
+        engineering.render_candidate_outcome_report(
+            candidate=candidate,
+            candidate_source="candidate.json",
+            codex_output="PASS",
+            codex_output_source="codex-output.txt",
+        )
+
+
+def test_candidate_outcome_report_flags_drift_and_validation_gaps(tmp_path: Path) -> None:
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix legacy onboarding path convergence for operator UI views",
+        repo=_build_repo(tmp_path / "repo"),
+        repo_alias="FinanciacionCore",
+    ).automation_candidate
+
+    report = engineering.render_candidate_outcome_report(
+        candidate=candidate,
+        candidate_source="candidate.json",
+        codex_output="""Summary
+- Added dashboard memory graph governance changes.
+
+Validation
+- not run
+
+PASS
+""",
+        codex_output_source="codex-output.txt",
+    )
+
+    assert report.status == "needs review"
+    assert report.follow_up is not None
+    assert "Codex output did not report changed files." in report.text
+    assert "dashboard mentioned without task scope" in report.text
+    assert "memory mentioned without task scope" in report.text
+    assert "Codex claimed PASS but deterministic review found unresolved gaps." in report.text
+    assert "Reported validation lacks build/test/smoke/check evidence." in report.text
 
 
 def test_outcome_learning_signals_derive_recurring_patterns(tmp_path: Path) -> None:
@@ -2300,6 +2394,104 @@ def test_cli_candidate_dry_run_imports_exported_candidate_json(tmp_path: Path, c
     assert "- File edits: disabled by dry-run importer" in stdout
     assert "- Autonomous loops: disabled" in stdout
     assert "- Workflow engine: disabled" in stdout
+
+
+def test_cli_candidate_outcome_reviews_exported_candidate_and_saves_history(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    codex_output = tmp_path / "codex-output.txt"
+    codex_output.write_text(
+        """Files read
+- AGENTS.md
+- Views/Operator/Index.cshtml
+
+Files changed
+- Views/Operator/Index.cshtml
+
+Summary
+- Updated navigation route menu view operator onboarding convergence while preserving workflow.
+
+Validation
+- Build verified and UI workflow route smoke test check passed.
+
+PASS
+""",
+        encoding="utf-8",
+    )
+
+    assert (
+        cli.main(
+            [
+                "plan",
+                "--repo",
+                str(repo),
+                "--candidate-json",
+                str(candidate),
+                "Fix",
+                "legacy",
+                "onboarding",
+                "path",
+                "convergence",
+                "for",
+                "operator",
+                "UI",
+                "views",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        cli.main(
+            [
+                "candidate-outcome",
+                "--repo",
+                str(repo),
+                "--codex-output",
+                str(codex_output),
+                "--save-history",
+                str(candidate),
+            ]
+        )
+        == 0
+    )
+
+    stdout = capsys.readouterr().out
+    assert stdout.startswith("ECC Supervised Outcome Report\n")
+    assert "Status: accepted" in stdout
+    assert "Candidate source:\n-" in stdout
+    assert "Automation readiness:\n- Classification: supervised_only" in stdout
+    assert "Outcome history saved:" in stdout
+    history_path = repo / ".protector-harness" / "outcome-history.jsonl"
+    payload = json.loads(history_path.read_text(encoding="utf-8").strip())
+    assert payload["status"] == "accepted"
+    assert payload["changed_files"] == ["Views/Operator/Index.cshtml"]
+    assert {"name": "navigation_surface_convergence", "source": "pack"} in payload["selected_skills"]
+    assert "codex_output" not in payload
+    assert "Files read" not in history_path.read_text(encoding="utf-8")
+
+
+def test_cli_candidate_outcome_requires_repo_to_save_history(tmp_path: Path, capsys) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    candidate = tmp_path / "candidate.json"
+    codex_output = tmp_path / "codex-output.txt"
+    codex_output.write_text("PASS\n", encoding="utf-8")
+    candidate.write_text(
+        json.dumps(
+            engineering.render_controlled_execution_plan(
+                task="Fix legacy onboarding path convergence for operator UI views",
+                repo=repo,
+            ).automation_candidate
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["candidate-outcome", "--codex-output", str(codex_output), "--save-history", str(candidate)])
+
+    assert exc_info.value.code == 2
+    assert "--save-history requires --repo for candidate-outcome" in capsys.readouterr().err
 
 
 def test_cli_outcome_learning_lists_derived_signals(tmp_path: Path, capsys) -> None:

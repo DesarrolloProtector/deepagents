@@ -1071,6 +1071,118 @@ def render_automation_candidate_dry_run(candidate: object, *, source: str) -> Re
     )
 
 
+def render_candidate_outcome_report(
+    *,
+    candidate: object,
+    candidate_source: str,
+    codex_output: str,
+    codex_output_source: str,
+) -> OutcomeReport:
+    """Render a supervised outcome report using an exported candidate as the plan source."""
+    dry_run = render_automation_candidate_dry_run(candidate, source=candidate_source)
+    if not dry_run.valid:
+        msg = f"candidate validation failed: {'; '.join(dry_run.validation_errors)}"
+        raise HarnessUsageError(msg)
+    payload = candidate if isinstance(candidate, dict) else {}
+    task = _candidate_task_summary(payload)
+    skills, skill_errors = _candidate_selected_prompt_skills(payload)
+    if skill_errors:
+        msg = f"candidate skill validation failed: {'; '.join(skill_errors)}"
+        raise HarnessUsageError(msg)
+
+    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    pack = discover_protector_pack(include_benchmarks=True)
+    contract = _candidate_dict_field(payload, "review_contract")
+    selected_pack_skills = tuple(skill for skill in skills if skill.source == "pack")
+    selected_runtime_skills = tuple(skill for skill in skills if skill.source != "pack")
+    expected_files = _candidate_string_sequence(contract.get("expected_files_likely_to_change"))
+    actual_changed_files = _output_section_items(codex_output, "Files changed")
+    expected_validation = _candidate_string_sequence(contract.get("expected_validation_scope"))
+    actual_validation = _output_section_items(codex_output, "Validation")
+    review = _review_codex_output(task, codex_output)
+    selected_skill_deviations = _selected_skill_behavior_deviations(codex_output, selected_pack_skills, selected_runtime_skills)
+    blocker_deviations = _outcome_blocker_deviations(pack, selected_pack_skills, coverage)
+    readiness_deviations = _candidate_outcome_readiness_deviations(payload)
+    file_deviations = _changed_file_deviations(expected_files, actual_changed_files)
+    validation_gaps = _outcome_validation_gaps(expected_validation, actual_validation, review.validation_warnings)
+    pass_fail_gaps = _pass_fail_consistency_gaps(codex_output, review)
+    deviations = _unique_preserve_order(
+        [*file_deviations, *selected_skill_deviations, *blocker_deviations, *readiness_deviations, *review.drift_warnings, *pass_fail_gaps]
+    )
+    status = _outcome_status(review, deviations=tuple(deviations), validation_gaps=validation_gaps)
+    follow_up = _outcome_follow_up_prompt(task, deviations=tuple(deviations), validation_gaps=validation_gaps, status=status)
+    benchmark_additions = _suggested_benchmark_additions(selected_pack_skills, coverage, codex_output, deviations)
+    summary = OutcomeSummary(
+        timestamp=_utc_timestamp(),
+        task=_task_objective(task),
+        selected_pack=pack.name,
+        selected_skills=tuple(OutcomeSkillSummary(name=skill.name, source=skill.source) for skill in skills),
+        status=_history_status(status),
+        changed_files=actual_changed_files,
+        executed_validations=actual_validation,
+        deviations=tuple(deviations),
+        follow_up_prompt=follow_up,
+        suggested_benchmark_additions=_meaningful_benchmark_additions(benchmark_additions),
+    )
+    text = f"""ECC Supervised Outcome Report
+Status: {status}
+Codex output: {codex_output_source}
+Original planned task:
+- {_task_objective(task)}
+
+Selected pack:
+- Name: {pack.name}
+- Validation: {pack.validation_status}
+- Benchmark validation: {pack.benchmark_validation_status}
+
+Candidate source:
+- {candidate_source}
+
+Automation readiness:
+- Classification: {_candidate_readiness_classification(payload)}
+- Recommended next step: {_candidate_readiness_next_step(payload)}
+
+Selected skills:
+{_render_skill_source_rows(skills, coverage)}
+
+Knowledge used:
+{_one_line_list(_candidate_knowledge_used_rows(payload))}
+
+Expected files likely to change:
+{_one_line_list(expected_files)}
+
+Actual files changed:
+{_one_line_list(actual_changed_files)}
+
+Deviations from plan:
+{_one_line_list(tuple(deviations))}
+
+Expected validation scope:
+{_one_line_list(expected_validation)}
+
+Executed validation:
+{_one_line_list(actual_validation)}
+
+Validation gaps:
+{_one_line_list(validation_gaps)}
+
+PASS/FAIL consistency:
+{_one_line_list(pass_fail_gaps)}
+
+Suggested benchmark additions:
+{_one_line_list(benchmark_additions)}
+
+Follow-up prompt:
+- {follow_up or "(none)"}
+
+Supervision boundaries:
+- Codex execution was not invoked.
+- Git diffs were not inspected automatically.
+- No memory/session persistence was written.
+- No autonomous loop was started."""
+    return OutcomeReport(text=text, status=status, follow_up=follow_up, summary=summary)
+
+
 def _automation_candidate_schema_errors(candidate: object) -> tuple[str, ...]:
     """Return schema errors for an imported automation candidate."""
     if not isinstance(candidate, dict):
@@ -1119,7 +1231,7 @@ def _candidate_task_schema_errors(candidate: dict[object, object]) -> tuple[str,
     errors: list[str] = []
     if not isinstance(task.get("summary"), str) or not task.get("summary"):
         errors.append("Candidate task.summary must be a non-empty string.")
-    if _candidate_task_mode(candidate) not in TASK_MODE_VALUES:
+    if not isinstance(task.get("mode"), str) or task.get("mode") not in TASK_MODE_VALUES:
         errors.append(f"Candidate task.mode is unsupported: {_candidate_display_value(task.get('mode'))}")
     return tuple(errors)
 
@@ -1278,6 +1390,14 @@ def _candidate_execution_boundary_errors(candidate: dict[object, object]) -> tup
     )
 
 
+def _candidate_outcome_readiness_deviations(candidate: dict[object, object]) -> tuple[str, ...]:
+    """Return readiness blockers that should affect candidate outcome acceptance."""
+    classification = _candidate_readiness_classification(candidate)
+    if classification == "blocked":
+        return ("Candidate readiness classification is blocked.",)
+    return ()
+
+
 def _candidate_dry_run_decision(candidate_classification: str, validation_errors: tuple[str, ...]) -> str:
     """Return the dry-run decision label."""
     if validation_errors:
@@ -1287,6 +1407,29 @@ def _candidate_dry_run_decision(candidate_classification: str, validation_errors
     if candidate_classification == "supervised_only":
         return "would require supervision"
     return "blocked"
+
+
+def _candidate_task_summary(candidate: dict[object, object]) -> str:
+    """Return the planned task summary from a candidate."""
+    return _candidate_string_field(_candidate_dict_field(candidate, "task"), "summary")
+
+
+def _candidate_readiness_classification(candidate: dict[object, object]) -> str:
+    """Return the candidate readiness classification."""
+    return _candidate_string_field(_candidate_dict_field(candidate, "automation_readiness"), "classification")
+
+
+def _candidate_readiness_next_step(candidate: dict[object, object]) -> str:
+    """Return the candidate readiness recommendation."""
+    return _candidate_string_field(_candidate_dict_field(candidate, "automation_readiness"), "recommended_next_step") or "(missing)"
+
+
+def _candidate_knowledge_used_rows(candidate: dict[object, object]) -> tuple[str, ...]:
+    """Return candidate knowledge rows without reselecting repo context."""
+    selected_knowledge = _candidate_dict_field(candidate, "selected_knowledge")
+    rows = [f"Knowledge path: {path}" for path in _candidate_string_sequence(selected_knowledge.get("paths"))]
+    rows.extend(f"Knowledge fact: {fact}" for fact in _candidate_string_sequence(selected_knowledge.get("facts")))
+    return tuple(rows)
 
 
 def _render_candidate_dry_run_text(
