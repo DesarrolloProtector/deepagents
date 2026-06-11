@@ -1070,6 +1070,90 @@ def test_intake_gate_blocks_product_domains_for_harness_ecc_delta(tmp_path: Path
     assert "feature_contract" in review["context_blocklist"]
 
 
+def test_graph_rebuilds_and_records_freshness(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    _write(
+        repo / "Controllers" / "OrdersController.cs",
+        "public class OrdersController { public IActionResult Details() { return View(); } }\n",
+    )
+    _write(repo / "Views" / "Orders" / "Details.cshtml", '<partial name="_OrderSummary" />\n')
+    _write(repo / "Views" / "Orders" / "_OrderSummary.cshtml", "<div>summary</div>\n")
+
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix the Orders Details runtime behavior. Do not change persistence.",
+        repo=repo,
+    ).automation_candidate
+
+    assert candidate["graph_status"]["state"] == "rebuilt"
+    assert Path(candidate["graph_status"]["artifact_path"]).is_file()
+    assert "graph was missing or stale and was rebuilt before use" in candidate["graph_freshness_decision"]
+    assert candidate["graph_evidence"]["selection_rationale"]
+
+
+def test_stale_graph_is_rebuilt_before_it_can_influence_planning(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    stale_graph = {
+        "metadata": {
+            "repo_root": "wrong-root",
+            "git_head": "old-head",
+            "working_tree_fingerprint": "old-tree",
+            "graph_schema_version": "old-schema",
+            "builder_version": "old-builder",
+            "excluded_paths": (),
+        },
+        "nodes": [{"id": "Controllers/LanguageController.cs", "type": "controller", "path": "Controllers/LanguageController.cs"}],
+        "edges": [],
+    }
+    graph_path = repo / ".protector-harness" / "repo-graph.json"
+    _write(graph_path, json.dumps(stale_graph))
+    _write(repo / "Views" / "Shared" / "_LanguageSelector.cshtml", '<select class="language-selector"></select>\n')
+
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix the language-selector overlap. Preserve navigation routes and language switching behavior.",
+        repo=repo,
+    ).automation_candidate
+
+    assert candidate["task"]["mode"] == "ui_visual_microfix"
+    assert candidate["graph_status"]["state"] == "rebuilt"
+    assert "Controllers/LanguageController.cs" not in candidate["graph_evidence"]["selected_nodes"]
+    assert all("LanguageController" not in path for path in candidate["selected_context_paths"])
+
+
+def test_graph_unavailable_does_not_fabricate_evidence() -> None:
+    candidate = engineering.render_controlled_execution_plan(
+        task="Fix the local presentation spacing. Do not change navigation or workflow.",
+        repo=None,
+    ).automation_candidate
+
+    assert candidate["graph_status"]["state"] == "unavailable"
+    assert candidate["graph_evidence"]["selected_nodes"] == ()
+    assert candidate["graph_evidence"]["selected_files"] == ()
+    assert "repo not provided" in candidate["graph_status"]["decision"]
+
+
+def test_graph_neighbors_do_not_expand_blocked_domains(tmp_path: Path) -> None:
+    repo = _build_repo(tmp_path / "repo")
+    _write(
+        repo / "Controllers" / "LanguageController.cs",
+        "public class LanguageController { public IActionResult Selector() { return View(); } }\n",
+    )
+    _write(repo / "Views" / "Language" / "Selector.cshtml", '<select class="language-selector"></select>\n')
+
+    candidate = engineering.render_controlled_execution_plan(
+        task=(
+            "Fix the language-selector overlap in the header. This is visual/layout only. "
+            "Do not change navigation routes, menu items, language behavior, workflow, or resources."
+        ),
+        repo=repo,
+    ).automation_candidate
+
+    assert candidate["task"]["mode"] == "ui_visual_microfix"
+    assert candidate["selected_skills"] == ({"name": "base_prompt_quality", "source": "runtime_generic"},)
+    assert "navigation" in candidate["task"]["intent_delta_classification"]["decision_reviewer"]["blocked_domains"]
+    assert all("LanguageController" not in path for path in candidate["selected_context_paths"])
+    assert any("blocked domain: navigation" in item for item in candidate["graph_evidence"]["rejected_candidates"])
+
+
 def test_task_refinement_ambiguous_task_needs_clarification(tmp_path: Path) -> None:
     rendered = engineering.render_controlled_execution_plan(
         task="Fix it",

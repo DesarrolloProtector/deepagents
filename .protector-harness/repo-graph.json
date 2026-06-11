@@ -1,0 +1,4135 @@
+{
+  "edges": [
+    {
+      "source": "examples/content-builder-agent/skills/blog-post/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/content-builder-agent/skills/social-media/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/deploy-coding-agent/skills/code-review/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/deploy-coding-agent/skills/coding-prefs/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/deploy-coding-agent/skills/planning/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/deploy-content-writer/skills/blog-post/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/deploy-content-writer/skills/social-media/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/deploy-gtm-agent/skills/competitor-analysis/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/deploy-gtm-agent/subagents/market-researcher/skills/analyze-market/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/nvidia_deep_agent/skills/cudf-analytics/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/nvidia_deep_agent/skills/cuml-machine-learning/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/nvidia_deep_agent/skills/data-visualization/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/nvidia_deep_agent/skills/gpu-document-processing/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/repl_swarm/skills/swarm/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/text-to-sql-agent/skills/query-writing/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "examples/text-to-sql-agent/skills/schema-exploration/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/cli/examples/deploy-content-writer/skills/blog-post/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/cli/examples/deploy-content-writer/skills/social-media/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/cli/examples/skills/arxiv-search/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/cli/examples/skills/langgraph-docs/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/cli/examples/skills/skill-creator/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/cli/examples/skills/web-research/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/code/deepagents_code/built_in_skills/remember/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/code/deepagents_code/built_in_skills/skill-creator/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/code/examples/skills/arxiv-search/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/code/examples/skills/langgraph-docs/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/code/examples/skills/skill-creator/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "libs/code/examples/skills/web-research/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "packs/protector-financiacioncore/skills/financiacioncore-method/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "packs/protector-financiacioncore/skills/protector-anti-drift/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "packs/protector-financiacioncore/skills/protector-codex-handoff/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "packs/protector-financiacioncore/skills/protector-codex-review/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    },
+    {
+      "source": "packs/protector-financiacioncore/skills/protector-prompt-quality/SKILL.md",
+      "target": "domain:skills",
+      "type": "skill_relevant_to"
+    }
+  ],
+  "metadata": {
+    "build_timestamp": "2026-06-11T08:31:51.886254+00:00",
+    "builder_version": "protector-repo-graph-builder-v2",
+    "excluded_paths": [
+      ".git",
+      ".protector-harness",
+      ".venv",
+      "__pycache__",
+      "bin",
+      "node_modules",
+      "obj",
+      "packages",
+      "vendor"
+    ],
+    "git_head": "13ca19fca7233816a5bdd0f74758c0785a81cd5a",
+    "graph_schema_version": "protector-repo-graph-v1",
+    "repo_root": "C:\\Users\\DesarrolladorProtect\\source\\repos\\deepagents",
+    "working_tree_fingerprint": "95b4591fd85d54fac0b50d8770adac9215d864f8de1f2b30a32b6d6d529d8580"
+  },
+  "nodes": [
+    {
+      "id": ".github/PULL_REQUEST_TEMPLATE.md",
+      "path": ".github/PULL_REQUEST_TEMPLATE.md",
+      "type": "file"
+    },
+    {
+      "id": ".github/RELEASING.md",
+      "path": ".github/RELEASING.md",
+      "type": "file"
+    },
+    {
+      "id": ".github/scripts/aggregate_evals.py",
+      "path": ".github/scripts/aggregate_evals.py",
+      "type": "file"
+    },
+    {
+      "id": ".github/scripts/analyze_eval_failures.py",
+      "path": ".github/scripts/analyze_eval_failures.py",
+      "type": "file"
+    },
+    {
+      "id": ".github/scripts/check_extras_sync.py",
+      "path": ".github/scripts/check_extras_sync.py",
+      "type": "file"
+    },
+    {
+      "id": ".github/scripts/check_lockfile_release_scope.py",
+      "path": ".github/scripts/check_lockfile_release_scope.py",
+      "type": "file"
+    },
+    {
+      "id": ".github/scripts/check_version_equality.py",
+      "path": ".github/scripts/check_version_equality.py",
+      "type": "file"
+    },
+    {
+      "id": ".github/scripts/models.py",
+      "path": ".github/scripts/models.py",
+      "type": "file"
+    },
+    {
+      "id": ".github/scripts/pr-labeler-config.json",
+      "path": ".github/scripts/pr-labeler-config.json",
+      "type": "file"
+    },
+    {
+      "id": ".github/scripts/test_check_lockfile_release_scope.py",
+      "path": ".github/scripts/test_check_lockfile_release_scope.py",
+      "type": "test"
+    },
+    {
+      "id": ".github/scripts/test_close_open_swe_prs.py",
+      "path": ".github/scripts/test_close_open_swe_prs.py",
+      "type": "test"
+    },
+    {
+      "id": ".github/scripts/test_models.py",
+      "path": ".github/scripts/test_models.py",
+      "type": "test"
+    },
+    {
+      "id": ".github/scripts/test_release_options.py",
+      "path": ".github/scripts/test_release_options.py",
+      "type": "test"
+    },
+    {
+      "id": ".markdownlint.json",
+      "path": ".markdownlint.json",
+      "type": "file"
+    },
+    {
+      "id": ".mcp.json",
+      "path": ".mcp.json",
+      "type": "file"
+    },
+    {
+      "id": ".pytest_cache/README.md",
+      "path": ".pytest_cache/README.md",
+      "type": "file"
+    },
+    {
+      "id": ".release-please-manifest.json",
+      "path": ".release-please-manifest.json",
+      "type": "file"
+    },
+    {
+      "id": ".vs/deepagents.slnx/v18/DocumentLayout.backup.json",
+      "path": ".vs/deepagents.slnx/v18/DocumentLayout.backup.json",
+      "type": "file"
+    },
+    {
+      "id": ".vs/deepagents.slnx/v18/DocumentLayout.json",
+      "path": ".vs/deepagents.slnx/v18/DocumentLayout.json",
+      "type": "file"
+    },
+    {
+      "id": ".vs/VSWorkspaceState.json",
+      "path": ".vs/VSWorkspaceState.json",
+      "type": "file"
+    },
+    {
+      "id": ".vscode/extensions.json",
+      "path": ".vscode/extensions.json",
+      "type": "file"
+    },
+    {
+      "id": ".vscode/settings.json",
+      "path": ".vscode/settings.json",
+      "type": "file"
+    },
+    {
+      "id": "AGENTS.md",
+      "path": "AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "apps/protector-operator/.vs/ProtectorOperator/v18/DocumentLayout.backup.json",
+      "path": "apps/protector-operator/.vs/ProtectorOperator/v18/DocumentLayout.backup.json",
+      "type": "file"
+    },
+    {
+      "id": "apps/protector-operator/.vs/ProtectorOperator/v18/DocumentLayout.json",
+      "path": "apps/protector-operator/.vs/ProtectorOperator/v18/DocumentLayout.json",
+      "type": "file"
+    },
+    {
+      "id": "apps/protector-operator/App.cs",
+      "path": "apps/protector-operator/App.cs",
+      "type": "file"
+    },
+    {
+      "id": "apps/protector-operator/MainWindow.cs",
+      "path": "apps/protector-operator/MainWindow.cs",
+      "type": "file"
+    },
+    {
+      "id": "apps/protector-operator/PhBackend.cs",
+      "path": "apps/protector-operator/PhBackend.cs",
+      "type": "file"
+    },
+    {
+      "id": "apps/protector-operator/Program.cs",
+      "path": "apps/protector-operator/Program.cs",
+      "type": "file"
+    },
+    {
+      "id": "docs/protector-ecc-architecture.md",
+      "path": "docs/protector-ecc-architecture.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/async-subagent-server/README.md",
+      "path": "examples/async-subagent-server/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/async-subagent-server/server.py",
+      "path": "examples/async-subagent-server/server.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/async-subagent-server/supervisor.py",
+      "path": "examples/async-subagent-server/supervisor.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/async-subagent-server/test_server.py",
+      "path": "examples/async-subagent-server/test_server.py",
+      "type": "test"
+    },
+    {
+      "id": "examples/better-harness/better_harness/__init__.py",
+      "path": "examples/better-harness/better_harness/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/better-harness/better_harness/agent.py",
+      "path": "examples/better-harness/better_harness/agent.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/better-harness/better_harness/core.py",
+      "path": "examples/better-harness/better_harness/core.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/better-harness/better_harness/patching.py",
+      "path": "examples/better-harness/better_harness/patching.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/better-harness/better_harness/runners.py",
+      "path": "examples/better-harness/better_harness/runners.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/better-harness/better_harness_plugin.py",
+      "path": "examples/better-harness/better_harness_plugin.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/better-harness/README.md",
+      "path": "examples/better-harness/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/better-harness/tests/__init__.py",
+      "path": "examples/better-harness/tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "examples/better-harness/tests/test_better_harness.py",
+      "path": "examples/better-harness/tests/test_better_harness.py",
+      "type": "test"
+    },
+    {
+      "id": "examples/content-builder-agent/AGENTS.md",
+      "path": "examples/content-builder-agent/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/content-builder-agent/content_writer.py",
+      "path": "examples/content-builder-agent/content_writer.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/content-builder-agent/README.md",
+      "path": "examples/content-builder-agent/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/content-builder-agent/skills/blog-post/SKILL.md",
+      "path": "examples/content-builder-agent/skills/blog-post/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/content-builder-agent/skills/social-media/SKILL.md",
+      "path": "examples/content-builder-agent/skills/social-media/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/deep_research/agent.py",
+      "path": "examples/deep_research/agent.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/deep_research/langgraph.json",
+      "path": "examples/deep_research/langgraph.json",
+      "type": "file"
+    },
+    {
+      "id": "examples/deep_research/README.md",
+      "path": "examples/deep_research/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deep_research/research_agent/__init__.py",
+      "path": "examples/deep_research/research_agent/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/deep_research/research_agent/prompts.py",
+      "path": "examples/deep_research/research_agent/prompts.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/deep_research/research_agent/tools.py",
+      "path": "examples/deep_research/research_agent/tools.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/deep_research/utils.py",
+      "path": "examples/deep_research/utils.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-coding-agent/agent.json",
+      "path": "examples/deploy-coding-agent/agent.json",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-coding-agent/AGENTS.md",
+      "path": "examples/deploy-coding-agent/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-coding-agent/README.md",
+      "path": "examples/deploy-coding-agent/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-coding-agent/skills/code-review/lint_check.py",
+      "path": "examples/deploy-coding-agent/skills/code-review/lint_check.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-coding-agent/skills/code-review/SKILL.md",
+      "path": "examples/deploy-coding-agent/skills/code-review/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/deploy-coding-agent/skills/coding-prefs/SKILL.md",
+      "path": "examples/deploy-coding-agent/skills/coding-prefs/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/deploy-coding-agent/skills/planning/SKILL.md",
+      "path": "examples/deploy-coding-agent/skills/planning/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/deploy-content-writer/agent.json",
+      "path": "examples/deploy-content-writer/agent.json",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-content-writer/AGENTS.md",
+      "path": "examples/deploy-content-writer/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-content-writer/README.md",
+      "path": "examples/deploy-content-writer/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-content-writer/skills/blog-post/SKILL.md",
+      "path": "examples/deploy-content-writer/skills/blog-post/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/deploy-content-writer/skills/social-media/SKILL.md",
+      "path": "examples/deploy-content-writer/skills/social-media/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/deploy-content-writer/test_user_memory.py",
+      "path": "examples/deploy-content-writer/test_user_memory.py",
+      "type": "test"
+    },
+    {
+      "id": "examples/deploy-content-writer/user/AGENTS.md",
+      "path": "examples/deploy-content-writer/user/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-gtm-agent/agent.json",
+      "path": "examples/deploy-gtm-agent/agent.json",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-gtm-agent/AGENTS.md",
+      "path": "examples/deploy-gtm-agent/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-gtm-agent/README.md",
+      "path": "examples/deploy-gtm-agent/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-gtm-agent/skills/competitor-analysis/SKILL.md",
+      "path": "examples/deploy-gtm-agent/skills/competitor-analysis/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/deploy-gtm-agent/subagents/market-researcher/agent.json",
+      "path": "examples/deploy-gtm-agent/subagents/market-researcher/agent.json",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-gtm-agent/subagents/market-researcher/AGENTS.md",
+      "path": "examples/deploy-gtm-agent/subagents/market-researcher/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-gtm-agent/subagents/market-researcher/skills/analyze-market/SKILL.md",
+      "path": "examples/deploy-gtm-agent/subagents/market-researcher/skills/analyze-market/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/deploy-mcp-docs-agent/agent.json",
+      "path": "examples/deploy-mcp-docs-agent/agent.json",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-mcp-docs-agent/AGENTS.md",
+      "path": "examples/deploy-mcp-docs-agent/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/deploy-mcp-docs-agent/README.md",
+      "path": "examples/deploy-mcp-docs-agent/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/downloading_agents/README.md",
+      "path": "examples/downloading_agents/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/helpers.py",
+      "path": "examples/llm-wiki/helpers.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/index.py",
+      "path": "examples/llm-wiki/index.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/ingest.py",
+      "path": "examples/llm-wiki/ingest.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/init.py",
+      "path": "examples/llm-wiki/init.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/lint.py",
+      "path": "examples/llm-wiki/lint.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/log.py",
+      "path": "examples/llm-wiki/log.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/models.py",
+      "path": "examples/llm-wiki/models.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/query.py",
+      "path": "examples/llm-wiki/query.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/README.md",
+      "path": "examples/llm-wiki/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/runner.py",
+      "path": "examples/llm-wiki/runner.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/llm-wiki/tests/unit_tests/test_helpers.py",
+      "path": "examples/llm-wiki/tests/unit_tests/test_helpers.py",
+      "type": "test"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/langgraph.json",
+      "path": "examples/nvidia_deep_agent/langgraph.json",
+      "type": "file"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/README.md",
+      "path": "examples/nvidia_deep_agent/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/skills/cudf-analytics/SKILL.md",
+      "path": "examples/nvidia_deep_agent/skills/cudf-analytics/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/skills/cuml-machine-learning/SKILL.md",
+      "path": "examples/nvidia_deep_agent/skills/cuml-machine-learning/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/skills/data-visualization/SKILL.md",
+      "path": "examples/nvidia_deep_agent/skills/data-visualization/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/skills/gpu-document-processing/SKILL.md",
+      "path": "examples/nvidia_deep_agent/skills/gpu-document-processing/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/src/__init__.py",
+      "path": "examples/nvidia_deep_agent/src/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/src/agent.py",
+      "path": "examples/nvidia_deep_agent/src/agent.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/src/AGENTS.md",
+      "path": "examples/nvidia_deep_agent/src/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/src/backend.py",
+      "path": "examples/nvidia_deep_agent/src/backend.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/src/prompts.py",
+      "path": "examples/nvidia_deep_agent/src/prompts.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/nvidia_deep_agent/src/tools.py",
+      "path": "examples/nvidia_deep_agent/src/tools.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/protector_engineering_harness.py",
+      "path": "examples/protector_engineering_harness.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/ralph_mode/ralph_mode.py",
+      "path": "examples/ralph_mode/ralph_mode.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/ralph_mode/README.md",
+      "path": "examples/ralph_mode/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/README.md",
+      "path": "examples/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/repl_swarm/README.md",
+      "path": "examples/repl_swarm/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/repl_swarm/skills/swarm/SKILL.md",
+      "path": "examples/repl_swarm/skills/swarm/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/repl_swarm/swarm_agent.py",
+      "path": "examples/repl_swarm/swarm_agent.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/rlm_agent/README.md",
+      "path": "examples/rlm_agent/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/rlm_agent/rlm_agent.py",
+      "path": "examples/rlm_agent/rlm_agent.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/text-to-sql-agent/agent.py",
+      "path": "examples/text-to-sql-agent/agent.py",
+      "type": "file"
+    },
+    {
+      "id": "examples/text-to-sql-agent/AGENTS.md",
+      "path": "examples/text-to-sql-agent/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/text-to-sql-agent/README.md",
+      "path": "examples/text-to-sql-agent/README.md",
+      "type": "file"
+    },
+    {
+      "id": "examples/text-to-sql-agent/skills/query-writing/SKILL.md",
+      "path": "examples/text-to-sql-agent/skills/query-writing/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "examples/text-to-sql-agent/skills/schema-exploration/SKILL.md",
+      "path": "examples/text-to-sql-agent/skills/schema-exploration/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/acp/CHANGELOG.md",
+      "path": "libs/acp/CHANGELOG.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/deepagents_acp/__init__.py",
+      "path": "libs/acp/deepagents_acp/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/deepagents_acp/__main__.py",
+      "path": "libs/acp/deepagents_acp/__main__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/deepagents_acp/_version.py",
+      "path": "libs/acp/deepagents_acp/_version.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/deepagents_acp/py.typed.py",
+      "path": "libs/acp/deepagents_acp/py.typed.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/deepagents_acp/server.py",
+      "path": "libs/acp/deepagents_acp/server.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/deepagents_acp/utils.py",
+      "path": "libs/acp/deepagents_acp/utils.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/examples/__init__.py",
+      "path": "libs/acp/examples/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/examples/demo_agent.py",
+      "path": "libs/acp/examples/demo_agent.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/examples/local_context.py",
+      "path": "libs/acp/examples/local_context.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/README.md",
+      "path": "libs/acp/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/acp/tests/__init__.py",
+      "path": "libs/acp/tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/acp/tests/chat_model.py",
+      "path": "libs/acp/tests/chat_model.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/acp/tests/test_agent.py",
+      "path": "libs/acp/tests/test_agent.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/acp/tests/test_command_allowlist.py",
+      "path": "libs/acp/tests/test_command_allowlist.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/acp/tests/test_dangerous_patterns.py",
+      "path": "libs/acp/tests/test_dangerous_patterns.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/acp/tests/test_main.py",
+      "path": "libs/acp/tests/test_main.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/acp/tests/test_model_switching.py",
+      "path": "libs/acp/tests/test_model_switching.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/acp/tests/test_utils.py",
+      "path": "libs/acp/tests/test_utils.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/CHANGELOG.md",
+      "path": "libs/cli/CHANGELOG.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/__init__.py",
+      "path": "libs/cli/deepagents_cli/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/__main__.py",
+      "path": "libs/cli/deepagents_cli/__main__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/_version.py",
+      "path": "libs/cli/deepagents_cli/_version.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/config.py",
+      "path": "libs/cli/deepagents_cli/config.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/deploy/__init__.py",
+      "path": "libs/cli/deepagents_cli/deploy/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/deploy/api_client.py",
+      "path": "libs/cli/deepagents_cli/deploy/api_client.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/deploy/commands.py",
+      "path": "libs/cli/deepagents_cli/deploy/commands.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/deploy/mcp_resolver.py",
+      "path": "libs/cli/deepagents_cli/deploy/mcp_resolver.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/deploy/payload.py",
+      "path": "libs/cli/deepagents_cli/deploy/payload.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/deploy/project.py",
+      "path": "libs/cli/deepagents_cli/deploy/project.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/deploy/state.py",
+      "path": "libs/cli/deepagents_cli/deploy/state.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/main.py",
+      "path": "libs/cli/deepagents_cli/main.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/deepagents_cli/model_config.py",
+      "path": "libs/cli/deepagents_cli/model_config.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/DEV.md",
+      "path": "libs/cli/DEV.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/examples/deploy-content-writer/agent.json",
+      "path": "libs/cli/examples/deploy-content-writer/agent.json",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/examples/deploy-content-writer/AGENTS.md",
+      "path": "libs/cli/examples/deploy-content-writer/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/examples/deploy-content-writer/skills/blog-post/SKILL.md",
+      "path": "libs/cli/examples/deploy-content-writer/skills/blog-post/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/cli/examples/deploy-content-writer/skills/social-media/SKILL.md",
+      "path": "libs/cli/examples/deploy-content-writer/skills/social-media/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/cli/examples/deploy-content-writer/tools.json",
+      "path": "libs/cli/examples/deploy-content-writer/tools.json",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/examples/skills/arxiv-search/arxiv_search.py",
+      "path": "libs/cli/examples/skills/arxiv-search/arxiv_search.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/examples/skills/arxiv-search/SKILL.md",
+      "path": "libs/cli/examples/skills/arxiv-search/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/cli/examples/skills/langgraph-docs/SKILL.md",
+      "path": "libs/cli/examples/skills/langgraph-docs/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/cli/examples/skills/skill-creator/scripts/init_skill.py",
+      "path": "libs/cli/examples/skills/skill-creator/scripts/init_skill.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/examples/skills/skill-creator/scripts/quick_validate.py",
+      "path": "libs/cli/examples/skills/skill-creator/scripts/quick_validate.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/examples/skills/skill-creator/SKILL.md",
+      "path": "libs/cli/examples/skills/skill-creator/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/cli/examples/skills/web-research/SKILL.md",
+      "path": "libs/cli/examples/skills/web-research/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/cli/README.md",
+      "path": "libs/cli/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/scripts/check_imports.py",
+      "path": "libs/cli/scripts/check_imports.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/cli/tests/integration_tests/__init__.py",
+      "path": "libs/cli/tests/integration_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/integration_tests/conftest.py",
+      "path": "libs/cli/tests/integration_tests/conftest.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/README.md",
+      "path": "libs/cli/tests/README.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/__init__.py",
+      "path": "libs/cli/tests/unit_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/conftest.py",
+      "path": "libs/cli/tests/unit_tests/conftest.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/__init__.py",
+      "path": "libs/cli/tests/unit_tests/deploy/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/__init__.py",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/bare/agent.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/bare/agent.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/bare/AGENTS.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/bare/AGENTS.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/bare/expected_payload.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/bare/expected_payload.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/agent.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/agent.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/AGENTS.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/AGENTS.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/expected_payload.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/expected_payload.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/subagents/researcher/agent.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/subagents/researcher/agent.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/subagents/researcher/AGENTS.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/subagents/researcher/AGENTS.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/subagents/researcher/skills/note/SKILL.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/subagents/researcher/skills/note/SKILL.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/subagents/researcher/tools.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/subagent_with_local_skills/subagents/researcher/tools.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/agent.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/agent.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/AGENTS.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/AGENTS.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/expected_payload.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/expected_payload.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/skills/summarize/examples.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/skills/summarize/examples.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/skills/summarize/SKILL.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_skills/skills/summarize/SKILL.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/agent.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/agent.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/AGENTS.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/AGENTS.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/expected_payload.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/expected_payload.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/subagents/researcher/agent.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/subagents/researcher/agent.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/subagents/researcher/AGENTS.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/subagents/researcher/AGENTS.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/subagents/researcher/tools.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_subagents/subagents/researcher/tools.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_tools/agent.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_tools/agent.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_tools/AGENTS.md",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_tools/AGENTS.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_tools/expected_payload.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_tools/expected_payload.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_tools/tools.json",
+      "path": "libs/cli/tests/unit_tests/deploy/fixtures/projects/with_tools/tools.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_agents_command.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_agents_command.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_api_client.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_api_client.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_config.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_config.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_deploy_command.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_deploy_command.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_init_command.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_init_command.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_mcp_resolver.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_mcp_resolver.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_mcp_servers_command.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_mcp_servers_command.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_payload.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_payload.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_project.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_project.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/deploy/test_state.py",
+      "path": "libs/cli/tests/unit_tests/deploy/test_state.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/tests/unit_tests/test_version.py",
+      "path": "libs/cli/tests/unit_tests/test_version.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/cli/THREAT_MODEL.md",
+      "path": "libs/cli/THREAT_MODEL.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/AGENTS.md",
+      "path": "libs/code/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/CHANGELOG.md",
+      "path": "libs/code/CHANGELOG.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/COMMANDS.md",
+      "path": "libs/code/COMMANDS.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/__init__.py",
+      "path": "libs/code/deepagents_code/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/__main__.py",
+      "path": "libs/code/deepagents_code/__main__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_ask_user_types.py",
+      "path": "libs/code/deepagents_code/_ask_user_types.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_cli_context.py",
+      "path": "libs/code/deepagents_code/_cli_context.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_constants.py",
+      "path": "libs/code/deepagents_code/_constants.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_debug.py",
+      "path": "libs/code/deepagents_code/_debug.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_env_vars.py",
+      "path": "libs/code/deepagents_code/_env_vars.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_git.py",
+      "path": "libs/code/deepagents_code/_git.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_server_config.py",
+      "path": "libs/code/deepagents_code/_server_config.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_session_stats.py",
+      "path": "libs/code/deepagents_code/_session_stats.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_startup_error.py",
+      "path": "libs/code/deepagents_code/_startup_error.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_testing_models.py",
+      "path": "libs/code/deepagents_code/_testing_models.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/deepagents_code/_textual_patches.py",
+      "path": "libs/code/deepagents_code/_textual_patches.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/_version.py",
+      "path": "libs/code/deepagents_code/_version.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/agent.py",
+      "path": "libs/code/deepagents_code/agent.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/app.py",
+      "path": "libs/code/deepagents_code/app.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/ask_user.py",
+      "path": "libs/code/deepagents_code/ask_user.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/auth_display.py",
+      "path": "libs/code/deepagents_code/auth_display.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/auth_store.py",
+      "path": "libs/code/deepagents_code/auth_store.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/built_in_skills/__init__.py",
+      "path": "libs/code/deepagents_code/built_in_skills/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/built_in_skills/remember/SKILL.md",
+      "path": "libs/code/deepagents_code/built_in_skills/remember/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/code/deepagents_code/built_in_skills/skill-creator/scripts/init_skill.py",
+      "path": "libs/code/deepagents_code/built_in_skills/skill-creator/scripts/init_skill.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/built_in_skills/skill-creator/scripts/quick_validate.py",
+      "path": "libs/code/deepagents_code/built_in_skills/skill-creator/scripts/quick_validate.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/built_in_skills/skill-creator/SKILL.md",
+      "path": "libs/code/deepagents_code/built_in_skills/skill-creator/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/code/deepagents_code/clipboard.py",
+      "path": "libs/code/deepagents_code/clipboard.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/command_registry.py",
+      "path": "libs/code/deepagents_code/command_registry.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/config.py",
+      "path": "libs/code/deepagents_code/config.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/configurable_model.py",
+      "path": "libs/code/deepagents_code/configurable_model.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/default_agent_prompt.md",
+      "path": "libs/code/deepagents_code/default_agent_prompt.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/editor.py",
+      "path": "libs/code/deepagents_code/editor.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/event_bus.py",
+      "path": "libs/code/deepagents_code/event_bus.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/extras_info.py",
+      "path": "libs/code/deepagents_code/extras_info.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/file_ops.py",
+      "path": "libs/code/deepagents_code/file_ops.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/filesystem_empty_result.py",
+      "path": "libs/code/deepagents_code/filesystem_empty_result.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/formatting.py",
+      "path": "libs/code/deepagents_code/formatting.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/hooks.py",
+      "path": "libs/code/deepagents_code/hooks.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/input.py",
+      "path": "libs/code/deepagents_code/input.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/integrations/__init__.py",
+      "path": "libs/code/deepagents_code/integrations/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/integrations/sandbox_factory.py",
+      "path": "libs/code/deepagents_code/integrations/sandbox_factory.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/integrations/sandbox_provider.py",
+      "path": "libs/code/deepagents_code/integrations/sandbox_provider.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/iterm_cursor_guide.py",
+      "path": "libs/code/deepagents_code/iterm_cursor_guide.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/local_context.py",
+      "path": "libs/code/deepagents_code/local_context.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/main.py",
+      "path": "libs/code/deepagents_code/main.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_auth.py",
+      "path": "libs/code/deepagents_code/mcp_auth.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_commands.py",
+      "path": "libs/code/deepagents_code/mcp_commands.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_disabled.py",
+      "path": "libs/code/deepagents_code/mcp_disabled.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_login_service.py",
+      "path": "libs/code/deepagents_code/mcp_login_service.py",
+      "type": "service"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_oauth_ui.py",
+      "path": "libs/code/deepagents_code/mcp_oauth_ui.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_providers/__init__.py",
+      "path": "libs/code/deepagents_code/mcp_providers/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_providers/_registry.py",
+      "path": "libs/code/deepagents_code/mcp_providers/_registry.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_providers/base.py",
+      "path": "libs/code/deepagents_code/mcp_providers/base.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_providers/github.py",
+      "path": "libs/code/deepagents_code/mcp_providers/github.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_providers/slack.py",
+      "path": "libs/code/deepagents_code/mcp_providers/slack.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_tools.py",
+      "path": "libs/code/deepagents_code/mcp_tools.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/mcp_trust.py",
+      "path": "libs/code/deepagents_code/mcp_trust.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/media_utils.py",
+      "path": "libs/code/deepagents_code/media_utils.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/model_config.py",
+      "path": "libs/code/deepagents_code/model_config.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/non_interactive.py",
+      "path": "libs/code/deepagents_code/non_interactive.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/notifications.py",
+      "path": "libs/code/deepagents_code/notifications.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/offload.py",
+      "path": "libs/code/deepagents_code/offload.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/onboarding.py",
+      "path": "libs/code/deepagents_code/onboarding.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/output.py",
+      "path": "libs/code/deepagents_code/output.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/project_utils.py",
+      "path": "libs/code/deepagents_code/project_utils.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/remote_client.py",
+      "path": "libs/code/deepagents_code/remote_client.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/resume_state.py",
+      "path": "libs/code/deepagents_code/resume_state.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/server.py",
+      "path": "libs/code/deepagents_code/server.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/server_graph.py",
+      "path": "libs/code/deepagents_code/server_graph.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/server_manager.py",
+      "path": "libs/code/deepagents_code/server_manager.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/sessions.py",
+      "path": "libs/code/deepagents_code/sessions.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/skills/__init__.py",
+      "path": "libs/code/deepagents_code/skills/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/skills/commands.py",
+      "path": "libs/code/deepagents_code/skills/commands.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/skills/invocation.py",
+      "path": "libs/code/deepagents_code/skills/invocation.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/skills/load.py",
+      "path": "libs/code/deepagents_code/skills/load.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/state_migration.py",
+      "path": "libs/code/deepagents_code/state_migration.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/subagents.py",
+      "path": "libs/code/deepagents_code/subagents.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/system_prompt.md",
+      "path": "libs/code/deepagents_code/system_prompt.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/terminal_capabilities.py",
+      "path": "libs/code/deepagents_code/terminal_capabilities.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/terminal_escape.py",
+      "path": "libs/code/deepagents_code/terminal_escape.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/textual_adapter.py",
+      "path": "libs/code/deepagents_code/textual_adapter.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/theme.py",
+      "path": "libs/code/deepagents_code/theme.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/tool_display.py",
+      "path": "libs/code/deepagents_code/tool_display.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/tools.py",
+      "path": "libs/code/deepagents_code/tools.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/ui.py",
+      "path": "libs/code/deepagents_code/ui.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/unicode_security.py",
+      "path": "libs/code/deepagents_code/unicode_security.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/update_check.py",
+      "path": "libs/code/deepagents_code/update_check.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/__init__.py",
+      "path": "libs/code/deepagents_code/widgets/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/_links.py",
+      "path": "libs/code/deepagents_code/widgets/_links.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/agent_selector.py",
+      "path": "libs/code/deepagents_code/widgets/agent_selector.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/approval.py",
+      "path": "libs/code/deepagents_code/widgets/approval.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/ask_user.py",
+      "path": "libs/code/deepagents_code/widgets/ask_user.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/auth.py",
+      "path": "libs/code/deepagents_code/widgets/auth.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/autocomplete.py",
+      "path": "libs/code/deepagents_code/widgets/autocomplete.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/chat_input.py",
+      "path": "libs/code/deepagents_code/widgets/chat_input.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/diff.py",
+      "path": "libs/code/deepagents_code/widgets/diff.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/history.py",
+      "path": "libs/code/deepagents_code/widgets/history.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/launch_init.py",
+      "path": "libs/code/deepagents_code/widgets/launch_init.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/loading.py",
+      "path": "libs/code/deepagents_code/widgets/loading.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/mcp_login.py",
+      "path": "libs/code/deepagents_code/widgets/mcp_login.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/mcp_reconnect.py",
+      "path": "libs/code/deepagents_code/widgets/mcp_reconnect.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/mcp_viewer.py",
+      "path": "libs/code/deepagents_code/widgets/mcp_viewer.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/message_store.py",
+      "path": "libs/code/deepagents_code/widgets/message_store.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/messages.py",
+      "path": "libs/code/deepagents_code/widgets/messages.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/model_selector.py",
+      "path": "libs/code/deepagents_code/widgets/model_selector.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/notification_center.py",
+      "path": "libs/code/deepagents_code/widgets/notification_center.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/notification_detail.py",
+      "path": "libs/code/deepagents_code/widgets/notification_detail.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/notification_settings.py",
+      "path": "libs/code/deepagents_code/widgets/notification_settings.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/status.py",
+      "path": "libs/code/deepagents_code/widgets/status.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/theme_selector.py",
+      "path": "libs/code/deepagents_code/widgets/theme_selector.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/thread_selector.py",
+      "path": "libs/code/deepagents_code/widgets/thread_selector.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/tool_renderers.py",
+      "path": "libs/code/deepagents_code/widgets/tool_renderers.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/tool_widgets.py",
+      "path": "libs/code/deepagents_code/widgets/tool_widgets.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/update_available.py",
+      "path": "libs/code/deepagents_code/widgets/update_available.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/update_progress.py",
+      "path": "libs/code/deepagents_code/widgets/update_progress.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/deepagents_code/widgets/welcome.py",
+      "path": "libs/code/deepagents_code/widgets/welcome.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/DEV.md",
+      "path": "libs/code/DEV.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/examples/skills/arxiv-search/arxiv_search.py",
+      "path": "libs/code/examples/skills/arxiv-search/arxiv_search.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/examples/skills/arxiv-search/SKILL.md",
+      "path": "libs/code/examples/skills/arxiv-search/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/code/examples/skills/langgraph-docs/SKILL.md",
+      "path": "libs/code/examples/skills/langgraph-docs/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/code/examples/skills/skill-creator/scripts/init_skill.py",
+      "path": "libs/code/examples/skills/skill-creator/scripts/init_skill.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/examples/skills/skill-creator/scripts/quick_validate.py",
+      "path": "libs/code/examples/skills/skill-creator/scripts/quick_validate.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/examples/skills/skill-creator/SKILL.md",
+      "path": "libs/code/examples/skills/skill-creator/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/code/examples/skills/web-research/SKILL.md",
+      "path": "libs/code/examples/skills/web-research/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "libs/code/README.md",
+      "path": "libs/code/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/scripts/check_imports.py",
+      "path": "libs/code/scripts/check_imports.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/scripts/generate_commands_catalog.py",
+      "path": "libs/code/scripts/generate_commands_catalog.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/code/tests/integration_tests/__init__.py",
+      "path": "libs/code/tests/integration_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/integration_tests/benchmarks/__init__.py",
+      "path": "libs/code/tests/integration_tests/benchmarks/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/integration_tests/benchmarks/test_codspeed_import_benchmarks.py",
+      "path": "libs/code/tests/integration_tests/benchmarks/test_codspeed_import_benchmarks.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/integration_tests/benchmarks/test_startup_benchmarks.py",
+      "path": "libs/code/tests/integration_tests/benchmarks/test_startup_benchmarks.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/integration_tests/conftest.py",
+      "path": "libs/code/tests/integration_tests/conftest.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/integration_tests/test_acp_mode.py",
+      "path": "libs/code/tests/integration_tests/test_acp_mode.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/integration_tests/test_compact_resume.py",
+      "path": "libs/code/tests/integration_tests/test_compact_resume.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/integration_tests/test_sandbox_factory.py",
+      "path": "libs/code/tests/integration_tests/test_sandbox_factory.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/integration_tests/test_sandbox_operations.py",
+      "path": "libs/code/tests/integration_tests/test_sandbox_operations.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/README.md",
+      "path": "libs/code/tests/README.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/__init__.py",
+      "path": "libs/code/tests/unit_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/conftest.py",
+      "path": "libs/code/tests/unit_tests/conftest.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/skills/__init__.py",
+      "path": "libs/code/tests/unit_tests/skills/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/skills/test_commands.py",
+      "path": "libs/code/tests/unit_tests/skills/test_commands.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/skills/test_load.py",
+      "path": "libs/code/tests/unit_tests/skills/test_load.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/skills/test_skills_json.py",
+      "path": "libs/code/tests/unit_tests/skills/test_skills_json.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_agent.py",
+      "path": "libs/code/tests/unit_tests/test_agent.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_agent_friendly.py",
+      "path": "libs/code/tests/unit_tests/test_agent_friendly.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_agent_selector.py",
+      "path": "libs/code/tests/unit_tests/test_agent_selector.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_app.py",
+      "path": "libs/code/tests/unit_tests/test_app.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_approval.py",
+      "path": "libs/code/tests/unit_tests/test_approval.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_args.py",
+      "path": "libs/code/tests/unit_tests/test_args.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_ask_user.py",
+      "path": "libs/code/tests/unit_tests/test_ask_user.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_ask_user_middleware.py",
+      "path": "libs/code/tests/unit_tests/test_ask_user_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_auth_display.py",
+      "path": "libs/code/tests/unit_tests/test_auth_display.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_auth_store.py",
+      "path": "libs/code/tests/unit_tests/test_auth_store.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_auth_widgets.py",
+      "path": "libs/code/tests/unit_tests/test_auth_widgets.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_autocomplete.py",
+      "path": "libs/code/tests/unit_tests/test_autocomplete.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_charset.py",
+      "path": "libs/code/tests/unit_tests/test_charset.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_chat_input.py",
+      "path": "libs/code/tests/unit_tests/test_chat_input.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_clipboard.py",
+      "path": "libs/code/tests/unit_tests/test_clipboard.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_command_registry.py",
+      "path": "libs/code/tests/unit_tests/test_command_registry.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_compact_tool.py",
+      "path": "libs/code/tests/unit_tests/test_compact_tool.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_config.py",
+      "path": "libs/code/tests/unit_tests/test_config.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_configurable_model.py",
+      "path": "libs/code/tests/unit_tests/test_configurable_model.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_cursor_blink.py",
+      "path": "libs/code/tests/unit_tests/test_cursor_blink.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_debug.py",
+      "path": "libs/code/tests/unit_tests/test_debug.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_editor.py",
+      "path": "libs/code/tests/unit_tests/test_editor.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_end_to_end.py",
+      "path": "libs/code/tests/unit_tests/test_end_to_end.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_env_vars.py",
+      "path": "libs/code/tests/unit_tests/test_env_vars.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_event_bus.py",
+      "path": "libs/code/tests/unit_tests/test_event_bus.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_exception_handling.py",
+      "path": "libs/code/tests/unit_tests/test_exception_handling.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_extras_info.py",
+      "path": "libs/code/tests/unit_tests/test_extras_info.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_file_ops.py",
+      "path": "libs/code/tests/unit_tests/test_file_ops.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_filesystem_empty_result.py",
+      "path": "libs/code/tests/unit_tests/test_filesystem_empty_result.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_formatting.py",
+      "path": "libs/code/tests/unit_tests/test_formatting.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_git.py",
+      "path": "libs/code/tests/unit_tests/test_git.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_history.py",
+      "path": "libs/code/tests/unit_tests/test_history.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_hooks.py",
+      "path": "libs/code/tests/unit_tests/test_hooks.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_imports.py",
+      "path": "libs/code/tests/unit_tests/test_imports.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_input_parsing.py",
+      "path": "libs/code/tests/unit_tests/test_input_parsing.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_install_command.py",
+      "path": "libs/code/tests/unit_tests/test_install_command.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_iterm_cursor_guide.py",
+      "path": "libs/code/tests/unit_tests/test_iterm_cursor_guide.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_launch_init.py",
+      "path": "libs/code/tests/unit_tests/test_launch_init.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_links.py",
+      "path": "libs/code/tests/unit_tests/test_links.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_loading.py",
+      "path": "libs/code/tests/unit_tests/test_loading.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_local_context.py",
+      "path": "libs/code/tests/unit_tests/test_local_context.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_main.py",
+      "path": "libs/code/tests/unit_tests/test_main.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_main_acp_mode.py",
+      "path": "libs/code/tests/unit_tests/test_main_acp_mode.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_main_args.py",
+      "path": "libs/code/tests/unit_tests/test_main_args.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_auth.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_auth.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_commands.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_commands.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_disabled.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_disabled.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_login_modal.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_login_modal.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_login_service.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_login_service.py",
+      "type": "service"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_oauth_ui.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_oauth_ui.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_reconnect.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_reconnect.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_tools.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_tools.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_trust.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_trust.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_mcp_viewer.py",
+      "path": "libs/code/tests/unit_tests/test_mcp_viewer.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_media_utils.py",
+      "path": "libs/code/tests/unit_tests/test_media_utils.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_message_store.py",
+      "path": "libs/code/tests/unit_tests/test_message_store.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_messages.py",
+      "path": "libs/code/tests/unit_tests/test_messages.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_model_config.py",
+      "path": "libs/code/tests/unit_tests/test_model_config.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_model_selector.py",
+      "path": "libs/code/tests/unit_tests/test_model_selector.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_model_switch.py",
+      "path": "libs/code/tests/unit_tests/test_model_switch.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_non_interactive.py",
+      "path": "libs/code/tests/unit_tests/test_non_interactive.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_notification_center.py",
+      "path": "libs/code/tests/unit_tests/test_notification_center.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_notification_detail.py",
+      "path": "libs/code/tests/unit_tests/test_notification_detail.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_notifications.py",
+      "path": "libs/code/tests/unit_tests/test_notifications.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_offload.py",
+      "path": "libs/code/tests/unit_tests/test_offload.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_offload_dict_messages.py",
+      "path": "libs/code/tests/unit_tests/test_offload_dict_messages.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_onboarding.py",
+      "path": "libs/code/tests/unit_tests/test_onboarding.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_output.py",
+      "path": "libs/code/tests/unit_tests/test_output.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_reload.py",
+      "path": "libs/code/tests/unit_tests/test_reload.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_remote_client.py",
+      "path": "libs/code/tests/unit_tests/test_remote_client.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_resume_state.py",
+      "path": "libs/code/tests/unit_tests/test_resume_state.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_sandbox_factory.py",
+      "path": "libs/code/tests/unit_tests/test_sandbox_factory.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_server.py",
+      "path": "libs/code/tests/unit_tests/test_server.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_server_config.py",
+      "path": "libs/code/tests/unit_tests/test_server_config.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_server_graph.py",
+      "path": "libs/code/tests/unit_tests/test_server_graph.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_server_helpers.py",
+      "path": "libs/code/tests/unit_tests/test_server_helpers.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_server_manager.py",
+      "path": "libs/code/tests/unit_tests/test_server_manager.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_session_stats.py",
+      "path": "libs/code/tests/unit_tests/test_session_stats.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_sessions.py",
+      "path": "libs/code/tests/unit_tests/test_sessions.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_shell_allow_list.py",
+      "path": "libs/code/tests/unit_tests/test_shell_allow_list.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_skill_invocation.py",
+      "path": "libs/code/tests/unit_tests/test_skill_invocation.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_startup_fast_paths.py",
+      "path": "libs/code/tests/unit_tests/test_startup_fast_paths.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_state_migration.py",
+      "path": "libs/code/tests/unit_tests/test_state_migration.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_status.py",
+      "path": "libs/code/tests/unit_tests/test_status.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_subagents.py",
+      "path": "libs/code/tests/unit_tests/test_subagents.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_terminal_capabilities.py",
+      "path": "libs/code/tests/unit_tests/test_terminal_capabilities.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_terminal_escape.py",
+      "path": "libs/code/tests/unit_tests/test_terminal_escape.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_terminal_progress_preference.py",
+      "path": "libs/code/tests/unit_tests/test_terminal_progress_preference.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_textual_adapter.py",
+      "path": "libs/code/tests/unit_tests/test_textual_adapter.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_textual_patches.py",
+      "path": "libs/code/tests/unit_tests/test_textual_patches.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_theme.py",
+      "path": "libs/code/tests/unit_tests/test_theme.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_thread_selector.py",
+      "path": "libs/code/tests/unit_tests/test_thread_selector.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_tool_display.py",
+      "path": "libs/code/tests/unit_tests/test_tool_display.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_ui.py",
+      "path": "libs/code/tests/unit_tests/test_ui.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_unicode_security.py",
+      "path": "libs/code/tests/unit_tests/test_unicode_security.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_update_available.py",
+      "path": "libs/code/tests/unit_tests/test_update_available.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_update_check.py",
+      "path": "libs/code/tests/unit_tests/test_update_check.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_update_progress.py",
+      "path": "libs/code/tests/unit_tests/test_update_progress.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_version.py",
+      "path": "libs/code/tests/unit_tests/test_version.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/test_welcome.py",
+      "path": "libs/code/tests/unit_tests/test_welcome.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/tools/__init__.py",
+      "path": "libs/code/tests/unit_tests/tools/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/tests/unit_tests/tools/test_fetch_url.py",
+      "path": "libs/code/tests/unit_tests/tools/test_fetch_url.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/code/THREAT_MODEL.md",
+      "path": "libs/code/THREAT_MODEL.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/.pytest_cache/README.md",
+      "path": "libs/deepagents/.pytest_cache/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/CHANGELOG.md",
+      "path": "libs/deepagents/CHANGELOG.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/__init__.py",
+      "path": "libs/deepagents/deepagents/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/_api/__init__.py",
+      "path": "libs/deepagents/deepagents/_api/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/_api/deprecation.py",
+      "path": "libs/deepagents/deepagents/_api/deprecation.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/_excluded_middleware.py",
+      "path": "libs/deepagents/deepagents/_excluded_middleware.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/_messages_reducer.py",
+      "path": "libs/deepagents/deepagents/_messages_reducer.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/_models.py",
+      "path": "libs/deepagents/deepagents/_models.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/_tools.py",
+      "path": "libs/deepagents/deepagents/_tools.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/_version.py",
+      "path": "libs/deepagents/deepagents/_version.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/__init__.py",
+      "path": "libs/deepagents/deepagents/backends/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/composite.py",
+      "path": "libs/deepagents/deepagents/backends/composite.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/context_hub.py",
+      "path": "libs/deepagents/deepagents/backends/context_hub.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/filesystem.py",
+      "path": "libs/deepagents/deepagents/backends/filesystem.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/langsmith.py",
+      "path": "libs/deepagents/deepagents/backends/langsmith.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/local_shell.py",
+      "path": "libs/deepagents/deepagents/backends/local_shell.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/protocol.py",
+      "path": "libs/deepagents/deepagents/backends/protocol.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/sandbox.py",
+      "path": "libs/deepagents/deepagents/backends/sandbox.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/state.py",
+      "path": "libs/deepagents/deepagents/backends/state.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/store.py",
+      "path": "libs/deepagents/deepagents/backends/store.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/backends/utils.py",
+      "path": "libs/deepagents/deepagents/backends/utils.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/graph.py",
+      "path": "libs/deepagents/deepagents/graph.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/harnesses/__init__.py",
+      "path": "libs/deepagents/deepagents/harnesses/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/harnesses/protector/__init__.py",
+      "path": "libs/deepagents/deepagents/harnesses/protector/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/harnesses/protector/_agentic.py",
+      "path": "libs/deepagents/deepagents/harnesses/protector/_agentic.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/harnesses/protector/_ecc.py",
+      "path": "libs/deepagents/deepagents/harnesses/protector/_ecc.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/harnesses/protector/_engineering.py",
+      "path": "libs/deepagents/deepagents/harnesses/protector/_engineering.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/harnesses/protector/_prompt_skills.py",
+      "path": "libs/deepagents/deepagents/harnesses/protector/_prompt_skills.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/harnesses/protector/cli.py",
+      "path": "libs/deepagents/deepagents/harnesses/protector/cli.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/__init__.py",
+      "path": "libs/deepagents/deepagents/middleware/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/_fs_interrupt.py",
+      "path": "libs/deepagents/deepagents/middleware/_fs_interrupt.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/_message_eviction.py",
+      "path": "libs/deepagents/deepagents/middleware/_message_eviction.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/_overflow_clip.py",
+      "path": "libs/deepagents/deepagents/middleware/_overflow_clip.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/_state.py",
+      "path": "libs/deepagents/deepagents/middleware/_state.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/_tool_exclusion.py",
+      "path": "libs/deepagents/deepagents/middleware/_tool_exclusion.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/_utils.py",
+      "path": "libs/deepagents/deepagents/middleware/_utils.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/async_subagents.py",
+      "path": "libs/deepagents/deepagents/middleware/async_subagents.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/filesystem.py",
+      "path": "libs/deepagents/deepagents/middleware/filesystem.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/memory.py",
+      "path": "libs/deepagents/deepagents/middleware/memory.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/patch_tool_calls.py",
+      "path": "libs/deepagents/deepagents/middleware/patch_tool_calls.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/permissions.py",
+      "path": "libs/deepagents/deepagents/middleware/permissions.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/rubric.py",
+      "path": "libs/deepagents/deepagents/middleware/rubric.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/skills.py",
+      "path": "libs/deepagents/deepagents/middleware/skills.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/subagents.py",
+      "path": "libs/deepagents/deepagents/middleware/subagents.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/middleware/summarization.py",
+      "path": "libs/deepagents/deepagents/middleware/summarization.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/__init__.py",
+      "path": "libs/deepagents/deepagents/profiles/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/_builtin_profiles.py",
+      "path": "libs/deepagents/deepagents/profiles/_builtin_profiles.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/_keys.py",
+      "path": "libs/deepagents/deepagents/profiles/_keys.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/harness/__init__.py",
+      "path": "libs/deepagents/deepagents/profiles/harness/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/harness/_anthropic_haiku_4_5.py",
+      "path": "libs/deepagents/deepagents/profiles/harness/_anthropic_haiku_4_5.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/harness/_anthropic_opus_4_7.py",
+      "path": "libs/deepagents/deepagents/profiles/harness/_anthropic_opus_4_7.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/harness/_anthropic_sonnet_4_6.py",
+      "path": "libs/deepagents/deepagents/profiles/harness/_anthropic_sonnet_4_6.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/harness/_openai_codex.py",
+      "path": "libs/deepagents/deepagents/profiles/harness/_openai_codex.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/harness/_protector_engineering.py",
+      "path": "libs/deepagents/deepagents/profiles/harness/_protector_engineering.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/harness/harness_profiles.py",
+      "path": "libs/deepagents/deepagents/profiles/harness/harness_profiles.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/provider/__init__.py",
+      "path": "libs/deepagents/deepagents/profiles/provider/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/provider/_openai.py",
+      "path": "libs/deepagents/deepagents/profiles/provider/_openai.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/provider/_openrouter.py",
+      "path": "libs/deepagents/deepagents/profiles/provider/_openrouter.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/deepagents/profiles/provider/provider_profiles.py",
+      "path": "libs/deepagents/deepagents/profiles/provider/provider_profiles.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/README.md",
+      "path": "libs/deepagents/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/scripts/check_imports.py",
+      "path": "libs/deepagents/scripts/check_imports.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/deepagents/tests/__init__.py",
+      "path": "libs/deepagents/tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/benchmarks/__init__.py",
+      "path": "libs/deepagents/tests/benchmarks/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/benchmarks/test_benchmark_create_deep_agent.py",
+      "path": "libs/deepagents/tests/benchmarks/test_benchmark_create_deep_agent.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/integration_tests/__init__.py",
+      "path": "libs/deepagents/tests/integration_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/integration_tests/test_context_hub_backend.py",
+      "path": "libs/deepagents/tests/integration_tests/test_context_hub_backend.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/integration_tests/test_deepagents.py",
+      "path": "libs/deepagents/tests/integration_tests/test_deepagents.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/integration_tests/test_filesystem_middleware.py",
+      "path": "libs/deepagents/tests/integration_tests/test_filesystem_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/integration_tests/test_hitl.py",
+      "path": "libs/deepagents/tests/integration_tests/test_hitl.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/integration_tests/test_langsmith_sandbox.py",
+      "path": "libs/deepagents/tests/integration_tests/test_langsmith_sandbox.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/integration_tests/test_subagent_middleware.py",
+      "path": "libs/deepagents/tests/integration_tests/test_subagent_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/README.md",
+      "path": "libs/deepagents/tests/README.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/__init__.py",
+      "path": "libs/deepagents/tests/unit_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/_api/__init__.py",
+      "path": "libs/deepagents/tests/unit_tests/_api/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/_api/test_deprecation.py",
+      "path": "libs/deepagents/tests/unit_tests/_api/test_deprecation.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/__init__.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_backwards_compat.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_backwards_compat.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_composite_backend.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_composite_backend.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_composite_backend_async.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_composite_backend_async.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_context_hub_backend.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_context_hub_backend.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_file_format.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_file_format.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_files_update_deprecation.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_files_update_deprecation.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_filesystem_backend.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_filesystem_backend.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_filesystem_backend_async.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_filesystem_backend_async.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_langsmith_sandbox.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_langsmith_sandbox.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_local_shell_backend.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_local_shell_backend.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_protocol.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_protocol.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_sandbox_backend.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_sandbox_backend.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_state_backend.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_state_backend.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_state_backend_async.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_state_backend_async.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_store_backend.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_store_backend.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_store_backend_async.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_store_backend_async.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_timeout_compat.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_timeout_compat.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/backends/test_utils.py",
+      "path": "libs/deepagents/tests/unit_tests/backends/test_utils.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/chat_model.py",
+      "path": "libs/deepagents/tests/unit_tests/chat_model.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/conftest.py",
+      "path": "libs/deepagents/tests/unit_tests/conftest.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/__init__.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_compact_tool.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_compact_tool.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_filesystem_middleware_init.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_filesystem_middleware_init.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_memory_middleware.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_memory_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_memory_middleware_async.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_memory_middleware_async.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_rubric_middleware.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_rubric_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_skills_middleware.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_skills_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_skills_middleware_async.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_skills_middleware_async.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_subagent_middleware_init.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_subagent_middleware_init.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_summarization_factory.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_summarization_factory.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_summarization_middleware.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_summarization_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/middleware/test_tool_schemas.py",
+      "path": "libs/deepagents/tests/unit_tests/middleware/test_tool_schemas.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/__init__.py",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/conftest.py",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/conftest.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/custom_system_message.md",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/custom_system_message.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/custom_system_message_tools.json",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/custom_system_message_tools.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_execute.md",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_execute.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_execute_tools.json",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_execute_tools.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_memory_and_skills.md",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_memory_and_skills.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_memory_and_skills_tools.json",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_memory_and_skills_tools.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_sync_and_async_subagents.md",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_sync_and_async_subagents.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_sync_and_async_subagents_tools.json",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_with_sync_and_async_subagents_tools.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_without_execute.md",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_without_execute.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_without_execute_tools.json",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/snapshots/system_prompt_without_execute_tools.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/smoke_tests/test_system_prompt.py",
+      "path": "libs/deepagents/tests/unit_tests/smoke_tests/test_system_prompt.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_artifacts_root.py",
+      "path": "libs/deepagents/tests/unit_tests/test_artifacts_root.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_async_subagents.py",
+      "path": "libs/deepagents/tests/unit_tests/test_async_subagents.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_deep_agent_streaming.py",
+      "path": "libs/deepagents/tests/unit_tests/test_deep_agent_streaming.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_end_to_end.py",
+      "path": "libs/deepagents/tests/unit_tests/test_end_to_end.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_file_system_tools.py",
+      "path": "libs/deepagents/tests/unit_tests/test_file_system_tools.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_file_system_tools_async.py",
+      "path": "libs/deepagents/tests/unit_tests/test_file_system_tools_async.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_graph.py",
+      "path": "libs/deepagents/tests/unit_tests/test_graph.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_harness_profiles.py",
+      "path": "libs/deepagents/tests/unit_tests/test_harness_profiles.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_local_sandbox_operations.py",
+      "path": "libs/deepagents/tests/unit_tests/test_local_sandbox_operations.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_local_shell.py",
+      "path": "libs/deepagents/tests/unit_tests/test_local_shell.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_messages_reducer.py",
+      "path": "libs/deepagents/tests/unit_tests/test_messages_reducer.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_middleware.py",
+      "path": "libs/deepagents/tests/unit_tests/test_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_middleware_async.py",
+      "path": "libs/deepagents/tests/unit_tests/test_middleware_async.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_models.py",
+      "path": "libs/deepagents/tests/unit_tests/test_models.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_permissions.py",
+      "path": "libs/deepagents/tests/unit_tests/test_permissions.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_protector_engineering_harness.py",
+      "path": "libs/deepagents/tests/unit_tests/test_protector_engineering_harness.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_subagents.py",
+      "path": "libs/deepagents/tests/unit_tests/test_subagents.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_timing.py",
+      "path": "libs/deepagents/tests/unit_tests/test_timing.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_todo_middleware.py",
+      "path": "libs/deepagents/tests/unit_tests/test_todo_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/unit_tests/test_version.py",
+      "path": "libs/deepagents/tests/unit_tests/test_version.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/tests/utils.py",
+      "path": "libs/deepagents/tests/utils.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/deepagents/THREAT_MODEL.md",
+      "path": "libs/deepagents/THREAT_MODEL.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/AGENTS.md",
+      "path": "libs/evals/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/CONTRIBUTING.md",
+      "path": "libs/evals/CONTRIBUTING.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_evals/__init__.py",
+      "path": "libs/evals/deepagents_evals/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_evals/categories.json",
+      "path": "libs/evals/deepagents_evals/categories.json",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_evals/cli.py",
+      "path": "libs/evals/deepagents_evals/cli.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_evals/radar.py",
+      "path": "libs/evals/deepagents_evals/radar.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_evals/trial_summary.py",
+      "path": "libs/evals/deepagents_evals/trial_summary.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_harbor/__init__.py",
+      "path": "libs/evals/deepagents_harbor/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_harbor/backend.py",
+      "path": "libs/evals/deepagents_harbor/backend.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_harbor/deepagents_wrapper.py",
+      "path": "libs/evals/deepagents_harbor/deepagents_wrapper.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_harbor/failure.py",
+      "path": "libs/evals/deepagents_harbor/failure.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_harbor/langsmith.py",
+      "path": "libs/evals/deepagents_harbor/langsmith.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_harbor/langsmith_environment.py",
+      "path": "libs/evals/deepagents_harbor/langsmith_environment.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_harbor/metadata.py",
+      "path": "libs/evals/deepagents_harbor/metadata.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/deepagents_harbor/stats.py",
+      "path": "libs/evals/deepagents_harbor/stats.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/EVAL_CATALOG.md",
+      "path": "libs/evals/EVAL_CATALOG.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/MODEL_GROUPS.md",
+      "path": "libs/evals/MODEL_GROUPS.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/README.md",
+      "path": "libs/evals/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/scripts/analyze.py",
+      "path": "libs/evals/scripts/analyze.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/scripts/composite_radar.py",
+      "path": "libs/evals/scripts/composite_radar.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/scripts/generate_eval_catalog.py",
+      "path": "libs/evals/scripts/generate_eval_catalog.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/scripts/generate_model_groups.py",
+      "path": "libs/evals/scripts/generate_model_groups.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/scripts/generate_radar.py",
+      "path": "libs/evals/scripts/generate_radar.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/scripts/harbor_langsmith.py",
+      "path": "libs/evals/scripts/harbor_langsmith.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/scripts/run_trials.py",
+      "path": "libs/evals/scripts/run_trials.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/evals/tests/__init__.py",
+      "path": "libs/evals/tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/__init__.py",
+      "path": "libs/evals/tests/evals/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/conftest.py",
+      "path": "libs/evals/tests/evals/conftest.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/benchmark_samples/bfcl_v3_final.json",
+      "path": "libs/evals/tests/evals/data/benchmark_samples/bfcl_v3_final.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/benchmark_samples/frames_final.json",
+      "path": "libs/evals/tests/evals/data/benchmark_samples/frames_final.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/benchmark_samples/nexus_final.json",
+      "path": "libs/evals/tests/evals/data/benchmark_samples/nexus_final.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/bfcl_apis/__init__.py",
+      "path": "libs/evals/tests/evals/data/bfcl_apis/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/bfcl_apis/long_context.py",
+      "path": "libs/evals/tests/evals/data/bfcl_apis/long_context.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/bfcl_apis/message_api.py",
+      "path": "libs/evals/tests/evals/data/bfcl_apis/message_api.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/bfcl_apis/ticket_api.py",
+      "path": "libs/evals/tests/evals/data/bfcl_apis/ticket_api.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/bfcl_apis/trading_bot.py",
+      "path": "libs/evals/tests/evals/data/bfcl_apis/trading_bot.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/bfcl_apis/travel_booking.py",
+      "path": "libs/evals/tests/evals/data/bfcl_apis/travel_booking.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/data/bfcl_apis/vehicle_control.py",
+      "path": "libs/evals/tests/evals/data/bfcl_apis/vehicle_control.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/external_benchmarks.py",
+      "path": "libs/evals/tests/evals/external_benchmarks.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/fixtures/summarization_seed_messages.json",
+      "path": "libs/evals/tests/evals/fixtures/summarization_seed_messages.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/llm_judge.py",
+      "path": "libs/evals/tests/evals/llm_judge.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/memory_agent_bench/__init__.py",
+      "path": "libs/evals/tests/evals/memory_agent_bench/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/memory_agent_bench/configs.py",
+      "path": "libs/evals/tests/evals/memory_agent_bench/configs.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/memory_agent_bench/data_utils.py",
+      "path": "libs/evals/tests/evals/memory_agent_bench/data_utils.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/memory_agent_bench/eval_utils.py",
+      "path": "libs/evals/tests/evals/memory_agent_bench/eval_utils.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/memory_agent_bench/test_memory_agent_bench.py",
+      "path": "libs/evals/tests/evals/memory_agent_bench/test_memory_agent_bench.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/pytest_reporter.py",
+      "path": "libs/evals/tests/evals/pytest_reporter.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/README.md",
+      "path": "libs/evals/tests/evals/README.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/tau2_airline/__init__.py",
+      "path": "libs/evals/tests/evals/tau2_airline/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/tau2_airline/data/db.json",
+      "path": "libs/evals/tests/evals/tau2_airline/data/db.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/tau2_airline/data/policy.md",
+      "path": "libs/evals/tests/evals/tau2_airline/data/policy.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/tau2_airline/data/tasks.json",
+      "path": "libs/evals/tests/evals/tau2_airline/data/tasks.json",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/tau2_airline/domain.py",
+      "path": "libs/evals/tests/evals/tau2_airline/domain.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/tau2_airline/evaluation.py",
+      "path": "libs/evals/tests/evals/tau2_airline/evaluation.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/tau2_airline/runner.py",
+      "path": "libs/evals/tests/evals/tau2_airline/runner.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/tau2_airline/test_tau2_airline.py",
+      "path": "libs/evals/tests/evals/tau2_airline/test_tau2_airline.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/tau2_airline/user_sim.py",
+      "path": "libs/evals/tests/evals/tau2_airline/user_sim.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test__reporter_sample.py",
+      "path": "libs/evals/tests/evals/test__reporter_sample.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_external_benchmarks.py",
+      "path": "libs/evals/tests/evals/test_external_benchmarks.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_file_operations.py",
+      "path": "libs/evals/tests/evals/test_file_operations.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_followup_quality.py",
+      "path": "libs/evals/tests/evals/test_followup_quality.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_iterative_constraint_satisfaction.py",
+      "path": "libs/evals/tests/evals/test_iterative_constraint_satisfaction.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_langchain_middleware_todo.py",
+      "path": "libs/evals/tests/evals/test_langchain_middleware_todo.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_memory.py",
+      "path": "libs/evals/tests/evals/test_memory.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_memory_multiturn.py",
+      "path": "libs/evals/tests/evals/test_memory_multiturn.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_skills.py",
+      "path": "libs/evals/tests/evals/test_skills.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_subagents.py",
+      "path": "libs/evals/tests/evals/test_subagents.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_summarization.py",
+      "path": "libs/evals/tests/evals/test_summarization.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_system_prompt.py",
+      "path": "libs/evals/tests/evals/test_system_prompt.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_todos.py",
+      "path": "libs/evals/tests/evals/test_todos.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_tool_selection.py",
+      "path": "libs/evals/tests/evals/test_tool_selection.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_tool_usage_incident_graph.py",
+      "path": "libs/evals/tests/evals/test_tool_usage_incident_graph.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/test_tool_usage_relational.py",
+      "path": "libs/evals/tests/evals/test_tool_usage_relational.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/evals/utils.py",
+      "path": "libs/evals/tests/evals/utils.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/__init__.py",
+      "path": "libs/evals/tests/unit_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_analyze_eval_failures.py",
+      "path": "libs/evals/tests/unit_tests/test_analyze_eval_failures.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_category_tagging.py",
+      "path": "libs/evals/tests/unit_tests/test_category_tagging.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_cli.py",
+      "path": "libs/evals/tests/unit_tests/test_cli.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_conftest_model_required.py",
+      "path": "libs/evals/tests/unit_tests/test_conftest_model_required.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_deepagents_wrapper.py",
+      "path": "libs/evals/tests/unit_tests/test_deepagents_wrapper.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_eval_catalog.py",
+      "path": "libs/evals/tests/unit_tests/test_eval_catalog.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_external_benchmark_helpers.py",
+      "path": "libs/evals/tests/unit_tests/test_external_benchmark_helpers.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_generate_radar_script.py",
+      "path": "libs/evals/tests/unit_tests/test_generate_radar_script.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_harbor_backend.py",
+      "path": "libs/evals/tests/unit_tests/test_harbor_backend.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_imports.py",
+      "path": "libs/evals/tests/unit_tests/test_imports.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_infra.py",
+      "path": "libs/evals/tests/unit_tests/test_infra.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_langsmith.py",
+      "path": "libs/evals/tests/unit_tests/test_langsmith.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_langsmith_environment.py",
+      "path": "libs/evals/tests/unit_tests/test_langsmith_environment.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_model_groups.py",
+      "path": "libs/evals/tests/unit_tests/test_model_groups.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_pytest_reporter.py",
+      "path": "libs/evals/tests/unit_tests/test_pytest_reporter.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_radar.py",
+      "path": "libs/evals/tests/unit_tests/test_radar.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_run_trials.py",
+      "path": "libs/evals/tests/unit_tests/test_run_trials.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_trajectory.py",
+      "path": "libs/evals/tests/unit_tests/test_trajectory.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/evals/tests/unit_tests/test_trial_summary.py",
+      "path": "libs/evals/tests/unit_tests/test_trial_summary.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/daytona/CHANGELOG.md",
+      "path": "libs/partners/daytona/CHANGELOG.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/daytona/langchain_daytona/__init__.py",
+      "path": "libs/partners/daytona/langchain_daytona/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/daytona/langchain_daytona/_version.py",
+      "path": "libs/partners/daytona/langchain_daytona/_version.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/daytona/langchain_daytona/sandbox.py",
+      "path": "libs/partners/daytona/langchain_daytona/sandbox.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/daytona/README.md",
+      "path": "libs/partners/daytona/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/daytona/tests/__init__.py",
+      "path": "libs/partners/daytona/tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/daytona/tests/integration_tests/__init__.py",
+      "path": "libs/partners/daytona/tests/integration_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/daytona/tests/integration_tests/test_integration.py",
+      "path": "libs/partners/daytona/tests/integration_tests/test_integration.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/daytona/tests/test_import.py",
+      "path": "libs/partners/daytona/tests/test_import.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/daytona/tests/unit_tests/__init__.py",
+      "path": "libs/partners/daytona/tests/unit_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/daytona/tests/unit_tests/test_import.py",
+      "path": "libs/partners/daytona/tests/unit_tests/test_import.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/modal/CHANGELOG.md",
+      "path": "libs/partners/modal/CHANGELOG.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/modal/langchain_modal/__init__.py",
+      "path": "libs/partners/modal/langchain_modal/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/modal/langchain_modal/_version.py",
+      "path": "libs/partners/modal/langchain_modal/_version.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/modal/langchain_modal/sandbox.py",
+      "path": "libs/partners/modal/langchain_modal/sandbox.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/modal/README.md",
+      "path": "libs/partners/modal/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/modal/tests/__init__.py",
+      "path": "libs/partners/modal/tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/modal/tests/integration_tests/__init__.py",
+      "path": "libs/partners/modal/tests/integration_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/modal/tests/integration_tests/test_integration.py",
+      "path": "libs/partners/modal/tests/integration_tests/test_integration.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/modal/tests/test_import.py",
+      "path": "libs/partners/modal/tests/test_import.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/modal/tests/unit_tests/__init__.py",
+      "path": "libs/partners/modal/tests/unit_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/modal/tests/unit_tests/test_import.py",
+      "path": "libs/partners/modal/tests/unit_tests/test_import.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/CHANGELOG.md",
+      "path": "libs/partners/quickjs/CHANGELOG.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/langchain_quickjs/__init__.py",
+      "path": "libs/partners/quickjs/langchain_quickjs/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/langchain_quickjs/_format.py",
+      "path": "libs/partners/quickjs/langchain_quickjs/_format.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/langchain_quickjs/_prompt.py",
+      "path": "libs/partners/quickjs/langchain_quickjs/_prompt.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/langchain_quickjs/_ptc.py",
+      "path": "libs/partners/quickjs/langchain_quickjs/_ptc.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/langchain_quickjs/_repl.py",
+      "path": "libs/partners/quickjs/langchain_quickjs/_repl.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/langchain_quickjs/_skills.py",
+      "path": "libs/partners/quickjs/langchain_quickjs/_skills.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/langchain_quickjs/_swarm_task.py",
+      "path": "libs/partners/quickjs/langchain_quickjs/_swarm_task.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/langchain_quickjs/middleware.py",
+      "path": "libs/partners/quickjs/langchain_quickjs/middleware.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/README.md",
+      "path": "libs/partners/quickjs/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/__init__.py",
+      "path": "libs/partners/quickjs/tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/_common.py",
+      "path": "libs/partners/quickjs/tests/_common.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/benchmarks/_common.py",
+      "path": "libs/partners/quickjs/tests/benchmarks/_common.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/benchmarks/test_quickjs_memory.py",
+      "path": "libs/partners/quickjs/tests/benchmarks/test_quickjs_memory.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/benchmarks/test_quickjs_throughput.py",
+      "path": "libs/partners/quickjs/tests/benchmarks/test_quickjs_throughput.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/integration_tests/__init__.py",
+      "path": "libs/partners/quickjs/tests/integration_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/integration_tests/test_postgres.py",
+      "path": "libs/partners/quickjs/tests/integration_tests/test_postgres.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/integration_tests/test_rlm.py",
+      "path": "libs/partners/quickjs/tests/integration_tests/test_rlm.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/__init__.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/smoke_tests/__init__.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/smoke_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/smoke_tests/conftest.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/smoke_tests/conftest.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_mixed_foreign_functions.md",
+      "path": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_mixed_foreign_functions.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_mixed_foreign_functions_call.md",
+      "path": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_mixed_foreign_functions_call.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_mixed_foreign_functions_turn.md",
+      "path": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_mixed_foreign_functions_turn.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_no_tools.md",
+      "path": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_no_tools.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_no_tools_call.md",
+      "path": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_no_tools_call.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_no_tools_turn.md",
+      "path": "libs/partners/quickjs/tests/unit_tests/smoke_tests/snapshots/quickjs_system_prompt_no_tools_turn.md",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/smoke_tests/test_system_prompt.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/smoke_tests/test_system_prompt.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_end_to_end.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_end_to_end.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_end_to_end_async.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_end_to_end_async.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_prompt_modes.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_prompt_modes.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_ptc.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_ptc.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_repl_middleware.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_repl_middleware.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_skills.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_skills.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_skills_integration.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_skills_integration.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_snapshot_persistence.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_snapshot_persistence.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_swarm_task.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_swarm_task.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/quickjs/tests/unit_tests/test_thread_affinity.py",
+      "path": "libs/partners/quickjs/tests/unit_tests/test_thread_affinity.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/runloop/CHANGELOG.md",
+      "path": "libs/partners/runloop/CHANGELOG.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/runloop/langchain_runloop/__init__.py",
+      "path": "libs/partners/runloop/langchain_runloop/__init__.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/runloop/langchain_runloop/_version.py",
+      "path": "libs/partners/runloop/langchain_runloop/_version.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/runloop/langchain_runloop/provider.py",
+      "path": "libs/partners/runloop/langchain_runloop/provider.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/runloop/langchain_runloop/sandbox.py",
+      "path": "libs/partners/runloop/langchain_runloop/sandbox.py",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/runloop/README.md",
+      "path": "libs/partners/runloop/README.md",
+      "type": "file"
+    },
+    {
+      "id": "libs/partners/runloop/tests/__init__.py",
+      "path": "libs/partners/runloop/tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/runloop/tests/integration_tests/__init__.py",
+      "path": "libs/partners/runloop/tests/integration_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/runloop/tests/integration_tests/test_integration.py",
+      "path": "libs/partners/runloop/tests/integration_tests/test_integration.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/runloop/tests/test_import.py",
+      "path": "libs/partners/runloop/tests/test_import.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/runloop/tests/unit_tests/__init__.py",
+      "path": "libs/partners/runloop/tests/unit_tests/__init__.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/runloop/tests/unit_tests/test_import.py",
+      "path": "libs/partners/runloop/tests/unit_tests/test_import.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/partners/runloop/tests/unit_tests/test_provider.py",
+      "path": "libs/partners/runloop/tests/unit_tests/test_provider.py",
+      "type": "test"
+    },
+    {
+      "id": "libs/README.md",
+      "path": "libs/README.md",
+      "type": "file"
+    },
+    {
+      "id": "packs/protector-financiacioncore/knowledge/FinanciacionCore.md",
+      "path": "packs/protector-financiacioncore/knowledge/FinanciacionCore.md",
+      "type": "file"
+    },
+    {
+      "id": "packs/protector-financiacioncore/knowledge/README.md",
+      "path": "packs/protector-financiacioncore/knowledge/README.md",
+      "type": "file"
+    },
+    {
+      "id": "packs/protector-financiacioncore/pack.json",
+      "path": "packs/protector-financiacioncore/pack.json",
+      "type": "file"
+    },
+    {
+      "id": "packs/protector-financiacioncore/README.md",
+      "path": "packs/protector-financiacioncore/README.md",
+      "type": "file"
+    },
+    {
+      "id": "packs/protector-financiacioncore/skills/financiacioncore-method/SKILL.md",
+      "path": "packs/protector-financiacioncore/skills/financiacioncore-method/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "packs/protector-financiacioncore/skills/protector-anti-drift/SKILL.md",
+      "path": "packs/protector-financiacioncore/skills/protector-anti-drift/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "packs/protector-financiacioncore/skills/protector-codex-handoff/SKILL.md",
+      "path": "packs/protector-financiacioncore/skills/protector-codex-handoff/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "packs/protector-financiacioncore/skills/protector-codex-review/SKILL.md",
+      "path": "packs/protector-financiacioncore/skills/protector-codex-review/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "packs/protector-financiacioncore/skills/protector-prompt-quality/SKILL.md",
+      "path": "packs/protector-financiacioncore/skills/protector-prompt-quality/SKILL.md",
+      "type": "skill"
+    },
+    {
+      "id": "packs/protector-financiacioncore/verification/prompt-skills.json",
+      "path": "packs/protector-financiacioncore/verification/prompt-skills.json",
+      "type": "file"
+    },
+    {
+      "id": "packs/README.md",
+      "path": "packs/README.md",
+      "type": "file"
+    },
+    {
+      "id": "README.md",
+      "path": "README.md",
+      "type": "file"
+    },
+    {
+      "id": "release-please-config.json",
+      "path": "release-please-config.json",
+      "type": "file"
+    },
+    {
+      "id": "spec.md",
+      "path": "spec.md",
+      "type": "file"
+    },
+    {
+      "id": "tests/prompt_benchmarks/administration-multilingual-completion/expected_characteristics.md",
+      "path": "tests/prompt_benchmarks/administration-multilingual-completion/expected_characteristics.md",
+      "type": "test"
+    },
+    {
+      "id": "tests/prompt_benchmarks/email-password-autofill/expected_characteristics.md",
+      "path": "tests/prompt_benchmarks/email-password-autofill/expected_characteristics.md",
+      "type": "test"
+    },
+    {
+      "id": "tests/prompt_benchmarks/legacy-onboarding-path-convergence/expected_characteristics.md",
+      "path": "tests/prompt_benchmarks/legacy-onboarding-path-convergence/expected_characteristics.md",
+      "type": "test"
+    },
+    {
+      "id": "tests/prompt_benchmarks/lleida-set-config-bootstrap/expected_characteristics.md",
+      "path": "tests/prompt_benchmarks/lleida-set-config-bootstrap/expected_characteristics.md",
+      "type": "test"
+    },
+    {
+      "id": "tests/prompt_benchmarks/navigation-convergence/expected_characteristics.md",
+      "path": "tests/prompt_benchmarks/navigation-convergence/expected_characteristics.md",
+      "type": "test"
+    },
+    {
+      "id": "tests/prompt_benchmarks/resend-signature-after-provider-success/expected_characteristics.md",
+      "path": "tests/prompt_benchmarks/resend-signature-after-provider-success/expected_characteristics.md",
+      "type": "test"
+    },
+    {
+      "id": "tests/prompt_benchmarks/single-bank-account-everywhere/expected_characteristics.md",
+      "path": "tests/prompt_benchmarks/single-bank-account-everywhere/expected_characteristics.md",
+      "type": "test"
+    },
+    {
+      "id": "tests/prompt_benchmarks/spinner-after-provider-dispatch/expected_characteristics.md",
+      "path": "tests/prompt_benchmarks/spinner-after-provider-dispatch/expected_characteristics.md",
+      "type": "test"
+    }
+  ]
+}

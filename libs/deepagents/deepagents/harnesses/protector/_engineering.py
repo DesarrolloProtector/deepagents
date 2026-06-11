@@ -19,7 +19,11 @@ from pydantic import Field
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.harnesses.protector._agentic import build_execution_plan, render_execution_plan as render_agentic_execution_plan
-from deepagents.harnesses.protector._ecc import discover_pack_prompt_skill_benchmark_coverage, discover_protector_pack
+from deepagents.harnesses.protector._ecc import (
+    ProtectorPackDiscovery,
+    discover_pack_prompt_skill_benchmark_coverage,
+    discover_protector_pack,
+)
 from deepagents.harnesses.protector._prompt_skills import PromptSkill, available_prompt_skills, select_prompt_skills
 
 if TYPE_CHECKING:
@@ -34,6 +38,22 @@ if TYPE_CHECKING:
 HARNESS_PROFILE = "protector:engineering-harness"
 HARNESS_PROFILE_ENV_VAR = "DEEPAGENTS_ENGINEERING_HARNESS_PROFILE"
 OUTCOME_HISTORY_RELATIVE_PATH = Path(".protector-harness") / "outcome-history.jsonl"
+REPO_GRAPH_RELATIVE_PATH = Path(".protector-harness") / "repo-graph.json"
+REPO_GRAPH_SCHEMA_VERSION = "protector-repo-graph-v1"
+REPO_GRAPH_BUILDER_VERSION = "protector-repo-graph-builder-v2"
+REPO_GRAPH_EXCLUDED_DIRS = frozenset(
+    {
+        ".git",
+        ".protector-harness",
+        ".venv",
+        "__pycache__",
+        "bin",
+        "node_modules",
+        "obj",
+        "packages",
+        "vendor",
+    }
+)
 OUTCOME_HISTORY_SIGNAL_LIMIT = 5
 OUTCOME_LEARNING_SIGNAL_MIN_COUNT = 2
 OUTCOME_LEARNING_PATTERN_LIMIT = 140
@@ -54,6 +74,8 @@ AUTOMATION_CANDIDATE_REQUIRED_FIELDS = (
     "proposed_codex_prompt",
     "execution_boundaries",
 )
+_PACK_DISCOVERY_CACHE: dict[tuple[bool, int], ProtectorPackDiscovery] = {}
+_PROMPT_SKILL_COVERAGE_CACHE: dict[int, dict[str, tuple[str, ...]]] = {}
 FEATURE_HINTS = frozenset(
     {
         "api",
@@ -510,6 +532,8 @@ class DecisionReviewerVerdict:
     verdict: str
     findings: tuple[str, ...]
     override_reasons: tuple[str, ...]
+    allowed_domains: tuple[str, ...]
+    blocked_domains: tuple[str, ...]
     skill_allowlist: tuple[str, ...]
     skill_blocklist: tuple[str, ...]
     context_allowlist: tuple[str, ...]
@@ -532,7 +556,7 @@ class IntakeGateDecision:
     @property
     def domain_delta_required(self) -> dict[str, bool]:
         """Return domain flags for compatibility with existing planner logic."""
-        allowed = set(self.intent.domains_allowed)
+        allowed = set(self.review.allowed_domains)
         domains = (
             "visual_layout",
             "navigation",
@@ -745,12 +769,39 @@ class _RepoKnowledge:
 
 
 @dataclass(frozen=True)
+class _GraphFreshness:
+    """Freshness decision for one local repository graph artifact."""
+
+    state: str
+    decision: str
+    artifact_path: Path | None
+    repo_root: str
+    git_head: str
+    working_tree_fingerprint: str
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _GraphEvidence:
+    """Graph-backed retrieval evidence used after intent review."""
+
+    freshness: _GraphFreshness
+    selected_nodes: tuple[str, ...] = ()
+    selected_files: tuple[str, ...] = ()
+    selected_skills: tuple[str, ...] = ()
+    selected_knowledge: tuple[str, ...] = ()
+    rejected_candidates: tuple[str, ...] = ()
+    selection_rationale: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class _ContextSelection:
     """Selected and rejected context display rows."""
 
     selected: tuple[str, ...]
     not_selected: tuple[str, ...]
     knowledge: tuple[str, ...] = ()
+    graph: _GraphEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -1183,6 +1234,8 @@ def _task_delta_payload(classification: TaskDeltaClassification) -> dict[str, ob
             "verdict": classification.review.verdict,
             "findings": classification.review.findings,
             "override_reasons": classification.review.override_reasons,
+            "allowed_domains": classification.review.allowed_domains,
+            "blocked_domains": classification.review.blocked_domains,
             "skill_allowlist": classification.review.skill_allowlist,
             "skill_blocklist": classification.review.skill_blocklist,
             "context_allowlist": classification.review.context_allowlist,
@@ -1190,6 +1243,63 @@ def _task_delta_payload(classification: TaskDeltaClassification) -> dict[str, ob
             "confidence": classification.review.confidence,
         },
     }
+
+
+def _graph_status_payload(selection: _ContextSelection) -> dict[str, object]:
+    """Return graph freshness status for candidate JSON."""
+    if selection.graph is None:
+        return {"state": "unavailable", "decision": "graph not requested"}
+    freshness = selection.graph.freshness
+    return {
+        "state": freshness.state,
+        "decision": freshness.decision,
+        "artifact_path": str(freshness.artifact_path) if freshness.artifact_path is not None else None,
+        "repo_root": freshness.repo_root,
+        "git_head": freshness.git_head,
+        "working_tree_fingerprint": freshness.working_tree_fingerprint,
+        "warnings": freshness.warnings,
+    }
+
+
+def _graph_evidence_payload(selection: _ContextSelection) -> dict[str, object]:
+    """Return graph retrieval evidence for candidate JSON."""
+    if selection.graph is None:
+        return {
+            "selected_nodes": (),
+            "selected_files": (),
+            "selected_skills": (),
+            "selected_knowledge": (),
+            "rejected_candidates": (),
+            "selection_rationale": (),
+        }
+    graph = selection.graph
+    return {
+        "selected_nodes": graph.selected_nodes,
+        "selected_files": graph.selected_files,
+        "selected_skills": graph.selected_skills,
+        "selected_knowledge": graph.selected_knowledge,
+        "rejected_candidates": graph.rejected_candidates,
+        "selection_rationale": graph.selection_rationale,
+    }
+
+
+def _render_graph_evidence(selection: _ContextSelection) -> str:
+    """Render compact graph freshness and retrieval evidence."""
+    if selection.graph is None:
+        return """Graph freshness:
+- state=unavailable; decision=graph not requested
+Graph evidence:
+- (none)"""
+    freshness = selection.graph.freshness
+    return f"""Graph freshness:
+- state={freshness.state}; decision={freshness.decision}
+- artifact={freshness.artifact_path if freshness.artifact_path is not None else '(none)'}
+Graph evidence:
+- selected nodes: {_inline_or_none(selection.graph.selected_nodes)}
+- selected files: {_inline_or_none(selection.graph.selected_files)}
+- selected skills: {_inline_or_none(selection.graph.selected_skills)}
+- rejected candidates: {_inline_or_none(selection.graph.rejected_candidates)}
+- rationale: {_inline_or_none(selection.graph.selection_rationale)}"""
 
 
 def _evidence_handling_rows(evidence_paths: tuple[str, ...], evidence_notes: tuple[str, ...]) -> tuple[str, ...]:
@@ -1393,8 +1503,8 @@ def _render_ecc_supervised_automation_pilot(
     task_delta: TaskDeltaClassification,
 ) -> str:
     """Render the read-only ECC-supervised Codex handoff pilot."""
-    pack = discover_protector_pack(include_benchmarks=True)
-    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    pack = _discover_protector_pack_cached(include_benchmarks=True)
+    coverage = _prompt_skill_benchmark_coverage_cached()
     selected_pack_skills = tuple(skill for skill in prompt_skills if skill.source == "pack")
     selected_runtime_skills = tuple(skill for skill in prompt_skills if skill.source != "pack")
     missing_coverage = tuple(skill.name for skill in selected_pack_skills if not coverage.get(skill.name))
@@ -1434,6 +1544,8 @@ Proposed Codex prompt:
 
 Intent/delta classification:
 {_render_task_delta_classification(task_delta)}
+
+{_render_graph_evidence(selection)}
 
 Review criteria:
 {_one_line_list(_ecc_supervised_review_criteria(task_mode, selected_pack_skills, selected_runtime_skills))}
@@ -1560,8 +1672,8 @@ def _automation_candidate_payload(
     readiness: AutomationReadinessDecision,
 ) -> dict[str, object]:
     """Build a deterministic JSON-ready automation candidate payload."""
-    pack = discover_protector_pack(include_benchmarks=True)
-    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    pack = _discover_protector_pack_cached(include_benchmarks=True)
+    coverage = _prompt_skill_benchmark_coverage_cached()
     selected_pack_skills = tuple(skill for skill in prompt_skills if skill.source == "pack")
     selected_runtime_skills = tuple(skill for skill in prompt_skills if skill.source != "pack")
     return {
@@ -1589,6 +1701,17 @@ def _automation_candidate_payload(
             "facts": selection.knowledge,
         },
         "selected_skills": tuple({"name": skill.name, "source": skill.source} for skill in prompt_skills),
+        "graph_status": _graph_status_payload(selection),
+        "graph_evidence": _graph_evidence_payload(selection),
+        "context_selection": {
+            "selected_paths": selected_paths,
+            "selected_knowledge": selection.knowledge,
+            "not_selected": selection.not_selected,
+            "blocked_domains": task_delta.review.blocked_domains,
+            "allowed_domains": task_delta.review.allowed_domains,
+        },
+        "selected_context_reasoning": _graph_evidence_payload(selection)["selection_rationale"],
+        "graph_freshness_decision": _graph_status_payload(selection)["decision"],
         "benchmark_coverage": {skill.name: coverage.get(skill.name, ()) for skill in selected_pack_skills},
         "review_contract": {
             "expected_implementation_areas": _expected_implementation_areas(prompt_skills, task_mode),
@@ -1628,8 +1751,8 @@ def render_automation_candidate_dry_run(candidate: object, *, source: str) -> Re
     """Validate an exported automation candidate without executing Codex or models."""
     schema_errors = _automation_candidate_schema_errors(candidate)
     payload = candidate if isinstance(candidate, dict) else {}
-    pack = discover_protector_pack(include_benchmarks=True)
-    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    pack = _discover_protector_pack_cached(include_benchmarks=True)
+    coverage = _prompt_skill_benchmark_coverage_cached()
     selected_skills, skill_errors = _candidate_selected_prompt_skills(payload)
     selected_pack_skills = tuple(skill for skill in selected_skills if skill.source == "pack")
     learning_signals = _candidate_string_sequence(_candidate_field(payload, "learning_signals"))
@@ -1705,8 +1828,8 @@ def render_candidate_outcome_report(
         msg = f"candidate skill validation failed: {'; '.join(skill_errors)}"
         raise HarnessUsageError(msg)
 
-    coverage = discover_pack_prompt_skill_benchmark_coverage()
-    pack = discover_protector_pack(include_benchmarks=True)
+    coverage = _prompt_skill_benchmark_coverage_cached()
+    pack = _discover_protector_pack_cached(include_benchmarks=True)
     contract = _candidate_dict_field(payload, "review_contract")
     selected_pack_skills = tuple(skill for skill in skills if skill.source == "pack")
     selected_runtime_skills = tuple(skill for skill in skills if skill.source != "pack")
@@ -2498,8 +2621,8 @@ def _automation_readiness_decision(
     task_refinement: TaskIntakeRefinement | None = None,
 ) -> AutomationReadinessDecision:
     """Classify whether a planned task is ready for future automation."""
-    pack = discover_protector_pack(include_benchmarks=True)
-    coverage = discover_pack_prompt_skill_benchmark_coverage()
+    pack = _discover_protector_pack_cached(include_benchmarks=True)
+    coverage = _prompt_skill_benchmark_coverage_cached()
     selected_pack_skills = tuple(skill for skill in prompt_skills if skill.source == "pack")
     selected_runtime_skills = tuple(skill for skill in prompt_skills if skill.source != "pack")
     missing_coverage = tuple(skill.name for skill in selected_pack_skills if not coverage.get(skill.name))
@@ -3304,8 +3427,8 @@ def render_supervised_outcome_report(
     selection = _select_context(repo, task, repo_alias=repo_alias)
     task_mode = _classify_task_mode(task)
     skills = _selected_prompt_skills(task, task_mode)
-    coverage = discover_pack_prompt_skill_benchmark_coverage()
-    pack = discover_protector_pack(include_benchmarks=True)
+    coverage = _prompt_skill_benchmark_coverage_cached()
+    pack = _discover_protector_pack_cached(include_benchmarks=True)
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
     selected_pack_skills = tuple(skill for skill in skills if skill.source == "pack")
     selected_runtime_skills = tuple(skill for skill in skills if skill.source != "pack")
@@ -3564,6 +3687,27 @@ def _selected_context_count(selection: _ContextSelection) -> int:
     return len(tuple(item for item in selection.selected if not item.startswith("repo not provided")))
 
 
+def _discover_protector_pack_cached(*, include_benchmarks: bool = False) -> ProtectorPackDiscovery:
+    """Return process-local pack discovery without repeating benchmark validation."""
+    key = (include_benchmarks, id(discover_protector_pack))
+    if key not in _PACK_DISCOVERY_CACHE:
+        try:
+            _PACK_DISCOVERY_CACHE[key] = discover_protector_pack(include_benchmarks=include_benchmarks)
+        except TypeError:
+            if include_benchmarks:
+                raise
+            _PACK_DISCOVERY_CACHE[key] = discover_protector_pack()
+    return _PACK_DISCOVERY_CACHE[key]
+
+
+def _prompt_skill_benchmark_coverage_cached() -> dict[str, tuple[str, ...]]:
+    """Return process-local prompt skill benchmark coverage."""
+    key = id(discover_pack_prompt_skill_benchmark_coverage)
+    if key not in _PROMPT_SKILL_COVERAGE_CACHE:
+        _PROMPT_SKILL_COVERAGE_CACHE[key] = discover_pack_prompt_skill_benchmark_coverage()
+    return _PROMPT_SKILL_COVERAGE_CACHE[key]
+
+
 def _tokens(text: str) -> frozenset[str]:
     """Return deterministic lowercase task/path tokens."""
     base = {token for token in re.findall(r"\w+", text.lower(), flags=re.UNICODE) if len(token) > 1}
@@ -3576,6 +3720,349 @@ def _tokens(text: str) -> frozenset[str]:
 def _matches_task(text: str, task_tokens: frozenset[str]) -> bool:
     """Return whether a path/name contains any task token."""
     return bool(_tokens(text) & task_tokens)
+
+
+def _repo_graph_path(repo: Path) -> Path:
+    """Return the local graph artifact path for a repository."""
+    return repo.resolve() / REPO_GRAPH_RELATIVE_PATH
+
+
+def _current_graph_metadata(repo: Path) -> dict[str, object]:
+    """Return metadata used to decide whether a graph is fresh."""
+    root = repo.resolve()
+    git_root = _nearest_git_root(root)
+    if git_root is None:
+        git_head = "unknown"
+        working_tree_fingerprint = hashlib.sha256(str(root).encode("utf-8")).hexdigest()
+    else:
+        git_head = _git_stdout(root, ("rev-parse", "HEAD")) or "unknown"
+        working_tree_fingerprint = _working_tree_fingerprint(root)
+    return {
+        "repo_root": str(root),
+        "git_head": git_head,
+        "working_tree_fingerprint": working_tree_fingerprint,
+        "graph_schema_version": REPO_GRAPH_SCHEMA_VERSION,
+        "builder_version": REPO_GRAPH_BUILDER_VERSION,
+        "excluded_paths": tuple(sorted(REPO_GRAPH_EXCLUDED_DIRS)),
+    }
+
+
+def _nearest_git_root(repo: Path) -> Path | None:
+    """Return the nearest ancestor that has git metadata."""
+    for path in (repo, *repo.parents):
+        if (path / ".git").exists():
+            return path
+    return None
+
+
+def _git_stdout(repo: Path, args: tuple[str, ...]) -> str:
+    """Return stdout for a fixed git command, or empty string when unavailable."""
+    try:
+        completed = subprocess.run(  # noqa: S603  # fixed git command with repo passed as one argv value
+            ("git", "-C", str(repo), *args),
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
+def _working_tree_fingerprint(repo: Path) -> str:
+    """Return a stable fingerprint for current git working-tree state."""
+    status = _git_stdout(repo, ("status", "--porcelain=v1", "--untracked-files=all"))
+    if status:
+        return hashlib.sha256(status.encode("utf-8")).hexdigest()
+    if _git_stdout(repo, ("rev-parse", "--is-inside-work-tree")) == "true":
+        return hashlib.sha256(b"clean").hexdigest()
+    return hashlib.sha256(str(repo.resolve()).encode("utf-8")).hexdigest()
+
+
+def _load_or_rebuild_repo_graph(repo: Path) -> tuple[dict[str, object] | None, _GraphFreshness]:
+    """Load a fresh graph or rebuild it cheaply; never return stale graph data."""
+    root = repo.resolve()
+    artifact = _repo_graph_path(root)
+    current = _current_graph_metadata(root)
+    if artifact.is_file():
+        graph = _read_repo_graph_artifact(artifact)
+        if graph is not None:
+            stale_reasons = _repo_graph_stale_reasons(graph, current)
+            if not stale_reasons:
+                return graph, _graph_freshness("fresh", "existing graph metadata matches current repository state", artifact, current)
+    graph = _build_repo_graph(root, current)
+    try:
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(json.dumps(graph, indent=2, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        freshness = _graph_freshness("unavailable", f"graph rebuild failed to persist: {exc}", artifact, current)
+        return None, freshness
+    return graph, _graph_freshness("rebuilt", "graph was missing or stale and was rebuilt before use", artifact, current)
+
+
+def _read_repo_graph_artifact(path: Path) -> dict[str, object] | None:
+    """Read one graph artifact if it is valid JSON object data."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _repo_graph_stale_reasons(graph: dict[str, object], current: dict[str, object]) -> tuple[str, ...]:
+    """Return reasons a graph artifact must not be used."""
+    metadata = graph.get("metadata")
+    if not isinstance(metadata, dict):
+        return ("missing graph metadata",)
+    fields = ("repo_root", "git_head", "working_tree_fingerprint", "graph_schema_version", "builder_version", "excluded_paths")
+    return tuple(f"{field} mismatch" for field in fields if metadata.get(field) != current.get(field))
+
+
+def _graph_freshness(state: str, decision: str, artifact: Path | None, metadata: dict[str, object]) -> _GraphFreshness:
+    """Return graph freshness state."""
+    return _GraphFreshness(
+        state=state,
+        decision=decision,
+        artifact_path=artifact,
+        repo_root=str(metadata.get("repo_root", "")),
+        git_head=str(metadata.get("git_head", "")),
+        working_tree_fingerprint=str(metadata.get("working_tree_fingerprint", "")),
+    )
+
+
+def _build_repo_graph(repo: Path, metadata: dict[str, object]) -> dict[str, object]:
+    """Build a cheap local repository graph from structural file evidence."""
+    nodes: list[dict[str, str]] = []
+    edges: list[dict[str, str]] = []
+    files = tuple(_graph_candidate_files(repo))
+    file_index = {_relative_path(repo, path): path for path in files}
+    for rel, path in file_index.items():
+        node_type = _graph_node_type(path, rel)
+        nodes.append({"id": rel, "type": node_type, "path": rel})
+        if node_type == "skill":
+            edges.append({"source": rel, "target": "domain:skills", "type": "skill_relevant_to"})
+        if node_type == "flow":
+            edges.append({"source": rel, "target": "domain:flows", "type": "flow_mentions"})
+    controller_files = tuple((rel, path) for rel, path in file_index.items() if rel.endswith("Controller.cs"))
+    view_paths = tuple(rel for rel in file_index if rel.endswith((".cshtml", ".razor")))
+    service_paths = tuple(rel for rel in file_index if "Service" in Path(rel).stem)
+    data_paths = tuple(rel for rel in file_index if any(marker in rel.lower() for marker in ("/data/", "/models/", "/migrations/")))
+    partial_paths = tuple(rel for rel in view_paths if Path(rel).name.startswith("_"))
+    _append_controller_graph_edges(nodes, edges, controller_files, view_paths, service_paths)
+    _append_service_data_edges(edges, file_index, service_paths, data_paths)
+    _append_view_graph_edges(edges, file_index, view_paths, partial_paths, service_paths)
+    graph_metadata = {
+        **metadata,
+        "build_timestamp": datetime.now(UTC).isoformat(),
+    }
+    return {"metadata": graph_metadata, "nodes": nodes, "edges": edges}
+
+
+def _append_controller_graph_edges(
+    nodes: list[dict[str, str]],
+    edges: list[dict[str, str]],
+    controller_files: tuple[tuple[str, Path], ...],
+    view_paths: tuple[str, ...],
+    service_paths: tuple[str, ...],
+) -> None:
+    """Append controller/action/route/service graph evidence."""
+    for rel, path in controller_files:
+        content = _read_small_text(path)
+        for action in re.findall(r"\b(?:IActionResult|ActionResult|Task<IActionResult>|Task<ActionResult>)\s+([A-Z]\w*)\s*\(", content):
+            action_id = f"{rel}::{action}"
+            route_id = f"route:{Path(rel).stem.removesuffix('Controller')}/{action}"
+            nodes.append({"id": route_id, "type": "route", "path": rel})
+            nodes.append({"id": action_id, "type": "action", "path": rel})
+            edges.append({"source": route_id, "target": action_id, "type": "route_to"})
+            edges.append({"source": rel, "target": action_id, "type": "controller_to_action"})
+            edges.extend(
+                {"source": action_id, "target": view, "type": "controller_to_view"}
+                for view in _matching_view_paths(rel, action, view_paths)
+            )
+        edges.extend(
+            {"source": rel, "target": service, "type": "controller_to_service"}
+            for service in service_paths
+            if Path(service).stem in content
+        )
+
+
+def _append_service_data_edges(
+    edges: list[dict[str, str]],
+    file_index: dict[str, Path],
+    service_paths: tuple[str, ...],
+    data_paths: tuple[str, ...],
+) -> None:
+    """Append service-to-data graph evidence."""
+    for rel, path in tuple((rel, path) for rel, path in file_index.items() if rel in service_paths):
+        content = _read_small_text(path)
+        content_lower = content.lower()
+        edges.extend(
+            {"source": rel, "target": data_path, "type": "service_to_data"}
+            for data_path in data_paths
+            if Path(data_path).stem in content or "dbcontext" in content_lower
+        )
+
+
+def _append_view_graph_edges(
+    edges: list[dict[str, str]],
+    file_index: dict[str, Path],
+    view_paths: tuple[str, ...],
+    partial_paths: tuple[str, ...],
+    service_paths: tuple[str, ...],
+) -> None:
+    """Append view-to-partial and view-to-service graph evidence."""
+    for rel, path in tuple((rel, path) for rel, path in file_index.items() if rel in view_paths):
+        content = _read_small_text(path)
+        edges.extend(
+            {"source": rel, "target": partial, "type": "renders"}
+            for partial in partial_paths
+            if partial != rel and Path(partial).stem in content
+        )
+        edges.extend({"source": rel, "target": service, "type": "uses"} for service in service_paths if Path(service).stem in content)
+
+
+def _graph_candidate_files(repo: Path) -> tuple[Path, ...]:
+    """Return graph candidate files, excluding generated/vendor directories."""
+    suffixes = {".cs", ".cshtml", ".razor", ".css", ".md", ".py", ".json"}
+    files: list[Path] = []
+    for path in repo.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in suffixes:
+            continue
+        relative_parts = path.relative_to(repo).parts
+        if any(part.lower() in REPO_GRAPH_EXCLUDED_DIRS for part in relative_parts):
+            continue
+        if any(part.lower() in OUTCOME_IGNORED_PATH_MARKERS for part in relative_parts):
+            continue
+        files.append(path)
+    return tuple(sorted(files, key=lambda item: _relative_path(repo, item).lower()))
+
+
+def _graph_node_type(path: Path, relative: str) -> str:
+    """Classify one graph node from path structure."""
+    lowered = relative.lower()
+    name = path.name
+    if name.endswith("Controller.cs"):
+        node_type = "controller"
+    elif lowered.startswith("services/") or "/services/" in lowered or "service" in path.stem.lower():
+        node_type = "service"
+    elif lowered.startswith("tests/") or "/tests/" in lowered or "test" in path.stem.lower():
+        node_type = "test"
+    elif lowered.endswith("skill.md"):
+        node_type = "skill"
+    elif lowered.startswith("docs/flows/") or "/docs/flows/" in lowered:
+        node_type = "flow"
+    elif "feature-contract" in lowered or "contract" in lowered:
+        node_type = "contract"
+    elif name.startswith("_") and path.suffix.lower() in {".cshtml", ".razor"}:
+        node_type = "partial"
+    elif path.suffix.lower() in {".cshtml", ".razor"}:
+        node_type = "view"
+    else:
+        node_type = "file"
+    return node_type
+
+
+def _read_small_text(path: Path, *, limit: int = 120_000) -> str:
+    """Read a small text prefix for graph extraction."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[:limit]
+    except OSError:
+        return ""
+
+
+def _matching_view_paths(controller: str, action: str, view_paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Return obvious MVC view paths for one controller action."""
+    controller_name = Path(controller).stem.removesuffix("Controller")
+    candidates = (
+        f"/views/{controller_name.lower()}/{action.lower()}.cshtml",
+        f"/pages/{controller_name.lower()}/{action.lower()}.cshtml",
+        f"/components/pages/{controller_name.lower()}/{action.lower()}.razor",
+    )
+    return tuple(path for path in view_paths if any(path.lower().endswith(candidate) for candidate in candidates))
+
+
+def _retrieve_graph_context(
+    intake_gate: IntakeGateDecision | None,
+    graph: dict[str, object] | None,
+    freshness: _GraphFreshness,
+    task: str,
+) -> _GraphEvidence:
+    """Return graph-backed evidence after the reviewed intent gate."""
+    if graph is None or freshness.state not in {"fresh", "rebuilt"}:
+        return _GraphEvidence(
+            freshness=freshness,
+            rejected_candidates=("graph evidence unavailable; no graph-backed context selected",),
+            selection_rationale=("Graph did not influence planning because freshness was not guaranteed.",),
+        )
+    nodes = tuple(item for item in graph.get("nodes", ()) if isinstance(item, dict))
+    task_tokens = _tokens(_task_delta_intent_text(task))
+    allowed_domains = set(intake_gate.review.allowed_domains) if intake_gate is not None else set()
+    blocked_domains = set(intake_gate.review.blocked_domains) if intake_gate is not None else set()
+    context_allowlist = set(intake_gate.review.context_allowlist) if intake_gate is not None else {"repo_guidance", "skills", "flows", "knowledge"}
+    selected_nodes: list[str] = []
+    selected_files: list[str] = []
+    selected_skills: list[str] = []
+    rejected: list[str] = []
+    for node in nodes:
+        node_id = str(node.get("id", ""))
+        node_type = str(node.get("type", "file"))
+        path = str(node.get("path", node_id))
+        if not node_id or not _matches_task(node_id, task_tokens):
+            continue
+        node_domain = _graph_node_domain(node_type, path)
+        if node_domain in blocked_domains:
+            rejected.append(f"{node_id} (blocked domain: {node_domain})")
+            continue
+        if node_type == "skill" and "skills" not in context_allowlist:
+            rejected.append(f"{node_id} (skills blocked by reviewed intent gate)")
+            continue
+        if node_type == "flow" and "flows" not in context_allowlist:
+            rejected.append(f"{node_id} (flows blocked by reviewed intent gate)")
+            continue
+        if allowed_domains and node_domain not in allowed_domains:
+            rejected.append(f"{node_id} (domain not allowed: {node_domain})")
+            continue
+        selected_nodes.append(node_id)
+        if node_type == "skill":
+            selected_skills.append(path)
+        elif node_type != "flow":
+            selected_files.append(path)
+    rationale = (
+        f"Graph state `{freshness.state}` accepted: {freshness.decision}.",
+        f"Graph evidence constrained to allowed domains: {_inline_or_none(tuple(sorted(allowed_domains)))}.",
+    )
+    return _GraphEvidence(
+        freshness=freshness,
+        selected_nodes=tuple(_unique_preserve_order(selected_nodes)),
+        selected_files=tuple(_unique_preserve_order(selected_files)),
+        selected_skills=tuple(_unique_preserve_order(selected_skills)),
+        rejected_candidates=tuple(_unique_preserve_order(rejected)),
+        selection_rationale=rationale,
+    )
+
+
+def _graph_node_domain(node_type: str, path: str) -> str:
+    """Return domain represented by one graph node."""
+    lowered = path.lower()
+    if node_type in {"view", "partial"} or lowered.endswith((".css", ".razor", ".cshtml")):
+        domain = "visual_layout"
+    elif node_type in {"route", "controller", "action"}:
+        domain = "navigation"
+    elif node_type in {"service", "test"}:
+        domain = "runtime_integration"
+    elif node_type == "contract":
+        domain = "business_logic"
+    elif node_type in {"skill", "flow"}:
+        domain = "unknown"
+    elif "migration" in lowered or "model" in lowered or "data" in lowered:
+        domain = "persistence"
+    else:
+        domain = "unknown"
+    return domain
 
 
 def _inspect_repo_context(repo: Path) -> _RepoContext:
@@ -3639,7 +4126,7 @@ def _feature_contract_applies(task_tokens: frozenset[str]) -> bool:
     return bool(task_tokens & FEATURE_HINTS)
 
 
-def _select_context(  # noqa: C901  # intake gate keeps context allow/block branches colocated
+def _select_context(  # noqa: C901, PLR0912  # intake gate keeps context allow/block branches colocated
     repo: Path | None,
     task: str,
     *,
@@ -3649,14 +4136,25 @@ def _select_context(  # noqa: C901  # intake gate keeps context allow/block bran
 ) -> _ContextSelection:
     """Select bounded context rows for the handoff."""
     if repo is None:
+        freshness = _GraphFreshness(
+            state="unavailable",
+            decision="repo not provided; graph-backed planning disabled",
+            artifact_path=None,
+            repo_root="",
+            git_head="unknown",
+            working_tree_fingerprint="unknown",
+        )
         return _ContextSelection(
             selected=("repo not provided; no repo inspection performed",),
             not_selected=(),
+            graph=_GraphEvidence(freshness=freshness, rejected_candidates=("graph unavailable because repo was not provided",)),
         )
 
     context = _inspect_repo_context(repo)
+    graph, freshness = _load_or_rebuild_repo_graph(context.root)
+    graph_evidence = _retrieve_graph_context(intake_gate, graph, freshness, task)
     if task_mode == "ui_visual_microfix" or _gate_allows_visual_context_only(intake_gate):
-        return _select_visual_microfix_context(context, task)
+        return _select_visual_microfix_context(context, task, graph_evidence=graph_evidence)
 
     task_tokens = _tokens(task)
     context_allowlist = (
@@ -3690,6 +4188,9 @@ def _select_context(  # noqa: C901  # intake gate keeps context allow/block bran
     selected.extend(_relative_path(context.root, path) for path in selected_flows)
     if selected_feature_contract is not None:
         selected.append(_relative_path(context.root, selected_feature_contract))
+    for path in graph_evidence.selected_files:
+        if path not in selected:
+            selected.append(path)
 
     not_selected: list[str] = []
     if "repo_guidance" in context_blocklist or "repo_guidance" not in context_allowlist:
@@ -3722,6 +4223,7 @@ def _select_context(  # noqa: C901  # intake gate keeps context allow/block bran
         selected=tuple(selected),
         not_selected=tuple(not_selected),
         knowledge=knowledge.summary if knowledge is not None else (),
+        graph=graph_evidence,
     )
 
 
@@ -3732,7 +4234,12 @@ def _gate_allows_visual_context_only(intake_gate: IntakeGateDecision | None) -> 
     return "visual_layout" in intake_gate.review.context_allowlist and "repo_guidance" not in intake_gate.review.context_allowlist
 
 
-def _select_visual_microfix_context(context: _RepoContext, task: str) -> _ContextSelection:
+def _select_visual_microfix_context(
+    context: _RepoContext,
+    task: str,
+    *,
+    graph_evidence: _GraphEvidence | None = None,
+) -> _ContextSelection:
     """Select only a likely target file for a local visual microfix."""
     target_paths = _visual_microfix_target_paths(context.root, task)
     not_selected = (
@@ -3742,7 +4249,11 @@ def _select_visual_microfix_context(context: _RepoContext, task: str) -> _Contex
         "Docs/flows/*.md (visual microfix clamp: workflow/navigation context not needed)",
         ".codex/agent-workflow/feature-contract-template.md (visual microfix clamp: no feature contract change)",
     )
-    return _ContextSelection(selected=target_paths or ("target file not resolved; use named surface from task",), not_selected=not_selected)
+    return _ContextSelection(
+        selected=target_paths or ("target file not resolved; use named surface from task",),
+        not_selected=not_selected,
+        graph=graph_evidence,
+    )
 
 
 def _visual_microfix_target_paths(repo: Path, task: str) -> tuple[str, ...]:
@@ -3859,7 +4370,7 @@ def _repo_knowledge_candidates(alias_candidates: tuple[str, ...]) -> tuple[_Repo
 
 def _valid_pack_knowledge_directory() -> Path | None:
     """Return the Protector pack knowledge directory when the pack is valid."""
-    pack = discover_protector_pack()
+    pack = _discover_protector_pack_cached()
     if not pack.found or pack.validation_status != "valid" or pack.path is None:
         return None
     directory = pack.path / "knowledge"
@@ -4152,7 +4663,11 @@ def _filter_prompt_skills_by_task_delta(
     ):
         implementation = _prompt_skill_by_name("implementation_fix")
         if implementation is not None and implementation.name not in blocklist:
-            filtered.append(implementation)
+            insert_at = next(
+                (index for index, skill in enumerate(filtered) if skill.name == "spanish_implementation_task_preservation"),
+                len(filtered),
+            )
+            filtered.insert(insert_at, implementation)
     return tuple(filtered)
 
 
@@ -4428,19 +4943,22 @@ def _review_intent_contract(intent: IntentAnalyzerContract) -> DecisionReviewerV
     if intent.escalation_needed:
         findings.append("Unresolved uncertainty requires supervised review before broadening context.")
         overrides.append("Context broadening allowed only if tied to unresolved uncertainty.")
-    verdict = "approved" if not any(finding.startswith("Blocked contradiction") for finding in findings) else "revised"
+    verdict = "approved"
     domain_delta = {domain: domain in allowed for domain in (*allowed, *blocked)}
-    skill_allowlist = _task_delta_skill_allowlist(intent.task_mode, _complete_domain_flags(domain_delta))
-    skill_blocklist = _task_delta_skill_blocklist(intent.task_mode, _complete_domain_flags(domain_delta))
+    complete_domains = _complete_domain_flags(domain_delta)
+    skill_allowlist = _task_delta_skill_allowlist(intent.task_mode, complete_domains)
+    skill_blocklist = _task_delta_skill_blocklist(intent.task_mode, complete_domains)
     context_allowlist, context_blocklist = _task_delta_context_lists(
         intent.task_mode,
-        _complete_domain_flags(domain_delta),
+        complete_domains,
         escalation_needed=intent.escalation_needed,
     )
     return DecisionReviewerVerdict(
         verdict=verdict,
         findings=tuple(findings) or ("Intent contract is internally consistent.",),
         override_reasons=tuple(overrides),
+        allowed_domains=tuple(domain for domain, required in complete_domains.items() if required),
+        blocked_domains=tuple(domain for domain, required in complete_domains.items() if not required),
         skill_allowlist=skill_allowlist,
         skill_blocklist=skill_blocklist,
         context_allowlist=context_allowlist,
@@ -4449,7 +4967,7 @@ def _review_intent_contract(intent: IntentAnalyzerContract) -> DecisionReviewerV
             intent.requested_outcome,
             intent.expected_change_scope,
             intent.protected_non_goals,
-            _complete_domain_flags(domain_delta),
+            complete_domains,
         ),
     )
 
@@ -5185,6 +5703,18 @@ def _render_visual_microfix_codex_prompt(task: str, selected_paths: tuple[str, .
     """Render the intentionally small prompt for visual-only UI fixes."""
     target = _visual_microfix_target_text(task, selected_paths)
     change = _visual_microfix_change_text(task)
+    preserve_rows = [
+        "Preserve handlers, forms, routes, data binding, authorization, submitted actions, and delete semantics.",
+        "Do not change persistence, providers, runtime behavior, or non-target UI.",
+    ]
+    if "Do not change delete behavior." in task:
+        preserve_rows.append("Do not change delete behavior.")
+    intake_rows = _visual_microfix_intake_rows(task)
+    intake_section = ""
+    if intake_rows:
+        intake_section = f"""
+Task intake evidence:
+{_render_bullets(intake_rows)}"""
     return f"""Codex Prompt:
 Title: {_title_from_task(task)}
 Task mode: ui_visual_microfix
@@ -5192,9 +5722,9 @@ Target file/surface:
 - {target}
 Exact visual change:
 - {change}
+{intake_section}
 Preserve:
-- Preserve handlers, forms, routes, data binding, authorization, submitted actions, and delete semantics.
-- Do not change persistence, providers, runtime behavior, or non-target UI.
+{_render_bullets(tuple(preserve_rows))}
 Exploration clamp:
 - Inspect only the target file/surface and the nearest existing visual pattern if needed.
 - Exclude candidate.json, candidate.codex-output.txt, .protector-harness, bin, obj, generated Connected Services, migrations, and Docs from searches.
@@ -5206,6 +5736,20 @@ Mandatory output:
 - Summary
 - Validation
 - PASS/FAIL"""
+
+
+def _visual_microfix_intake_rows(task: str) -> tuple[str, ...]:
+    """Return compact intake evidence rows already present in a refined task."""
+    rows: list[str] = []
+    for marker in (
+        "Operator evidence note observation:",
+        "Operator evidence note expectation:",
+        "Evidence references are available but not analyzed:",
+    ):
+        match = re.search(rf"{re.escape(marker)}\s*([^.]*(?:\.[^A-Z]*)?)", task)
+        if match:
+            rows.append(f"{marker} {match.group(1).strip()}")
+    return tuple(rows)
 
 
 def _visual_microfix_target_text(task: str, selected_paths: tuple[str, ...]) -> str:
@@ -5811,7 +6355,7 @@ def _recent_outcome_signals(repo: Path | None, prompt_skills: tuple[PromptSkill,
     """Return recent relevant outcome history signals for the selected pack/skills."""
     if repo is None:
         return ("History unavailable: repo path was not provided.",)
-    pack = discover_protector_pack(include_benchmarks=False)
+    pack = _discover_protector_pack_cached(include_benchmarks=False)
     selected_names = {skill.name for skill in prompt_skills}
     signals: list[str] = []
     for entry in load_outcome_history(repo, limit=20):
@@ -5911,7 +6455,7 @@ def _changed_file_hint_from_signal(signal: str) -> str:
 
 def _matching_outcome_history(repo: Path, prompt_skills: tuple[PromptSkill, ...], *, limit: int) -> tuple[OutcomeSummary, ...]:
     """Return history entries matching the current pack and selected skills."""
-    pack = discover_protector_pack(include_benchmarks=False)
+    pack = _discover_protector_pack_cached(include_benchmarks=False)
     selected_names = {skill.name for skill in prompt_skills}
     entries: list[OutcomeSummary] = []
     for entry in load_outcome_history(repo, limit=limit):
