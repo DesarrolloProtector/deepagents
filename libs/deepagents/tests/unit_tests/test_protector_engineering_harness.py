@@ -950,6 +950,126 @@ def test_visual_microfix_candidate_stays_compact_for_newclient_delete_icon(tmp_p
         assert term.lower() not in prompt.lower()
 
 
+def test_language_selector_overlap_visual_microfix_ignores_negative_pack_terms(tmp_path: Path) -> None:
+    task = (
+        "Fix the language-selector overlap in the header. This is a visual-only CSS/layout fix. "
+        "Validation: Generate the same language-selector candidate again. "
+        "PASS only if: task mode = ui_visual_microfix; no navigation/workflow/localization pack skills; "
+        "no route/menu/workflow validation boilerplate; compact prompt suitable for a local visual layout fix."
+    )
+
+    rendered = engineering.render_controlled_execution_plan(
+        task=task,
+        repo=_build_repo(tmp_path / "repo"),
+    )
+    candidate = rendered.automation_candidate
+    prompt = candidate["proposed_codex_prompt"]
+    intent = candidate["task"]["intent_delta_classification"]["intent_analyzer"]
+    review = candidate["task"]["intent_delta_classification"]["decision_reviewer"]
+
+    assert candidate["task"]["mode"] == "ui_visual_microfix"
+    assert intent["domains_allowed"] == ("visual_layout",)
+    assert "navigation" in intent["domains_blocked"]
+    assert "workflow" in intent["domains_blocked"]
+    assert "localization_resources" in intent["domains_blocked"]
+    assert "language_switching_behavior" in intent["domains_blocked"]
+    assert intent["validation_ceiling"] == "diff/static markup/CSS check/build only if syntax risk"
+    assert "navigation_surface_convergence" in review["skill_blocklist"]
+    assert "operational_workflow_convergence" in review["skill_blocklist"]
+    assert "localization_completion" in review["skill_blocklist"]
+    assert "knowledge" in review["context_blocklist"]
+    assert "feature_contract" in review["context_blocklist"]
+    assert candidate["selected_knowledge"]["paths"] == ()
+    assert candidate["selected_knowledge"]["facts"] == ()
+    assert candidate["selected_skills"] == ({"name": "base_prompt_quality", "source": "runtime_generic"},)
+    assert "Intent Analyzer decision:" in rendered.text
+    assert "Decision Reviewer verdict:" in rendered.text
+    assert "Task mode: ui_visual_microfix" in prompt
+    assert "Exact visual change:" in prompt
+    assert "language-selector overlap" in prompt
+    assert len(prompt.splitlines()) <= 28
+
+    forbidden = (
+        "navigation_surface_convergence",
+        "operational_workflow_convergence",
+        "localization_completion",
+        "Trace route/menu",
+        "workflow state",
+        "Selected UI localization",
+        "AGENTS.md",
+        "MEMORY.md",
+        "Repo knowledge",
+        "Observed state:",
+        "Expected behavior:",
+        "Scope boundaries:",
+        "Mode-specific requirements:",
+        "no navigation/workflow/localization pack skills",
+        "no route/menu/workflow validation boilerplate",
+    )
+    for term in forbidden:
+        assert term.lower() not in prompt.lower()
+
+
+def test_intake_gate_blocks_persistence_context_for_behavior_delta(tmp_path: Path) -> None:
+    task = "Fix the modal button render behavior. Do not change persistence, data shape, or database writes."
+
+    candidate = engineering.render_controlled_execution_plan(
+        task=task,
+        repo=_build_repo(tmp_path / "repo"),
+    ).automation_candidate
+    intent = candidate["task"]["intent_delta_classification"]["intent_analyzer"]
+    review = candidate["task"]["intent_delta_classification"]["decision_reviewer"]
+
+    assert candidate["task"]["mode"] == "ui_runtime_bug"
+    assert "persistence" in intent["domains_blocked"]
+    assert "feature_contract" in review["context_blocklist"]
+    assert "localization_completion" in review["skill_blocklist"]
+    assert all("feature-contract-template.md" not in path for path in candidate["selected_context_paths"])
+
+
+def test_intake_gate_blocks_visual_context_for_persistence_delta(tmp_path: Path) -> None:
+    task = "Change the persisted receipt data shape. Preserve UI layout, buttons, tabs, and visual behavior."
+
+    candidate = engineering.render_controlled_execution_plan(
+        task=task,
+        repo=_build_repo(tmp_path / "repo"),
+    ).automation_candidate
+    intent = candidate["task"]["intent_delta_classification"]["intent_analyzer"]
+    review = candidate["task"]["intent_delta_classification"]["decision_reviewer"]
+
+    assert candidate["task"]["mode"] == "implementation_fix"
+    assert "persistence" in intent["domains_allowed"]
+    assert "visual_layout" in intent["domains_blocked"]
+    assert "visual_layout" in review["context_blocklist"]
+    assert "navigation_surface_convergence" in review["skill_blocklist"]
+    assert "operational_workflow_convergence" in review["skill_blocklist"]
+
+
+def test_intake_gate_blocks_product_domains_for_harness_ecc_delta(tmp_path: Path) -> None:
+    task = (
+        "Fix the ph plan ECC intake gate output. Do not change product repo behavior, navigation, workflow, "
+        "localization, persistence, or runtime integrations."
+    )
+
+    candidate = engineering.render_controlled_execution_plan(
+        task=task,
+        repo=_build_repo(tmp_path / "repo"),
+    ).automation_candidate
+    intent = candidate["task"]["intent_delta_classification"]["intent_analyzer"]
+    review = candidate["task"]["intent_delta_classification"]["decision_reviewer"]
+    names = {skill["name"] for skill in candidate["selected_skills"]}
+
+    assert candidate["task"]["mode"] == "implementation_fix"
+    assert "navigation" in intent["domains_blocked"]
+    assert "workflow" in intent["domains_blocked"]
+    assert "localization_resources" in intent["domains_blocked"]
+    assert "persistence" in intent["domains_blocked"]
+    assert "runtime_integration" in intent["domains_blocked"]
+    assert names == {"base_prompt_quality", "implementation_fix"}
+    assert "knowledge" in review["context_blocklist"]
+    assert "feature_contract" in review["context_blocklist"]
+
+
 def test_task_refinement_ambiguous_task_needs_clarification(tmp_path: Path) -> None:
     rendered = engineering.render_controlled_execution_plan(
         task="Fix it",

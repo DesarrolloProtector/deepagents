@@ -487,6 +487,114 @@ class TaskIntakeRefinement:
 
 
 @dataclass(frozen=True)
+class IntentAnalyzerContract:
+    """Structured intent contract produced before planning selects context or skills."""
+
+    task_mode: TaskMode
+    requested_outcome: tuple[str, ...]
+    intended_delta: tuple[str, ...]
+    expected_change_scope: tuple[str, ...]
+    protected_non_goals: tuple[str, ...]
+    domains_allowed: tuple[str, ...]
+    domains_blocked: tuple[str, ...]
+    validation_ceiling: str
+    uncertainty: tuple[str, ...]
+    escalation_needed: bool
+    weak_lexical_evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DecisionReviewerVerdict:
+    """Review result that gates context and skill selection."""
+
+    verdict: str
+    findings: tuple[str, ...]
+    override_reasons: tuple[str, ...]
+    skill_allowlist: tuple[str, ...]
+    skill_blocklist: tuple[str, ...]
+    context_allowlist: tuple[str, ...]
+    context_blocklist: tuple[str, ...]
+    confidence: str
+
+
+@dataclass(frozen=True)
+class IntakeGateDecision:
+    """Reviewed intake gate consumed by context and skill selection."""
+
+    intent: IntentAnalyzerContract
+    review: DecisionReviewerVerdict
+
+    @property
+    def task_mode(self) -> TaskMode:
+        """Return the reviewed task mode."""
+        return self.intent.task_mode
+
+    @property
+    def domain_delta_required(self) -> dict[str, bool]:
+        """Return domain flags for compatibility with existing planner logic."""
+        allowed = set(self.intent.domains_allowed)
+        domains = (
+            "visual_layout",
+            "navigation",
+            "workflow",
+            "localization_resources",
+            "language_switching_behavior",
+            "business_logic",
+            "persistence",
+            "runtime_integration",
+        )
+        return {domain: domain in allowed for domain in domains}
+
+    @property
+    def requested_user_visible_delta(self) -> tuple[str, ...]:
+        """Return requested outcome rows for compatibility."""
+        return self.intent.requested_outcome
+
+    @property
+    def expected_code_delta(self) -> tuple[str, ...]:
+        """Return expected change scope rows for compatibility."""
+        return self.intent.expected_change_scope
+
+    @property
+    def protected_non_goals(self) -> tuple[str, ...]:
+        """Return protected non-goal rows for compatibility."""
+        return self.intent.protected_non_goals
+
+    @property
+    def skill_allowlist(self) -> tuple[str, ...]:
+        """Return reviewed skill allowlist."""
+        return self.review.skill_allowlist
+
+    @property
+    def skill_blocklist(self) -> tuple[str, ...]:
+        """Return reviewed skill blocklist."""
+        return self.review.skill_blocklist
+
+    @property
+    def validation_ceiling(self) -> str:
+        """Return reviewed validation ceiling."""
+        return self.intent.validation_ceiling
+
+    @property
+    def confidence(self) -> str:
+        """Return reviewer confidence."""
+        return self.review.confidence
+
+    @property
+    def ambiguity_reason(self) -> str | None:
+        """Return first uncertainty reason when present."""
+        return self.intent.uncertainty[0] if self.intent.uncertainty else None
+
+    @property
+    def weak_lexical_evidence(self) -> tuple[str, ...]:
+        """Return weak lexical evidence from the intent contract."""
+        return self.intent.weak_lexical_evidence
+
+
+TaskDeltaClassification = IntakeGateDecision
+
+
+@dataclass(frozen=True)
 class RenderedOutput:
     """Console payload plus the exact prompt section available for file output."""
 
@@ -1055,6 +1163,35 @@ def _task_intake_refinement_payload(refinement: TaskIntakeRefinement | None) -> 
     }
 
 
+def _task_delta_payload(classification: TaskDeltaClassification) -> dict[str, object]:
+    """Return a JSON-ready task intent/delta classification payload."""
+    return {
+        "intent_analyzer": {
+            "task_mode": classification.intent.task_mode,
+            "requested_outcome": classification.intent.requested_outcome,
+            "intended_delta": classification.intent.intended_delta,
+            "expected_change_scope": classification.intent.expected_change_scope,
+            "protected_non_goals": classification.intent.protected_non_goals,
+            "domains_allowed": classification.intent.domains_allowed,
+            "domains_blocked": classification.intent.domains_blocked,
+            "validation_ceiling": classification.intent.validation_ceiling,
+            "uncertainty": classification.intent.uncertainty,
+            "escalation_needed": classification.intent.escalation_needed,
+            "weak_lexical_evidence": classification.intent.weak_lexical_evidence,
+        },
+        "decision_reviewer": {
+            "verdict": classification.review.verdict,
+            "findings": classification.review.findings,
+            "override_reasons": classification.review.override_reasons,
+            "skill_allowlist": classification.review.skill_allowlist,
+            "skill_blocklist": classification.review.skill_blocklist,
+            "context_allowlist": classification.review.context_allowlist,
+            "context_blocklist": classification.review.context_blocklist,
+            "confidence": classification.review.confidence,
+        },
+    }
+
+
 def _evidence_handling_rows(evidence_paths: tuple[str, ...], evidence_notes: tuple[str, ...]) -> tuple[str, ...]:
     """Return deterministic evidence-reference handling requirements."""
     if not evidence_paths and not evidence_notes:
@@ -1107,6 +1244,44 @@ Missing details/questions:
 """
 
 
+def _render_task_delta_classification(classification: TaskDeltaClassification) -> str:
+    """Render task-mode intent/delta evidence for planner auditability."""
+    intent = classification.intent
+    review = classification.review
+    return f"""Intent Analyzer decision:
+- task_mode={intent.task_mode}; validation_ceiling={intent.validation_ceiling}; escalation_needed={_yes_no(value=intent.escalation_needed)}
+Requested outcome:
+{_one_line_list(intent.requested_outcome)}
+Intended delta:
+{_one_line_list(intent.intended_delta)}
+Expected change scope:
+{_one_line_list(intent.expected_change_scope)}
+Protected non-goals:
+{_one_line_list(intent.protected_non_goals)}
+Allowed domains:
+{_one_line_list(intent.domains_allowed)}
+Blocked domains:
+{_one_line_list(intent.domains_blocked)}
+Uncertainty:
+{_one_line_list(intent.uncertainty)}
+Weak lexical evidence:
+{_one_line_list(intent.weak_lexical_evidence)}
+Decision Reviewer verdict:
+- verdict={review.verdict}; confidence={review.confidence}
+Findings:
+{_one_line_list(review.findings)}
+Overrides:
+{_one_line_list(review.override_reasons)}
+Skill allowlist:
+{_one_line_list(review.skill_allowlist)}
+Skill blocklist:
+{_one_line_list(review.skill_blocklist)}
+Context allowlist:
+{_one_line_list(review.context_allowlist)}
+Context blocklist:
+{_one_line_list(review.context_blocklist)}"""
+
+
 def render_controlled_execution_plan(
     *,
     task: str,
@@ -1124,8 +1299,9 @@ def render_controlled_execution_plan(
         else None
     )
     effective_task = _effective_task_for_plan(task, task_refinement)
-    task_mode = _classify_task_mode(effective_task)
-    selection = _select_context(repo, effective_task, repo_alias=repo_alias, task_mode=task_mode)
+    task_delta = _classify_task_delta(effective_task)
+    task_mode = task_delta.task_mode
+    selection = _select_context(repo, effective_task, repo_alias=repo_alias, task_mode=task_mode, intake_gate=task_delta)
     prompt_skills = _selected_prompt_skills(effective_task, task_mode)
     plan = build_execution_plan(task_mode=task_mode, prompt_skills=prompt_skills)
     selected_paths = tuple(item for item in selection.selected if not item.startswith("repo not provided"))
@@ -1163,6 +1339,7 @@ Adaptive planning adjustments:
         prompt_skills=prompt_skills,
         selected_paths=selected_paths,
         codex_prompt=codex_prompt,
+        task_delta=task_delta,
         learning_signals=learning_signals,
         planning_adaptations=planning_adaptations,
         readiness=readiness,
@@ -1170,6 +1347,7 @@ Adaptive planning adjustments:
     text = f"""{render_agentic_execution_plan(plan)}
 
 Task mode: {task_mode}
+{_render_task_delta_classification(task_delta)}
 {_render_task_intake_refinement(task_refinement)}
 Selected context paths:
 {_one_line_list(selected_paths)}
@@ -1186,6 +1364,7 @@ Knowledge gates:
             evidence_notes=evidence_notes,
             prompt_skills=prompt_skills,
             codex_prompt=codex_prompt,
+            task_delta=task_delta,
         )
     }
 
@@ -1211,6 +1390,7 @@ def _render_ecc_supervised_automation_pilot(
     evidence_notes: tuple[str, ...],
     prompt_skills: tuple[PromptSkill, ...],
     codex_prompt: str,
+    task_delta: TaskDeltaClassification,
 ) -> str:
     """Render the read-only ECC-supervised Codex handoff pilot."""
     pack = discover_protector_pack(include_benchmarks=True)
@@ -1251,6 +1431,9 @@ Benchmark confidence:
 
 Proposed Codex prompt:
 {codex_prompt}
+
+Intent/delta classification:
+{_render_task_delta_classification(task_delta)}
 
 Review criteria:
 {_one_line_list(_ecc_supervised_review_criteria(task_mode, selected_pack_skills, selected_runtime_skills))}
@@ -1371,6 +1554,7 @@ def _automation_candidate_payload(
     prompt_skills: tuple[PromptSkill, ...],
     selected_paths: tuple[str, ...],
     codex_prompt: str,
+    task_delta: TaskDeltaClassification,
     learning_signals: tuple[str, ...],
     planning_adaptations: tuple[str, ...],
     readiness: AutomationReadinessDecision,
@@ -1394,6 +1578,7 @@ def _automation_candidate_payload(
             "summary": _task_objective(task),
             "raw_operator_task": raw_task,
             "mode": task_mode,
+            "intent_delta_classification": _task_delta_payload(task_delta),
             "intake_refinement": _task_intake_refinement_payload(task_refinement),
             "evidence_paths": task_refinement.evidence_paths if task_refinement is not None else (),
             "evidence_notes": task_refinement.evidence_notes if task_refinement is not None else (),
@@ -3454,7 +3639,14 @@ def _feature_contract_applies(task_tokens: frozenset[str]) -> bool:
     return bool(task_tokens & FEATURE_HINTS)
 
 
-def _select_context(repo: Path | None, task: str, *, repo_alias: str | None = None, task_mode: TaskMode | None = None) -> _ContextSelection:
+def _select_context(  # noqa: C901  # intake gate keeps context allow/block branches colocated
+    repo: Path | None,
+    task: str,
+    *,
+    repo_alias: str | None = None,
+    task_mode: TaskMode | None = None,
+    intake_gate: IntakeGateDecision | None = None,
+) -> _ContextSelection:
     """Select bounded context rows for the handoff."""
     if repo is None:
         return _ContextSelection(
@@ -3463,17 +3655,35 @@ def _select_context(repo: Path | None, task: str, *, repo_alias: str | None = No
         )
 
     context = _inspect_repo_context(repo)
-    if task_mode == "ui_visual_microfix":
+    if task_mode == "ui_visual_microfix" or _gate_allows_visual_context_only(intake_gate):
         return _select_visual_microfix_context(context, task)
 
     task_tokens = _tokens(task)
-    selected_skills = _select_skills(context, task_tokens)
-    selected_flows = _select_flows(context, task_tokens)
-    selected_feature_contract = context.feature_contract if context.feature_contract is not None and _feature_contract_applies(task_tokens) else None
-    knowledge = _load_repo_knowledge(context.root, task, repo_alias=repo_alias)
+    context_allowlist = (
+        set(intake_gate.review.context_allowlist)
+        if intake_gate is not None
+        else {"repo_guidance", "skills", "flows", "feature_contract", "knowledge"}
+    )
+    context_blocklist = set(intake_gate.review.context_blocklist) if intake_gate is not None else set()
+    selected_skills = _select_skills(context, task_tokens) if "skills" in context_allowlist and "skills" not in context_blocklist else ()
+    selected_flows = _select_flows(context, task_tokens) if "flows" in context_allowlist and "flows" not in context_blocklist else ()
+    selected_feature_contract = (
+        context.feature_contract
+        if context.feature_contract is not None
+        and "feature_contract" in context_allowlist
+        and "feature_contract" not in context_blocklist
+        and _feature_contract_applies(task_tokens)
+        else None
+    )
+    knowledge = (
+        _load_repo_knowledge(context.root, task, repo_alias=repo_alias)
+        if "knowledge" in context_allowlist and "knowledge" not in context_blocklist
+        else None
+    )
 
     selected: list[str] = []
-    selected.extend(_relative_path(context.root, path) for path in context.mandatory)
+    if "repo_guidance" in context_allowlist and "repo_guidance" not in context_blocklist:
+        selected.extend(_relative_path(context.root, path) for path in context.mandatory)
     if knowledge is not None:
         selected.append(_relative_path(Path.cwd().resolve(), knowledge.path))
     selected.extend(_relative_path(context.root, path) for _, path in selected_skills)
@@ -3482,22 +3692,44 @@ def _select_context(repo: Path | None, task: str, *, repo_alias: str | None = No
         selected.append(_relative_path(context.root, selected_feature_contract))
 
     not_selected: list[str] = []
+    if "repo_guidance" in context_blocklist or "repo_guidance" not in context_allowlist:
+        not_selected.extend(f"{_relative_path(context.root, path)} (blocked by reviewed intent gate)" for path in context.mandatory)
     selected_skill_paths = {path for _, path in selected_skills}
     for name, path in context.skills:
         if path not in selected_skill_paths:
-            not_selected.append(f"{name}: {_relative_path(context.root, path)} (no task keyword match)")
+            reason = (
+                "blocked by reviewed intent gate"
+                if "skills" in context_blocklist or "skills" not in context_allowlist
+                else "no task keyword match"
+            )
+            not_selected.append(f"{name}: {_relative_path(context.root, path)} ({reason})")
     selected_flow_paths = set(selected_flows)
-    not_selected.extend(f"{_relative_path(context.root, path)} (no task keyword match)" for path in context.flows if path not in selected_flow_paths)
+    flow_reason = "blocked by reviewed intent gate" if "flows" in context_blocklist or "flows" not in context_allowlist else "no task keyword match"
+    not_selected.extend(f"{_relative_path(context.root, path)} ({flow_reason})" for path in context.flows if path not in selected_flow_paths)
     if context.feature_contract is not None and selected_feature_contract is None:
-        not_selected.append(f"{_relative_path(context.root, context.feature_contract)} (task does not suggest feature/contract behavior)")
+        reason = (
+            "blocked by reviewed intent gate"
+            if "feature_contract" in context_blocklist or "feature_contract" not in context_allowlist
+            else "task does not suggest feature/contract behavior"
+        )
+        not_selected.append(f"{_relative_path(context.root, context.feature_contract)} ({reason})")
     not_selected.extend(f"{warning} (expected artifact not found)" for warning in context.warnings)
     if knowledge is not None:
         not_selected.extend(knowledge.warnings)
+    elif "knowledge" in context_blocklist or "knowledge" not in context_allowlist:
+        not_selected.append("repo knowledge/MEMORY (blocked by reviewed intent gate)")
     return _ContextSelection(
         selected=tuple(selected),
         not_selected=tuple(not_selected),
         knowledge=knowledge.summary if knowledge is not None else (),
     )
+
+
+def _gate_allows_visual_context_only(intake_gate: IntakeGateDecision | None) -> bool:
+    """Return whether the reviewed gate allows only visual-layout context."""
+    if intake_gate is None:
+        return False
+    return "visual_layout" in intake_gate.review.context_allowlist and "repo_guidance" not in intake_gate.review.context_allowlist
 
 
 def _select_visual_microfix_context(context: _RepoContext, task: str) -> _ContextSelection:
@@ -3872,6 +4104,7 @@ def _should_render_operational_brief(task: str, task_mode: TaskMode) -> bool:
 
 def _selected_prompt_skills(task: str, task_mode: TaskMode) -> tuple[PromptSkill, ...]:
     """Return prompt skills that shape Codex prompt rendering."""
+    task_delta = _classify_task_delta(task)
     if task_mode == "ui_visual_microfix":
         return select_prompt_skills(
             task_mode=task_mode,
@@ -3879,12 +4112,56 @@ def _selected_prompt_skills(task: str, task_mode: TaskMode) -> tuple[PromptSkill
             has_spanish_text=False,
             task_text=task,
         )
-    return select_prompt_skills(
+    skills = select_prompt_skills(
         task_mode=task_mode,
-        task_tokens=_tokens(task),
+        task_tokens=_tokens(_task_delta_intent_text(task)),
         has_spanish_text=_needs_english_summary(task),
-        task_text=task,
+        task_text=_task_delta_intent_text(task),
     )
+    return _filter_prompt_skills_by_task_delta(skills, task_delta)
+
+
+def _filter_prompt_skills_by_task_delta(
+    skills: tuple[PromptSkill, ...],
+    task_delta: TaskDeltaClassification,
+) -> tuple[PromptSkill, ...]:
+    """Remove domain pack skills whose domains are not part of the requested delta."""
+    domain = task_delta.domain_delta_required
+    blocklist = set(task_delta.skill_blocklist)
+    allowlist = set(task_delta.skill_allowlist)
+    domain_pack_skills = {
+        "navigation_surface_convergence",
+        "operational_workflow_convergence",
+        "localization_completion",
+    }
+    filtered: list[PromptSkill] = []
+    for skill in skills:
+        if skill.name in blocklist:
+            continue
+        if skill.name in domain_pack_skills and allowlist and skill.name not in allowlist:
+            continue
+        if skill.name == "navigation_surface_convergence" and not domain["navigation"]:
+            continue
+        if skill.name == "operational_workflow_convergence" and not domain["workflow"]:
+            continue
+        if skill.name == "localization_completion" and not domain["localization_resources"]:
+            continue
+        filtered.append(skill)
+    if task_delta.task_mode in {"implementation_fix", "ui_runtime_bug", "provider_api_bug", "continuation_followup"} and not any(
+        skill.name == "implementation_fix" for skill in filtered
+    ):
+        implementation = _prompt_skill_by_name("implementation_fix")
+        if implementation is not None and implementation.name not in blocklist:
+            filtered.append(implementation)
+    return tuple(filtered)
+
+
+def _prompt_skill_by_name(name: str) -> PromptSkill | None:
+    """Return one available prompt skill by name."""
+    for skill in available_prompt_skills():
+        if skill.name == name:
+            return skill
+    return None
 
 
 def _operational_task_brief(task: str, task_mode: TaskMode, skills: tuple[PromptSkill, ...]) -> str:
@@ -4072,38 +4349,481 @@ def _has_implementation_intent(task: str) -> bool:
 
 def _classify_task_mode(task: str) -> TaskMode:
     """Classify task text into a deterministic prompt mode."""
+    return _classify_task_delta(task).task_mode
+
+
+def _classify_task_delta(task: str) -> TaskDeltaClassification:  # noqa: C901  # deterministic gate rules are clearer in one ordered decision table
+    """Classify task mode from requested intent, expected code delta, and non-goals."""
+    intent_text = _task_delta_intent_text(task)
     task_tokens = _tokens(task)
-    lowered = task.lower()
+    intent_tokens = _tokens(intent_text)
+    raw_intent_tokens = _raw_tokens(intent_text)
+    protected = _protected_non_goals(task)
+    requested_delta = _requested_user_visible_delta(intent_text, raw_intent_tokens)
+    domain_delta = _domain_delta_required(intent_text, raw_intent_tokens, protected)
+    expected_code_delta = _expected_code_delta(raw_intent_tokens, domain_delta, requested_delta)
+    weak_evidence = _weak_lexical_evidence(task_tokens, intent_tokens)
     implementation_intent = _has_implementation_intent(task)
-    signals = {
-        "review_only": bool(task_tokens & REVIEW_ONLY_TERMS) or "analizar sin implementar" in lowered,
-        "planning_only": bool(task_tokens & PLANNING_ONLY_TERMS),
-        "localization_completion": _has_localization_completion_intent(task),
-        "diagnostic_bootstrap": _has_diagnostic_bootstrap_intent(task, task_tokens),
-        "continuation_followup": _has_continuation_followup_intent(task, task_tokens),
-        "ui_visual_microfix": _has_ui_visual_microfix_intent(task, task_tokens),
-        "ui_runtime_bug": bool(task_tokens & UI_RUNTIME_BUG_TERMS),
-        "provider_api_bug": bool(task_tokens & PROVIDER_API_BUG_TERMS) or "start_signature" in lowered or "set_config" in lowered,
-    }
-    ordered_rules: tuple[tuple[bool, TaskMode], ...] = (
-        (signals["review_only"] and not implementation_intent, "review_only"),
-        (signals["localization_completion"], "implementation_fix"),
-        (signals["planning_only"] and not implementation_intent, "planning_only"),
-        (signals["diagnostic_bootstrap"], "diagnostic_bootstrap"),
-        (signals["continuation_followup"], "continuation_followup"),
-        (signals["provider_api_bug"] and implementation_intent, "provider_api_bug"),
-        (signals["ui_visual_microfix"] and implementation_intent, "ui_visual_microfix"),
-        (signals["ui_runtime_bug"] and implementation_intent, "ui_runtime_bug"),
-        (implementation_intent, "implementation_fix"),
-        (signals["provider_api_bug"], "provider_api_bug"),
-        (signals["ui_visual_microfix"], "ui_visual_microfix"),
-        (signals["ui_runtime_bug"], "ui_runtime_bug"),
-        (signals["planning_only"], "planning_only"),
+    lowered = task.lower()
+
+    if (bool(task_tokens & REVIEW_ONLY_TERMS) or "analizar sin implementar" in lowered) and not implementation_intent:
+        task_mode: TaskMode = "review_only"
+    elif bool(task_tokens & PLANNING_ONLY_TERMS) and not implementation_intent:
+        task_mode = "planning_only"
+    elif _has_diagnostic_bootstrap_intent(task, task_tokens):
+        task_mode = "diagnostic_bootstrap"
+    elif _has_continuation_followup_intent(task, task_tokens):
+        task_mode = "continuation_followup"
+    elif domain_delta["runtime_integration"] and bool(task_tokens & PROVIDER_API_BUG_TERMS):
+        task_mode = "provider_api_bug"
+    elif _is_visual_microfix_delta(requested_delta, expected_code_delta, protected, domain_delta):
+        task_mode = "ui_visual_microfix"
+    elif (domain_delta["navigation"] or domain_delta["workflow"]) and bool(task_tokens & UI_RUNTIME_BUG_TERMS):
+        task_mode = "ui_runtime_bug"
+    elif domain_delta["runtime_integration"] or _is_ui_behavior_delta(raw_intent_tokens, requested_delta):
+        task_mode = "ui_runtime_bug" if implementation_intent else "review_only"
+    elif implementation_intent or any(required for name, required in domain_delta.items() if name != "visual_layout"):
+        task_mode = "implementation_fix"
+    elif bool(task_tokens & PROVIDER_API_BUG_TERMS):
+        task_mode = "provider_api_bug"
+    elif bool(task_tokens & PLANNING_ONLY_TERMS):
+        task_mode = "planning_only"
+    else:
+        task_mode = "review_only"
+
+    domains_allowed = tuple(name for name, required in domain_delta.items() if required)
+    domains_blocked = tuple(name for name, required in domain_delta.items() if not required)
+    uncertainty = _task_delta_uncertainty(requested_delta, expected_code_delta, domain_delta)
+    intent = IntentAnalyzerContract(
+        task_mode=task_mode,
+        requested_outcome=requested_delta,
+        intended_delta=_intended_delta_rows(domain_delta),
+        expected_change_scope=expected_code_delta,
+        protected_non_goals=protected,
+        domains_allowed=domains_allowed,
+        domains_blocked=domains_blocked,
+        validation_ceiling=_task_delta_validation_ceiling(task_mode),
+        uncertainty=uncertainty,
+        escalation_needed=bool(uncertainty) and task_mode != "ui_visual_microfix",
+        weak_lexical_evidence=weak_evidence,
     )
-    for matches, task_mode in ordered_rules:
-        if matches:
-            return task_mode
-    return "review_only"
+    return IntakeGateDecision(intent=intent, review=_review_intent_contract(intent))
+
+
+def _review_intent_contract(intent: IntentAnalyzerContract) -> DecisionReviewerVerdict:
+    """Review the intent contract before planning may select context or skills."""
+    findings: list[str] = []
+    overrides: list[str] = []
+    allowed = set(intent.domains_allowed)
+    blocked = set(intent.domains_blocked)
+    protected_text = " ".join(intent.protected_non_goals).lower()
+    for domain in tuple(allowed):
+        if domain in protected_text:
+            findings.append(f"Blocked contradiction: protected non-goal appears in allowed domain `{domain}`.")
+            allowed.remove(domain)
+            blocked.add(domain)
+            break
+    if intent.task_mode == "ui_visual_microfix":
+        findings.append("Visual/layout delta reviewed; broad product domains remain blocked.")
+    if intent.escalation_needed:
+        findings.append("Unresolved uncertainty requires supervised review before broadening context.")
+        overrides.append("Context broadening allowed only if tied to unresolved uncertainty.")
+    verdict = "approved" if not any(finding.startswith("Blocked contradiction") for finding in findings) else "revised"
+    domain_delta = {domain: domain in allowed for domain in (*allowed, *blocked)}
+    skill_allowlist = _task_delta_skill_allowlist(intent.task_mode, _complete_domain_flags(domain_delta))
+    skill_blocklist = _task_delta_skill_blocklist(intent.task_mode, _complete_domain_flags(domain_delta))
+    context_allowlist, context_blocklist = _task_delta_context_lists(
+        intent.task_mode,
+        _complete_domain_flags(domain_delta),
+        escalation_needed=intent.escalation_needed,
+    )
+    return DecisionReviewerVerdict(
+        verdict=verdict,
+        findings=tuple(findings) or ("Intent contract is internally consistent.",),
+        override_reasons=tuple(overrides),
+        skill_allowlist=skill_allowlist,
+        skill_blocklist=skill_blocklist,
+        context_allowlist=context_allowlist,
+        context_blocklist=context_blocklist,
+        confidence=_task_delta_confidence(
+            intent.requested_outcome,
+            intent.expected_change_scope,
+            intent.protected_non_goals,
+            _complete_domain_flags(domain_delta),
+        ),
+    )
+
+
+def _complete_domain_flags(domain_delta: dict[str, bool]) -> dict[str, bool]:
+    """Return domain flags with every intake-gate domain present."""
+    domains = (
+        "visual_layout",
+        "navigation",
+        "workflow",
+        "localization_resources",
+        "language_switching_behavior",
+        "business_logic",
+        "persistence",
+        "runtime_integration",
+    )
+    return {domain: domain_delta.get(domain, False) for domain in domains}
+
+
+def _task_delta_intent_text(task: str) -> str:
+    """Return task text that describes requested change, excluding validation and negative clauses."""
+    positive = _visual_microfix_positive_text(task)
+    return re.split(r"\b(?:do not|don't|preserve|without changing|without touching)\b", positive, maxsplit=1, flags=re.IGNORECASE)[
+        0
+    ].strip() or positive
+
+
+def _requested_user_visible_delta(intent_text: str, raw_tokens: frozenset[str]) -> tuple[str, ...]:
+    """Return the user-visible outcome requested by the task."""
+    lowered = intent_text.lower()
+    rows: list[str] = []
+    if "overlap" in raw_tokens or "overlapping" in raw_tokens:
+        rows.append("Fix visual overlap/positioning in the named UI surface.")
+    if raw_tokens & {"visual", "layout", "style", "styling", "spacing", "position", "icon", "class", "classes", "css"}:
+        rows.append("Adjust visual layout/styling/classes for an existing UI element.")
+    if raw_tokens & {"ecc", "harness"} or "ph plan" in lowered or "intake gate" in lowered:
+        rows.append("Change ECC/protector-harness planning behavior.")
+    if "language-selector" in lowered or "language selector" in lowered:
+        rows.append("Keep the existing language selector visible without overlap.")
+    if raw_tokens & {"hide", "hidden", "render", "renders", "spinner", "modal", "autofill", "autofills", "autofilled"}:
+        rows.append("Correct rendered UI behavior or browser/runtime state.")
+    if raw_tokens & {"route", "routes", "navigation", "nav", "menu", "menus", "dashboard", "index", "convergence"}:
+        rows.append("Change navigation/menu/route destination behavior.")
+    workflow_terms = {
+        "account",
+        "accounts",
+        "bank",
+        "cuenta",
+        "cuentas",
+        "entidad",
+        "entidades",
+        "entity",
+        "eligibility",
+        "firma",
+        "pending",
+        "resend",
+        "signature",
+        "workflow",
+    }
+    if raw_tokens & workflow_terms:
+        rows.append("Change workflow state or operator action eligibility.")
+    if _has_localization_completion_intent(intent_text):
+        rows.append("Complete localization/language resources or translated UI behavior.")
+    return tuple(_unique_preserve_order(rows)) or ("Apply the requested scoped change.",)
+
+
+def _expected_code_delta(
+    raw_tokens: frozenset[str],
+    domain_delta: dict[str, bool],
+    requested_delta: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return the implementation shape implied by the requested delta."""
+    rows: list[str] = []
+    has_visual_delta = any("visual" in row.lower() or "overlap" in row.lower() for row in requested_delta)
+    if has_visual_delta or raw_tokens & {"css", "razor", "class", "classes", "markup", "layout", "style", "styling"}:
+        rows.append("Local markup/CSS/Razor/classes only.")
+    if raw_tokens & {"ecc", "harness"}:
+        rows.append("Protector harness/planner code only.")
+    if domain_delta["navigation"]:
+        rows.append("Navigation/menu/route target wiring.")
+    if domain_delta["workflow"]:
+        rows.append("Workflow state or action-eligibility logic.")
+    if domain_delta["localization_resources"]:
+        rows.append("Localization resources/localizer/language behavior.")
+    if domain_delta["language_switching_behavior"]:
+        rows.append("Language selector/switching behavior.")
+    if domain_delta["business_logic"]:
+        rows.append("Business-rule behavior.")
+    if domain_delta["persistence"]:
+        rows.append("Persistence/data model behavior.")
+    if domain_delta["runtime_integration"]:
+        rows.append("Runtime handler/API/provider/render-condition behavior.")
+    return tuple(_unique_preserve_order(rows)) or ("Unknown until code inspection.",)
+
+
+def _protected_non_goals(task: str) -> tuple[str, ...]:  # noqa: C901  # parses multiple explicit non-goal phrasings
+    """Extract explicit non-goals and preserved domains from task text."""
+    lowered = task.lower()
+    rows: list[str] = []
+    domain_phrases = {
+        "navigation": ("no navigation", "do not change navigation", "preserve navigation"),
+        "routes": ("no route", "do not change route", "do not change routes", "preserve routes"),
+        "workflow": ("no workflow", "do not change workflow", "preserve workflow"),
+        "localization": ("no localization", "do not localize", "do not change language", "no language behavior"),
+        "handlers/forms": ("no handler", "do not change handler", "do not change form", "preserve handlers", "preserve forms"),
+        "business/persistence": (
+            "no business",
+            "do not change business",
+            "do not change persistence",
+            "preserve business",
+            "preserve persistence",
+        ),
+    }
+    for label, phrases in domain_phrases.items():
+        if any(phrase in lowered for phrase in phrases):
+            rows.append(f"Explicitly protects {label} from this change.")
+    if "no navigation/workflow/localization" in lowered:
+        rows.extend(
+            (
+                "Explicitly protects navigation from this change.",
+                "Explicitly protects workflow from this change.",
+                "Explicitly protects localization from this change.",
+            )
+        )
+    if "no route/menu/workflow" in lowered:
+        rows.extend(
+            (
+                "Explicitly protects routes from this change.",
+                "Explicitly protects navigation from this change.",
+                "Explicitly protects workflow from this change.",
+            )
+        )
+    if any(phrase in lowered for phrase in ("preserve ui", "preserve layout", "preserve visual", "do not change ui", "do not change layout")):
+        rows.append("Explicitly protects visual_layout from this change.")
+    if any(phrase in lowered for phrase in ("do not change runtime", "preserve runtime", "runtime integrations")):
+        rows.append("Explicitly protects runtime_integration from this change.")
+    if any(phrase in lowered for phrase in ("do not change product repo behavior", "product repo behavior")):
+        rows.append("Explicitly protects product-domain behavior from this change.")
+    if "do not change" in lowered:
+        for label, token in (
+            ("navigation", "navigation"),
+            ("workflow", "workflow"),
+            ("localization", "localization"),
+            ("persistence", "persistence"),
+        ):
+            if token in lowered:
+                rows.append(f"Explicitly protects {label} from this change.")
+    for line in task.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith(("- no ", "no ", "- do not ", "do not ", "- preserve ", "preserve ")):
+            rows.append(stripped.lstrip("- ").strip())
+    return tuple(_unique_preserve_order(rows))
+
+
+def _domain_delta_required(intent_text: str, raw_tokens: frozenset[str], protected: tuple[str, ...]) -> dict[str, bool]:
+    """Return whether each domain actually needs to change."""
+    lowered = intent_text.lower()
+    protected_text = " ".join(protected).lower()
+    has_visual_layout_delta = bool(raw_tokens & {"visual", "layout", "style", "styling", "spacing", "position", "overlap", "css", "class", "classes"})
+    language_selector_visual_only = ("language-selector" in lowered or "language selector" in lowered) and has_visual_layout_delta
+    domain = {
+        "visual_layout": has_visual_layout_delta or bool(raw_tokens & {"icon", "tailwind", "taildwind", "markup", "razor"}),
+        "navigation": _positive_domain_delta(
+            raw_tokens,
+            {"route", "routes", "navigation", "nav", "menu", "menus", "dashboard", "index", "convergence"},
+        ),
+        "workflow": _positive_domain_delta(
+            raw_tokens,
+            {
+                "account",
+                "accounts",
+                "bank",
+                "cuenta",
+                "cuentas",
+                "entidad",
+                "entidades",
+                "entity",
+                "eligibility",
+                "firma",
+                "pending",
+                "resend",
+                "signature",
+                "workflow",
+            },
+        ),
+        "localization_resources": _has_localization_completion_intent(intent_text) and not language_selector_visual_only,
+        "language_switching_behavior": _positive_domain_delta(raw_tokens, {"switch", "switching", "selector"}) and not language_selector_visual_only,
+        "business_logic": _positive_domain_delta(raw_tokens, {"business", "rule", "rules", "authorization", "permission", "permissions"}),
+        "persistence": _positive_domain_delta(raw_tokens, {"database", "persistence", "persist", "model", "data"}),
+        "runtime_integration": _positive_domain_delta(
+            raw_tokens,
+            {"handler", "runtime", "api", "provider", "dispatch", "payload", "condition", "autofill", "spinner"},
+        ),
+    }
+    for name in tuple(domain):
+        if name in protected_text:
+            domain[name] = False
+    if "visual" in protected_text or "layout" in protected_text or "ui" in protected_text:
+        domain["visual_layout"] = False
+    if "route" in protected_text or "routes" in protected_text:
+        domain["navigation"] = False
+    if "language" in protected_text or "localization" in protected_text:
+        domain["localization_resources"] = False
+        domain["language_switching_behavior"] = False
+    if "runtime" in protected_text:
+        domain["runtime_integration"] = False
+    return domain
+
+
+def _positive_domain_delta(raw_tokens: frozenset[str], domain_terms: set[str]) -> bool:
+    """Return whether tokens describe a domain-changing delta."""
+    return bool(raw_tokens & domain_terms)
+
+
+def _task_delta_skill_allowlist(task_mode: TaskMode, domain_delta: dict[str, bool]) -> tuple[str, ...]:
+    """Return skills allowed by the requested domain delta."""
+    allowed = ["base_prompt_quality"]
+    if task_mode != "ui_visual_microfix":
+        allowed.append("implementation_fix")
+    if domain_delta["navigation"]:
+        allowed.append("navigation_surface_convergence")
+    if domain_delta["workflow"]:
+        allowed.append("operational_workflow_convergence")
+    if domain_delta["localization_resources"] or domain_delta["language_switching_behavior"]:
+        allowed.append("localization_completion")
+    return tuple(_unique_preserve_order(allowed))
+
+
+def _task_delta_skill_blocklist(task_mode: TaskMode, domain_delta: dict[str, bool]) -> tuple[str, ...]:
+    """Return skills blocked unless classifier evidence explicitly allows their domain."""
+    blocked: list[str] = []
+    if task_mode == "ui_visual_microfix" or not domain_delta["navigation"]:
+        blocked.append("navigation_surface_convergence")
+    if task_mode == "ui_visual_microfix" or not domain_delta["workflow"]:
+        blocked.append("operational_workflow_convergence")
+    if task_mode == "ui_visual_microfix" or not (
+        domain_delta["localization_resources"] or domain_delta["language_switching_behavior"]
+    ):
+        blocked.append("localization_completion")
+    return tuple(_unique_preserve_order(blocked))
+
+
+def _task_delta_context_lists(
+    task_mode: TaskMode,
+    domain_delta: dict[str, bool],
+    *,
+    escalation_needed: bool,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return context allow/block lists from the reviewed intent contract."""
+    all_context = ("repo_guidance", "knowledge", "skills", "flows", "feature_contract", "visual_layout")
+    if task_mode == "ui_visual_microfix":
+        return ("visual_layout",), ("repo_guidance", "knowledge", "skills", "flows", "feature_contract")
+    allow = ["repo_guidance"]
+    if any(domain_delta[name] for name in ("navigation", "workflow", "localization_resources", "language_switching_behavior", "runtime_integration")):
+        allow.extend(("skills", "flows"))
+        allow.append("knowledge")
+    if any(domain_delta[name] for name in ("business_logic", "persistence", "runtime_integration")) or escalation_needed:
+        allow.append("knowledge")
+    if any(domain_delta[name] for name in ("business_logic", "workflow", "persistence")):
+        allow.append("feature_contract")
+    blocked = tuple(item for item in all_context if item not in allow)
+    return tuple(_unique_preserve_order(allow)), blocked
+
+
+def _task_delta_validation_ceiling(task_mode: TaskMode) -> str:
+    """Return the maximum validation scope implied by the classifier."""
+    if task_mode == "ui_visual_microfix":
+        return "diff/static markup/CSS check/build only if syntax risk"
+    if task_mode in {"review_only", "planning_only"}:
+        return "source inspection only"
+    if task_mode == "diagnostic_bootstrap":
+        return "bounded diagnostic/config checks only"
+    return "smallest focused build/test/smoke proving the requested delta"
+
+
+def _intended_delta_rows(domain_delta: dict[str, bool]) -> tuple[str, ...]:
+    """Return human-readable intended domain delta rows."""
+    labels = {
+        "visual_layout": "visual layout/presentation only",
+        "navigation": "navigation destination or menu behavior",
+        "workflow": "workflow state/action eligibility",
+        "localization_resources": "localization resources/translations",
+        "language_switching_behavior": "language switching behavior",
+        "business_logic": "business logic",
+        "persistence": "persistence/data shape",
+        "runtime_integration": "runtime integration/API/provider behavior",
+    }
+    return tuple(label for name, label in labels.items() if domain_delta.get(name)) or ("no domain delta inferred",)
+
+
+def _task_delta_uncertainty(
+    requested_delta: tuple[str, ...],
+    expected_code_delta: tuple[str, ...],
+    domain_delta: dict[str, bool],
+) -> tuple[str, ...]:
+    """Return uncertainty that may justify supervised escalation."""
+    rows: list[str] = []
+    if requested_delta == ("Apply the requested scoped change.",):
+        rows.append("requested outcome is not specific")
+    if expected_code_delta == ("Unknown until code inspection.",):
+        rows.append("expected change scope is not inferable before code inspection")
+    if domain_delta["visual_layout"] and any(required for name, required in domain_delta.items() if name != "visual_layout"):
+        rows.append("visual and non-visual domain deltas both appear in the intent")
+    return tuple(rows)
+
+
+def _task_delta_confidence(
+    requested_delta: tuple[str, ...],
+    expected_code_delta: tuple[str, ...],
+    protected: tuple[str, ...],
+    domain_delta: dict[str, bool],
+) -> str:
+    """Return confidence in the classifier decision."""
+    has_specific_delta = requested_delta != ("Apply the requested scoped change.",)
+    has_code_delta = expected_code_delta != ("Unknown until code inspection.",)
+    has_non_visual_domain = any(required for name, required in domain_delta.items() if name != "visual_layout")
+    if has_specific_delta and has_code_delta and (protected or has_non_visual_domain or domain_delta["visual_layout"]):
+        return "high"
+    if has_specific_delta or has_code_delta:
+        return "medium"
+    return "low"
+
+
+def _task_delta_ambiguity_reason(
+    requested_delta: tuple[str, ...],
+    expected_code_delta: tuple[str, ...],
+    domain_delta: dict[str, bool],
+) -> str | None:
+    """Return ambiguity reason when classifier confidence should be reviewed."""
+    if requested_delta == ("Apply the requested scoped change.",):
+        return "requested user-visible delta is not specific"
+    if expected_code_delta == ("Unknown until code inspection.",):
+        return "expected code delta is not inferable from task text"
+    if domain_delta["visual_layout"] and any(required for name, required in domain_delta.items() if name != "visual_layout"):
+        return "visual and non-visual domain deltas are both present"
+    return None
+
+
+def _weak_lexical_evidence(task_tokens: frozenset[str], intent_tokens: frozenset[str]) -> tuple[str, ...]:
+    """Return lexical hints used only after intent/delta checks."""
+    rows: list[str] = []
+    if task_tokens & REVIEW_ONLY_TERMS:
+        rows.append("review/planning wording present")
+    if task_tokens & IMPLEMENTATION_INTENT_TERMS:
+        rows.append("implementation wording present")
+    if intent_tokens & UI_RUNTIME_BUG_TERMS:
+        rows.append("UI/runtime surface words present")
+    if intent_tokens & LOCALIZATION_TASK_TERMS:
+        rows.append("language/localization words present")
+    if intent_tokens & PROVIDER_API_BUG_TERMS:
+        rows.append("provider/API words present")
+    return tuple(_unique_preserve_order(rows))
+
+
+def _is_visual_microfix_delta(
+    requested_delta: tuple[str, ...],
+    expected_code_delta: tuple[str, ...],
+    protected: tuple[str, ...],
+    domain_delta: dict[str, bool],
+) -> bool:
+    """Return whether delta evidence supports a local visual microfix."""
+    has_visual_delta = any("visual" in row.lower() or "overlap" in row.lower() for row in requested_delta)
+    has_local_code_delta = any("markup/css/razor/classes" in row.lower() for row in expected_code_delta)
+    domain_free = not any(required for name, required in domain_delta.items() if name != "visual_layout")
+    explicit_clamp = bool(protected) or domain_free
+    return has_visual_delta and has_local_code_delta and domain_free and explicit_clamp
+
+
+def _is_ui_behavior_delta(raw_tokens: frozenset[str], requested_delta: tuple[str, ...]) -> bool:
+    """Return whether the requested UI delta changes behavior rather than styling."""
+    _ = requested_delta
+    if raw_tokens & {"condition"}:
+        return True
+    return bool(raw_tokens & {"hide", "hidden", "render", "renders", "spinner", "modal", "autofill", "autofills", "autofilled", "button"})
 
 
 def _has_ui_visual_microfix_intent(task: str, task_tokens: frozenset[str]) -> bool:
@@ -4112,11 +4832,52 @@ def _has_ui_visual_microfix_intent(task: str, task_tokens: frozenset[str]) -> bo
     lowered = task.lower()
     positive_text = _visual_microfix_positive_text(task)
     positive_tokens = _tokens(positive_text)
-    visual_terms = {"visual", "style", "styling", "css", "class", "classes", "icon", "tailwind", "taildwind", "color", "rounded"}
-    ui_terms = {"ui", "view", "vista", "razor", "button", "boton", "botón", "icon", "table", "clients", "client", "receipts"}
+    raw_positive_tokens = _raw_tokens(positive_text)
+    visual_terms = {
+        "align",
+        "alignment",
+        "class",
+        "classes",
+        "color",
+        "css",
+        "icon",
+        "layout",
+        "overlap",
+        "overlapping",
+        "position",
+        "rounded",
+        "spacing",
+        "style",
+        "styling",
+        "tailwind",
+        "taildwind",
+        "visual",
+        "wrap",
+    }
+    ui_terms = {
+        "button",
+        "boton",
+        "botón",
+        "client",
+        "clients",
+        "dropdown",
+        "header",
+        "icon",
+        "language",
+        "navbar",
+        "razor",
+        "receipts",
+        "selector",
+        "table",
+        "ui",
+        "view",
+        "vista",
+    }
     behavior_terms = {"workflow", "route", "routes", "navigation", "runtime", "handler", "form", "forms", "eligibility", "state"}
     provider_terms = PROVIDER_API_BUG_TERMS | {"provider", "signature", "firma", "set_config", "start_signature"}
-    if positive_tokens & (behavior_terms | provider_terms | LOCALIZATION_TASK_TERMS):
+    if positive_tokens & (behavior_terms | provider_terms):
+        return False
+    if positive_tokens & LOCALIZATION_TASK_TERMS and not _has_language_selector_visual_microfix_intent(positive_text, raw_positive_tokens):
         return False
     if any(phrase in lowered for phrase in ("visual-only", "visual only", "styling only", "style only", "icon only")):
         return True
@@ -4129,18 +4890,78 @@ def _has_ui_visual_microfix_intent(task: str, task_tokens: frozenset[str]) -> bo
     )
 
 
-def _visual_microfix_positive_text(task: str) -> str:
+def _visual_microfix_positive_text(task: str) -> str:  # noqa: C901  # strips structured and inline negative clauses for intake
     """Return task text excluding preservation/non-goal clauses."""
     kept: list[str] = []
+    skip_section = False
     for line in task.splitlines():
         stripped = line.strip()
+        stripped = re.split(
+            r"\b(?:Validation|PASS only if|PASS)\s*:",
+            stripped,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+        if not stripped:
+            continue
         lowered = stripped.lower()
+        heading_match = re.match(r"^\s*([A-Za-z][A-Za-z /-]+)\s*:\s*(.*)$", stripped)
+        if heading_match is not None:
+            heading = heading_match.group(1).strip().lower()
+            inline_body = heading_match.group(2).strip()
+            skip_section = heading.startswith(("actual", "pass", "validation"))
+            if skip_section:
+                continue
+            if inline_body:
+                stripped = inline_body
+                lowered = stripped.lower()
+        elif skip_section:
+            continue
         if lowered.startswith(("- do not ", "do not ", "- preserve ", "preserve ", "non-goals:", "preserved behavior:")):
+            continue
+        if lowered.startswith(("- no ", "no ", "- without ", "without ", "- exclude ", "exclude ", "- avoid ", "avoid ")):
             continue
         if "must remain unchanged" in lowered or "must keep working" in lowered:
             continue
+        if lowered.startswith(("- task mode ", "task mode ")):
+            continue
         kept.append(stripped)
     return " ".join(kept) or task
+
+
+def _has_language_selector_visual_microfix_intent(text: str, task_tokens: frozenset[str]) -> bool:
+    """Return whether `language selector` is a visual target, not localization scope."""
+    lowered = text.lower()
+    if "language selector" not in lowered and "language-selector" not in lowered:
+        return False
+    visual_terms = {
+        "align",
+        "alignment",
+        "css",
+        "layout",
+        "overlap",
+        "overlapping",
+        "position",
+        "spacing",
+        "style",
+        "styling",
+        "visual",
+        "wrap",
+    }
+    localization_work_terms = {
+        "add",
+        "complete",
+        "completion",
+        "english",
+        "i18n",
+        "localization",
+        "localized",
+        "missing",
+        "multilingual",
+        "spanish",
+        "translate",
+    }
+    return bool(task_tokens & visual_terms) and not bool(task_tokens & localization_work_terms)
 
 
 def _has_diagnostic_bootstrap_intent(task: str, task_tokens: frozenset[str]) -> bool:
@@ -4157,8 +4978,11 @@ def _has_diagnostic_bootstrap_intent(task: str, task_tokens: frozenset[str]) -> 
 
 def _has_localization_completion_intent(task: str) -> bool:
     """Return whether task text targets implementation of localized UI completion."""
-    lowered = task.lower()
-    raw_tokens = _raw_tokens(task)
+    positive_text = _visual_microfix_positive_text(task)
+    lowered = positive_text.lower()
+    raw_tokens = _raw_tokens(positive_text)
+    if _has_language_selector_visual_microfix_intent(positive_text, raw_tokens):
+        return False
     return bool(raw_tokens & LOCALIZATION_STRONG_TASK_TERMS) or any(phrase in lowered for phrase in LOCALIZATION_LANGUAGE_PAIR_PHRASES)
 
 
@@ -4397,10 +5221,11 @@ def _visual_microfix_target_text(task: str, selected_paths: tuple[str, ...]) -> 
 
 def _visual_microfix_change_text(task: str) -> str:
     """Return a compact visual-only change statement."""
-    refinement = refine_operator_task(task)
+    visual_task = _visual_microfix_positive_text(task)
+    refinement = refine_operator_task(visual_task)
     if refinement.requested_change:
         return refinement.requested_change
-    return _task_objective(task)
+    return _task_objective(visual_task)
 
 
 def _visual_microfix_task_details(task: str) -> str:
